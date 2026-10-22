@@ -81,7 +81,7 @@ Phase 5.
   arrays, disjunctive loop exits, `u64` ranges. 46 of 161 index checks remain in the `compare/` programs.
 - Find out why Lobster (same author) runs `interp` 1.24x faster than Goose under clang.
 - Bundle clang (or an LLVM toolchain) with releases, so users without it don't get MSVC's
-  17–28% slower code.
+  17–27% slower code.
 
 **Exit:** goose/clang strictly faster than Rust LTO on all 8 benchmarks (nbody and raytrace
 are ties today); `interp` at or below Lobster's 0.419 s.

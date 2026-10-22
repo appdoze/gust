@@ -2,8 +2,14 @@
 
 Gust is Goose (https://github.com/aardappel/goose, Apache-2.0) with the
 changes below. Every file that differs from Goose's carries a notice at its
-top pointing here; `git log upstream/master..main` has
-the exact changes.
+top pointing here. The exact changes are the commits Gust adds to Goose's
+history:
+
+```bash
+git remote add upstream https://github.com/aardappel/goose
+git fetch upstream
+git log upstream/master..main
+```
 
 ## Toolchain
 
