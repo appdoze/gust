@@ -2094,6 +2094,48 @@ def main():
             code, out, err = tc.run_capture([exe, "build", "--dry-run", "-o", str(dry), probe])
             checks.append(("build --dry-run", code == 0 and not dry.exists() and
                            "verbs" in out and "goose_runtime" in out, out + err))
+        # Gust's --checked: --debug's overflow checks in an optimized build. The
+        # sum overflows by one, the program's arguments being only itself.
+        overflow = gendir / "checked_overflow.goose"
+        tc.write_text(overflow, "import os;\n"
+                      "fn main() { print(9223372036854775807 + args().len); }\n")
+        if jit:
+            code, out, err = tc.run_capture([exe, "run", "--checked", overflow])
+            checks.append(("run --checked (overflow aborts)",
+                           code != 0 and "integer overflow" in err, out + err))
+            code, out, err = tc.run_capture([exe, "run", overflow])
+            checks.append(("run (overflow wraps)",
+                           code == 0 and out.strip() == "-9223372036854775808", out + err))
+        if cc:
+            checked = gendir / ("checked_overflow" + tc.EXE_SUFFIX)
+            code, out, err = tc.run_capture([exe, "build", "--checked", "-o", str(checked),
+                                             overflow])
+            good = code == 0 and checked.exists()
+            if good:
+                code, out2, err2 = tc.run_capture([checked])
+                good = code != 0 and "integer overflow" in err2
+                out, err = out + out2, err + err2
+            code3, out3, err3 = tc.run_capture([exe, "build", "--checked", "--dry-run", "-o",
+                                                str(checked), overflow])
+            optimized = "-O2" in out3 or "/O2" in out3
+            checks.append(("build --checked (optimized, overflow aborts)", good and optimized,
+                           out + err + out3 + err3))
+        # Gust's extern fn audit: --externs lists the C a program calls outside
+        # the standard library (which has many of its own), --deny-externs
+        # refuses it.
+        ffi = gendir / "externs_probe.goose"
+        tc.write_text(ffi, 'import math;\nextern fn llabs(x: i64) -> i64;\n'
+                      'fn main() { print(llabs(-3), " ", sqrt(4.0)); }\n')
+        code, out, err = tc.run_capture([exe, "check", "--externs", ffi])
+        checks.append(("check --externs", code == 0 and
+                       "extern fn llabs calls the C symbol llabs (package" in out and
+                       "1 extern fn(s) outside the standard library" in out, out + err))
+        code, out, err = tc.run_capture([exe, "check", "--deny-externs", ffi])
+        checks.append(("check --deny-externs (refused)",
+                       code == 1 and "which --deny-externs refuses" in out + err, out + err))
+        code, out, err = tc.run_capture([exe, "check", "--deny-externs", probe])
+        checks.append(("check --deny-externs (the standard library's own pass)", code == 0,
+                       out + err))
         for what, good, text in checks:
             if good:
                 r.ok(f"goose {what}")

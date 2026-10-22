@@ -22,6 +22,11 @@ Early fork. The language today is Goose's, with these changes
 - On Windows, `gust build` finds clang where the LLVM installer puts it, and
   builds CMake packages correctly under clang. clang's code was 17-28% faster
   than MSVC's on float-heavy benchmarks.
+- `--checked` builds optimized programs that still abort on integer overflow
+  (Goose and Rust wrap silently in release builds).
+- `--externs` lists the C functions a program calls outside the standard
+  library, its only way past the safety rules; `--deny-externs` refuses them,
+  as auditing Rust's `unsafe` would.
 - Its cache lives in `~/.gust`, apart from any Goose install.
 
 Everything in [GOOSE.md](GOOSE.md) (Goose's overview) and under

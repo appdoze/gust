@@ -47,23 +47,30 @@ Both move into `compare/` in Phase 0.
 
 ## Phase 1: Quick wins (weeks 2–4)
 
-- **clang as the default C compiler** wherever it is installed (done for Windows in Phase 0;
-  confirm on Linux and macOS).
+- **clang as the default C compiler** wherever it is installed. **(done on Windows,
+  including CMake packages under clang; confirm on Linux and macOS)**
 - **`--checked`**: an optimized build that keeps the overflow, range and tag checks
-  `--debug` has. Measure the cost on `compare/`; if it is small, make it the default.
-- **`extern fn` audit**: a flag that lists every `extern fn` and one that rejects them, the
-  equivalent of auditing Rust's `unsafe`.
-- **Fix `simd fn`**: its AVX2 / AVX-512 copies are not vectorized by clang (measured).
-  Compile them in a separate file with whole-file `-mavx2` / `-mavx512f`, which does
-  vectorize, and let a function choose which versions it gets.
+  `--debug` has. **(done)** Measured cost on the 8 benchmarks: 0-1% on four, 6-7% on sort
+  and astar, 12% on hashmap, 17% on bintrees, about 5% on average; still level with or
+  ahead of unchecked Rust on all eight. Stays opt-in until Phase 2's range analysis
+  removes more of the checks.
+- **`extern fn` audit**: `--externs` lists every `extern fn` outside the standard library,
+  `--deny-externs` refuses them, the equivalent of auditing Rust's `unsafe`. **(done)**
+- **`simd fn`**: its AVX2 / AVX-512 copies can be *slower* than the plain function
+  (measured: 0.160 s against 0.105 s on the nbody lane prototype). Investigated: the cause
+  is not the per-function `target` attribute; clang's SLP vectorizer does not vectorize
+  the loop in a standalone copy at all, with or without the attribute, at any threshold,
+  and only did in the plain version after inlining it into its caller. Writing the lanes
+  as explicit vector types fixed it (0.077 s), so the fix belongs with Phase 5's lane
+  pass. Until then, put `simd` on the function the hot loop is inlined into.
 - **Generation checks for `reusable` pools** in debug builds, so a stale reference aborts
   instead of reading another value (safety probe 9).
-- Send the general fixes (clang discovery, `simd fn`) upstream as pull requests while the
-  fork is still close to Goose.
+- Send the general fixes (clang discovery, CMake packages under clang) upstream as pull
+  requests while the fork is still close to Goose.
 
-**Exit:** the `simd fn` lane prototype (`compare/variants/lanes_simd.goose`) is not slower
-than the plain one; a new
-probe shows `--checked` catching overflow in an optimized build; no benchmark regresses.
+**Exit:** a test shows `--checked` catching overflow in an optimized build **(done)**; no
+benchmark regresses; generation checks for pools land. The `simd fn` criterion moves to
+Phase 5.
 
 ## Phase 2: Code quality (months 2–3)
 
@@ -121,7 +128,8 @@ compile error.
 - Tie into `simd fn` dispatch for AVX2 / AVX-512 at run time.
 
 **Exit:** unmodified `compare/gust/main.goose` nbody at least 2x faster than Rust with an
-identical checksum (the hand prototype reached 2.1x).
+identical checksum (the hand prototype reached 2.1x); `simd fn` copies never slower than
+the plain function.
 
 ## Phase 6: Developer experience (months 10–13)
 

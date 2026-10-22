@@ -31,6 +31,17 @@ the exact changes.
 - `README.md` is Gust's; Goose's is kept as `GOOSE.md`. `ROADMAP.md` and this
   file are new.
 
+## Safety options
+
+- `src/main.cpp`: `--checked` defines `GS_DEBUG=1`, the overflow, `as`
+  range and tag checks of `--debug`, without `--debug`'s unoptimized
+  debugger build: an optimized program that aborts on signed overflow
+  instead of wrapping.
+- `src/main.cpp`: `--externs` lists every `extern fn` outside the standard
+  library and the packages compiled into the compiler (the C a program
+  calls, which the safety rules cannot see into); `--deny-externs` makes
+  each one an error.
+
 ## Scripts and tests
 
 - `scripts/toolchain.py`, `scripts/check_doc_examples.py`: find a `gust`
@@ -41,4 +52,6 @@ the exact changes.
   named `gust-<version>-<platform>`.
 - `test/run_tests.py`: the driver checks expect the `gust` wording and test
   `.gust` sources (a program importing a `.gust` and a `.goose` module); the
-  no-C-compiler check also hides `%ProgramFiles%` and `%ProgramW6432%`.
+  no-C-compiler check also hides `%ProgramFiles%` and `%ProgramW6432%`; new
+  checks cover `--checked` (an overflow aborts, optimized) and `--externs` /
+  `--deny-externs`.

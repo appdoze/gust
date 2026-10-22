@@ -703,11 +703,15 @@ R"(  --diagnostics json    Print the errors and warnings as JSON on stdout, and
   --no-bce              Keep every bounds check.
   --bce-lines           Report the bounds checks elided and kept on each line.
   --specs               Print the specializations of each function.
+  --externs             List every extern fn outside the standard library: the
+                        C a program calls, the one way past the safety rules.
+  --deny-externs        Make each such extern fn an error.
 )";
 
 constexpr const char *DEBUGOPTION =
 R"(  --debug               Overflow, range and tag checks that name the source
                         line they fail on.
+  --checked             The same checks in an optimized build (Gust).
 )";
 
 // The help on a command or topic, `gust help` or `gust --help`'s for ""
@@ -733,6 +737,7 @@ Common options:
   -O0, -O1, -O2   Inlining level (a run defaults to -O1, a build to -O2).
   --debug         Overflow, range and tag checks that name the source line
                   they fail on.
+  --checked       The same checks, in an optimized build.
   -- args...      What follows is the program's arguments.
 
 Environment:
@@ -775,6 +780,9 @@ Options:
                         optimizes at every level, unless --debug.
   --debug               Overflow, range and tag checks that name the source
                         line they fail on, and the C built for a debugger.
+  --checked             The same checks in an optimized build, with no
+                        debugger build: a program that aborts on overflow
+                        rather than wrapping, at full speed otherwise.
 )", COMPILEOPTIONS,
 R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
                         path (or GOOSE_CC; by default the first one found).
@@ -1056,6 +1064,7 @@ int Main(int argc, char **argv) {
     string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile;
     auto dump = false, dumpdocs = false, tokens = false, parseonly = false, specs = false;
     auto nocgen = false;
+    auto listexterns = false, denyexterns = false;   // Gust: the extern fn audit.
     auto roundtrip = false, multitest = false;
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
     auto stacks = false;
@@ -1163,6 +1172,11 @@ int Main(int argc, char **argv) {
             debug = true;
             cdefines.push_back("GS_DEBUG=1");
         }
+        // Gust: GS_DEBUG=1 is the checks alone (runtime.h); --debug adds the
+        // unoptimized C built for a debugger, which this leaves out.
+        else if (arg == "--checked") cdefines.push_back("GS_DEBUG=1");
+        else if (arg == "--externs") listexterns = true;
+        else if (arg == "--deny-externs") denyexterns = true;
         else if (arg == "-v") verbose = true;
         else if (arg == "--dry-run") dryrun = true;
         else if (arg == "--update") package_update = true;
@@ -1315,6 +1329,36 @@ int Main(int argc, char **argv) {
         ResolveTypeNames(ast);
         // As after the parse, which an unknown type name is part of.
         if (!ast.errors.empty()) return 1;
+        // Gust: the extern fns outside the standard library and the packages
+        // compiled into the compiler, which are C the safety rules cannot see
+        // into (§7.10): listed by --externs, refused by --deny-externs, as
+        // auditing Rust's `unsafe` would.
+        if (listexterns || denyexterns) {
+            auto count = 0;
+            for (auto sf : ast.functions) {
+                if (!sf->isextern) continue;
+                auto fi = sf->line.fileidx;
+                auto known = fi >= 0 && fi < (int)ast.filepkg.size();
+                auto &pkg = ast.packages[known ? ast.filepkg[fi] : 0];
+                if (pkg.stdlib || pkg.builtin >= 0) continue;
+                count++;
+                auto what = cat("extern fn ", sf->qname, " calls the C symbol ",
+                                sf->cname.empty() ? string(sf->name) : sf->cname,
+                                sf->dylib.empty() ? string() : cat(" from ", sf->dylib),
+                                " (package ", pkg.name, ")");
+                if (denyexterns) {
+                    Diagnostic d;
+                    d.where = LocOf(sf->line);
+                    d.message = cat(what, ", which --deny-externs refuses");
+                    ast.Report(std::move(d));
+                } else {
+                    printf("%s:%d: %s\n", ast.sources[fi].first.c_str(), sf->line.line,
+                           what.c_str());
+                }
+            }
+            if (listexterns) printf("%d extern fn(s) outside the standard library\n", count);
+            if (!ast.errors.empty()) return 1;
+        }
         // Printed by every run that gets this far, so that one which goes on
         // to fail says by itself which side of resolution it failed on.
         fprintf(msgs, "parsed ok: %d top-level declarations, %d file(s)\n",
