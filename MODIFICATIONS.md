@@ -55,7 +55,11 @@ git log upstream/master..main
 - `scripts/package_release.py`, `test/lsp_sweep.py`,
   `test/toolchain_selection.py`, `.github/workflows/ci.yml`,
   `.github/workflows/release.yml`: the binary is `gust`, and releases are
-  named `gust-<version>-<platform>`.
+  named `gust-<version>-<platform>` and titled `Gust <version>`.
+- `.github/workflows/*.yml`: the GitHub actions are on their Node.js 24
+  versions (checkout, setup-python and setup-node v7, upload-artifact v7,
+  download-artifact v7, configure-pages v6, upload-pages-artifact and
+  deploy-pages v5), as GitHub retires Node.js 20 on its runners.
 - `test/run_tests.py`: the driver checks expect the `gust` wording and test
   `.gust` sources (a program importing a `.gust` and a `.goose` module); the
   no-C-compiler check also hides `%ProgramFiles%` and `%ProgramW6432%`; new

@@ -51,9 +51,9 @@ jobs:
       MSBUILDDISABLENODEREUSE: "1"
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
 
@@ -113,7 +113,7 @@ jobs:
             tar -czf "$RELEASE_NAME.tar.gz" "$RELEASE_NAME"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ env.RELEASE_NAME }}
           path: dist/${{ env.RELEASE_NAME }}.*
@@ -127,14 +127,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v7
         with:
           path: dist
           merge-multiple: true
 
       - uses: softprops/action-gh-release@v3
         with:
-          name: Goose ${{ github.ref_name }}
+          name: Gust ${{ github.ref_name }}
           prerelease: ${{ contains(github.ref_name, '-') }}
           generate_release_notes: true
           fail_on_unmatched_files: true
@@ -142,4 +142,4 @@ jobs:
             dist/*.zip
             dist/*.tar.gz
           body: |
-            Prebuilt compilers with the blessed packages (gfx, audio, ui, physics) compiled in. Unpack anywhere and put the directory on PATH; see "Install a release" in README.md for what each platform needs besides.
+            Prebuilt compilers with the blessed packages (gfx, audio, ui, physics) compiled in. Unpack anywhere and put the directory on PATH; see "Install a release" in GOOSE.md for what each platform needs besides.
