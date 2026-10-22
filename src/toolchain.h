@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the tools a build calls (docs/design/packages.md §6.1): a
 // C compiler with its C++ driver, cmake and git, found on this machine. A
 // toolchain has a style, msvc or cc, which decides how flags and response
@@ -10,7 +11,7 @@
 
 namespace goose {
 
-// The environment variable, else ~/.goose. With forward slashes throughout,
+// The environment variable, else ~/.gust (Goose's is ~/.goose). With forward slashes throughout,
 // which every tool on Windows takes, so that paths made from it are all of
 // one kind.
 inline string GooseHome() {
@@ -22,7 +23,7 @@ inline string GooseHome() {
         #else
             auto profile = getenv("HOME");
         #endif
-        home = cat(profile && *profile ? profile : ".", "/.goose");
+        home = cat(profile && *profile ? profile : ".", "/.gust");
     }
     for (auto &c : home) if (c == '\\') c = '/';
     while (home.size() > 1 && home.back() == '/') home.pop_back();

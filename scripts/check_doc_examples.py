@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """Compile every ```goose block of a markdown document with the compiler.
 
     python scripts/check_doc_examples.py docs/reference.md [--run] [--exe build/goose] [-v]
@@ -38,11 +39,12 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
 def find_compiler():
-    exe = "goose.exe" if sys.platform == "win32" else "goose"
+    suffix = ".exe" if sys.platform == "win32" else ""
     for d in ("build/Release", "build/RelWithDebInfo", "build", "build/Debug"):
-        p = os.path.join(ROOT, d, exe)
-        if os.path.exists(p):
-            return p
+        for name in ("gust", "goose"):
+            p = os.path.join(ROOT, d, name + suffix)
+            if os.path.exists(p):
+                return p
     raise SystemExit("no compiler found under build/; pass --exe")
 
 

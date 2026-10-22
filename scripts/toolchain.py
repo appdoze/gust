@@ -1,3 +1,4 @@
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """Toolchain discovery and process measurement, shared by the runner scripts.
 
 test/run_tests.py, samples/run_samples.py, bench/run_bench.py and
@@ -82,10 +83,11 @@ def find_goose(explicit=None):
     # Routine runs should use an optimized compiler when one is available.
     # Correctness/CI runs that require assertions select Debug with --exe.
     for sub in ("Release", "RelWithDebInfo", "", "Debug"):
-        p = REPO_ROOT / "build" / sub / ("goose" + EXE_SUFFIX)
-        if p.exists():
-            return p
-    sys.exit("no goose binary under build/ -- build it first, or pass --exe")
+        for name in ("gust", "goose"):
+            p = REPO_ROOT / "build" / sub / (name + EXE_SUFFIX)
+            if p.exists():
+                return p
+    sys.exit("no gust binary under build/ -- build it first, or pass --exe")
 
 
 # The compiler's own wording for a program the TinyCC backend cannot run yet.

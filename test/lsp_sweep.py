@@ -1,3 +1,4 @@
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """A robustness and latency sweep of `goose lsp` (docs/design/language_server.md
 §12) over the repository's Goose programs: every sample, the goose_in_goose
 bootstrap, every stdlib module, every positive fixture, and every errors/ and
@@ -12,7 +13,7 @@ the text back and waits for the diagnostics to be the first ones again, and
 closes the file. It fails on a server exit, a reply that is an error, a
 request slower than the limit, or a server that stops answering.
 
-    python test/lsp_sweep.py [--exe build/Release/goose.exe] [--quick]
+    python test/lsp_sweep.py [--exe build/Release/gust.exe] [--quick]
         [--jobs N] [--limit SECONDS] [--positions N] [--filter TEXT]
         [--group NAME] [--seed N] [--json OUT] [--top N]
 
@@ -531,7 +532,7 @@ def report(records, failures, seconds, top=20):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    ap.add_argument("--exe", default=str(REPO / "build" / "Release" / "goose.exe"))
+    ap.add_argument("--exe", default=str(REPO / "build" / "Release" / "gust.exe"))
     ap.add_argument("--quick", action="store_true", help="a handful of files, a few dozen positions each")
     ap.add_argument("--jobs", type=int, help="servers at once (default: up to 8, one per core)")
     ap.add_argument("--limit", type=float, default=2.0, help="seconds a request may take (default 2)")

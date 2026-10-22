@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the blessed packages (docs/design/packages.md §4.5) and
 // the ones compiled into this compiler (§7.1): the table src/blessed.txt,
 // embedded at the compiler's build, and what cmake/package.cmake built in,
@@ -80,7 +81,7 @@ inline int BuiltinIndex(const BuiltinPackage *b) {
 // compiler's build put it, else pkg/<name>/ beside the compiler, where a
 // release (scripts/package_release.py) keeps it.
 inline string BuiltinSrcDir(const BuiltinPackage &b, const string &exedir) {
-    if (PathExists(cat(b.srcdir, b.name, ".goose"))) return b.srcdir;
+    if (PathExists(SourceFile(cat(b.srcdir, b.name)))) return b.srcdir;
     auto beside = cat(exedir, "pkg/", b.name, "/");
     for (auto &c : beside) if (c == '\\') c = '/';
     return beside;

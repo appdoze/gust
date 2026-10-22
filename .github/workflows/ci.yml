@@ -1,3 +1,4 @@
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 # Builds the compiler and runs the whole suite -- parse, roundtrip, typecheck,
 # error tests, Goose/native C at -O0 and -O2, targeted GS_DEBUG=1 tests, a
 # second C-front-end probe, the in-process TinyCC backend, and samples -- on
@@ -65,7 +66,7 @@ jobs:
         run: cmake --build build --config Debug
 
       - name: Test
-        run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/goose.exe' || 'goose' }} --profile baseline --cc native --require-clang
+        run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }} --profile baseline --cc native --require-clang
 
       - uses: actions/setup-node@v4
         with:
@@ -77,7 +78,7 @@ jobs:
       - name: Test the VS Code extension
         working-directory: vscode
         env:
-          GOOSE_TEST_COMPILER: ${{ github.workspace }}/build/${{ runner.os == 'Windows' && 'Debug/goose.exe' || 'goose' }}
+          GOOSE_TEST_COMPILER: ${{ github.workspace }}/build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }}
         run: |
           npm ci --no-audit --no-fund
           npm test
@@ -118,4 +119,4 @@ jobs:
         run: cmake --build build-sanitize --parallel 2
 
       - name: Test compiler, generated C, runtime lifecycle and samples
-        run: python test/run_tests.py --exe build-sanitize/goose --profile sanitize --cc clang
+        run: python test/run_tests.py --exe build-sanitize/gust --profile sanitize --cc clang

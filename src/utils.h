@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — project-wide utilities.
 #pragma once
 
@@ -171,6 +172,19 @@ inline string PathStem(const string &path) {
     auto base = path.substr(path.find_last_of("/\\") + 1);
     auto dot = base.find_last_of('.');
     return dot == string::npos ? base : base.substr(0, dot);
+}
+
+// Gust: the source file a path without its extension names. A `.gust` file
+// where there is one, else the `.goose` spelling, which the standard library
+// and the tests shared with Goose keep.
+inline bool IsSourceExtension(const string &ext) { return ext == ".gust" || ext == ".goose"; }
+inline string SourceFile(const string &stem) {
+    auto gust = stem + ".gust";
+    if (auto f = fopen(gust.c_str(), "rb")) {
+        fclose(f);
+        return gust;
+    }
+    return stem + ".goose";
 }
 
 // A Goose source file, without the UTF-8 byte-order mark many Windows

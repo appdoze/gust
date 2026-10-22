@@ -1,3 +1,4 @@
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 cmake_minimum_required(VERSION 3.27)
 project(goose C CXX)
 
@@ -77,6 +78,9 @@ add_executable(goose
     src/runtime/goose.h
     src/gfx.h
 )
+# Gust: the compiler's command is gust; the target keeps Goose's name, which
+# the rest of this file and upstream's changes to it use.
+set_target_properties(goose PROPERTIES OUTPUT_NAME gust)
 
 # Keep argv, CRT file access, filesystem paths and Win32's narrow APIs in
 # the same encoding as Goose strings. Windows 10 1903+ applies this before

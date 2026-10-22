@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — packages (docs/design/packages.md §4): what a sourced
 // import, `import name from "source";`, names, and where that package's
 // files are. A path source is a directory used in place, relative to the
@@ -317,8 +318,8 @@ inline string PackageRoot(const PackageSource &source, const string &name) {
     } else {
         dir = FetchPackage(source, name);
     }
-    if (!PathExists(cat(dir, name, ".goose")))
-        throw CompileError { cat("the package ", name, " at ", dir, " has no ", name, ".goose") };
+    if (!PathExists(SourceFile(cat(dir, name))))
+        throw CompileError { cat("the package ", name, " at ", dir, " has no ", name, ".goose (or ", name, ".gust)") };
     return dir;
 }
 

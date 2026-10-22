@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — driver. Includes establish the project-wide header order.
 
 #include "includes.h"
@@ -211,14 +212,14 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
         PackageSource src;
         src.text = be.source;
         string root;
-        if (builtin && PathExists(cat(builtindir, be.package, ".goose"))) {
+        if (builtin && PathExists(SourceFile(cat(builtindir, be.package)))) {
             src.ispath = true;
             src.dir = root = builtindir;
         } else if (IsPathSource(be.source)) {
             auto rel = be.source.rfind("./", 0) == 0 ? be.source.substr(2) : be.source;
             for (auto &dir : stdlibdirs) {
                 auto cand = cat(dir, "../", rel);
-                if (PathExists(cat(cand, "/", be.package, ".goose"))) {
+                if (PathExists(SourceFile(cat(cand, "/", be.package)))) {
                     src.ispath = true;
                     src.dir = PackageDir(cand);
                     break;
@@ -340,15 +341,15 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                         if (std::find(req.begin(), req.end(), imppkg) == req.end())
                             req.push_back(imppkg);
                     }
-                    imppath = cat(ast.packages[imppkg].root, imp.path, ".goose");
+                    imppath = SourceFile(cat(ast.packages[imppkg].root, imp.path));
                 } else if (imp.relative) {
-                    imppath = cat(DirOf(path), imp.path, ".goose");
+                    imppath = SourceFile(cat(DirOf(path), imp.path));
                 } else {
                     // A file under this package's root; a module of a package the
                     // root declared (`import pkg;` is its entry, `import pkg.sub;`
                     // its sub.goose); a blessed name, its package loaded as if
                     // the root had declared it (§4.5); the standard library.
-                    auto local = cat(ast.packages[pkg].root, imp.path, ".goose");
+                    auto local = SourceFile(cat(ast.packages[pkg].root, imp.path));
                     auto first = imp.path.substr(0, imp.path.find('/'));
                     auto rest = imp.path.size() > first.size() ? imp.path.substr(first.size() + 1)
                                                                : first;
@@ -365,19 +366,19 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                                         cat(imp.path, " is both a file of this package (", local,
                                             ") and the declared package ", first, "'s module"));
                         imppkg = it->second.pkg;
-                        imppath = cat(ast.packages[imppkg].root, rest, ".goose");
+                        imppath = SourceFile(cat(ast.packages[imppkg].root, rest));
                     } else if (blessed) {
                         try {
                             imppkg = loadblessed(*blessed);
                         } catch (CompileError &e) {
                             ImportError(filename, imp, e.msg);
                         }
-                        imppath = cat(ast.packages[imppkg].root, rest, ".goose");
+                        imppath = SourceFile(cat(ast.packages[imppkg].root, rest));
                     } else {
                         imppath = local;
                         if (!FileExists(local)) {
                             for (auto &dir : stdlibdirs) {
-                                auto cand = cat(dir, imp.path, ".goose");
+                                auto cand = SourceFile(cat(dir, imp.path));
                                 if (FileExists(cand)) {
                                     imppath = cand;
                                     imppkg = stdlibpkg(dir);
@@ -394,9 +395,9 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                                                ForwardSlashes(AbsolutePath(local)));
                                 auto havestd = false;
                                 for (auto &dir : stdlibdirs)
-                                    if (FileExists(cat(dir, "std.goose"))) {
+                                    if (FileExists(SourceFile(cat(dir, "std")))) {
                                         havestd = true;
-                                        auto cand = cat(dir, imp.path, ".goose");
+                                        auto cand = SourceFile(cat(dir, imp.path));
                                         Append(msg, "\n    ", ForwardSlashes(AbsolutePath(cand)));
                                     }
                                 if (!havestd) {
@@ -689,10 +690,10 @@ constexpr const char *COMPILEOPTIONS =
 R"(  --diagnostics json    Print the errors and warnings as JSON on stdout, and
                         the progress lines on stderr.
   --offline             Fetch nothing: a package that is not fetched is an
-                        error at its import, which goose fetch resolves.
+                        error at its import, which gust fetch resolves.
   -D NAME[=VALUE]       Define a C macro in the generated program (or -DNAME).
   --stdlib dir          The standard library's directory (or GOOSE_STDLIB);
-                        found from where goose is by default.
+                        found from where gust is by default.
   --update              Fetch packages at a tag or branch again (a commit is
                         never fetched again).
   --stack-reserve size  Address space reserved per data stack, from 64K, with a
@@ -709,17 +710,17 @@ R"(  --debug               Overflow, range and tag checks that name the source
                         line they fail on.
 )";
 
-// The help on a command or topic, `goose help` or `goose --help`'s for ""
+// The help on a command or topic, `gust help` or `gust --help`'s for ""
 // or "help", and "" for none. Each starts with its usage lines and a blank
 // line, which a command line without a file prints.
 string HelpText(const string &topic) {
     if (topic.empty() || topic == "help") return
-R"(usage: goose <command> file.goose [options]
-       goose file.goose [options] [-- program args...]
+R"(usage: gust <command> file.gust [options]
+       gust file.gust [options] [-- program args...]
 
 Commands:
-  run        Compile a program and run it in this process, which goose
-             file.goose does too.
+  run        Compile a program and run it in this process, which gust
+             file.gust does too.
   build      Build an executable with a C compiler on this machine.
   check      Parse and typecheck a program, and run nothing.
   fetch      Fetch the packages a program declares.
@@ -736,22 +737,22 @@ Common options:
 
 Environment:
   GOOSE_HOME      Fetched packages, build intermediates and settings
-                  (default ~/.goose).
+                  (default ~/.gust).
   GOOSE_CC        The C compiler, where --cc is not given.
   GOOSE_STDLIB    The standard library, where --stdlib is not given.
   GOOSE_PROGRESS  plain or live: how progress shows on stderr.
 
-goose <command> --help, or goose help <command>, lists a command's options.
-goose help c covers writing the C yourself (goose -o out.c), and goose help
+gust <command> --help, or gust help <command>, lists a command's options.
+gust help c covers writing the C yourself (gust -o out.c), and gust help
 internals the options for looking into the compiler and testing it.
 )";
     if (topic == "run") return cat(
-R"(usage: goose run file.goose [options] [-- program args...]
-       goose file.goose [options] [-- program args...]
+R"(usage: gust run file.gust [options] [-- program args...]
+       gust file.gust [options] [-- program args...]
 
 Compiles the program and runs it in this process with TinyCC, and exits with
 its exit code. What follows -- is the program's arguments. A program that
-starts threads needs goose build.
+starts threads needs gust build.
 
 Options:
   -O0, -O1, -O2         Inlining level (default -O1).
@@ -762,10 +763,10 @@ R"(  --cc name|path        The C compiler for packages' native parts: msvc,
                         what it prints.
 )");
     if (topic == "build") return cat(
-R"(usage: goose build file.goose [options]
+R"(usage: gust build file.gust [options]
 
 Builds an executable beside the source with a C compiler on this machine
-(goose toolchain says which), linking the runtime and the native parts of
+(gust toolchain says which), linking the runtime and the native parts of
 the packages the program uses. Intermediates go under GOOSE_HOME.
 
 Options:
@@ -783,7 +784,7 @@ R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
   --dry-run             Print the commands the build would run, and run none.
 )");
     if (topic == "check") return cat(
-R"(usage: goose check file.goose [options]
+R"(usage: gust check file.gust [options]
 
 Parses and typechecks the program and what it imports, and writes and runs
 nothing.
@@ -791,7 +792,7 @@ nothing.
 Options:
 )", COMPILEOPTIONS);
     if (topic == "fetch") return
-R"(usage: goose fetch [--update] file.goose
+R"(usage: gust fetch [--update] file.gust
 
 Fetches the packages the program declares from git into GOOSE_HOME, and
 compiles nothing. A run or a build fetches what is missing as well.
@@ -801,8 +802,8 @@ Options:
                         never fetched again).
 )";
     if (topic == "lsp") return
-R"(usage: goose lsp [--stdio] [--stdlib dir]
-       goose lsp --probe
+R"(usage: gust lsp [--stdio] [--stdlib dir]
+       gust lsp --probe
 
 Serves an editor over the Language Server Protocol, on stdin and stdout:
 diagnostics as files change, hover, go to definition, references and
@@ -813,7 +814,7 @@ lenses. It analyzes the programs whose entry files the editor configures
 directory as stdlib) and every open file none of them imports; the
 initializationOptions' commands are the client's own commands a code lens
 may name (goose.run, goose.showInstantiations). It fetches nothing: a
-package not fetched is an error at its import, which goose fetch resolves.
+package not fetched is an error at its import, which gust fetch resolves.
 
 Options:
   --probe               Print the protocol version and exit.
@@ -821,10 +822,10 @@ Options:
   --stdlib dir          The standard library's directory (or GOOSE_STDLIB).
 )";
     if (topic == "toolchain") return
-R"(usage: goose toolchain [--cc name|path] [--json] [--refresh]
+R"(usage: gust toolchain [--cc name|path] [--json] [--refresh]
 
 Reports the C compiler a build would use, cmake, git, GOOSE_HOME and the
-modules compiled into goose. Exits with 1 when there is no C compiler.
+modules compiled into gust. Exits with 1 when there is no C compiler.
 
 Options:
   --cc name|path        Look for this C compiler: msvc, clang-cl, clang, gcc,
@@ -834,19 +835,19 @@ Options:
                         take the one kept from last time.
 )";
     if (topic == "version") return
-R"(usage: goose version
+R"(usage: gust version
 
-Prints the runtime version, which the runtime that goose --emit-runtime
+Prints the runtime version, which the runtime that gust --emit-runtime
 writes has to match.
 )";
     if (topic == "c") return cat(
-R"(usage: goose -o out.c file.goose [options]
-       goose --emit-runtime runtime.c
-       goose --<package>-link msvc|cc
+R"(usage: gust -o out.c file.gust [options]
+       gust --emit-runtime runtime.c
+       gust --<package>-link msvc|cc
 
 Writes the program's C, for a build of your own or a C host. It links with
 the runtime that --emit-runtime writes, compiled once with the C compiler
-and flags the programs use. goose build --dry-run prints the commands for
+and flags the programs use. gust build --dry-run prints the commands for
 the program at hand.
 
 Options:
@@ -859,18 +860,18 @@ Options:
   --emit-runtime out.c  Write the runtime's C.
   --<package>-link msvc|cc
                         Print the response file that links the native part of
-                        a package compiled into goose (--gfx-link cc).
+                        a package compiled into gust (--gfx-link cc).
   -O0, -O1, -O2         Inlining level (default -O1).
 )", DEBUGOPTION, COMPILEOPTIONS);
     if (topic == "internals") return cat(
-R"(usage: goose [options] file.goose
+R"(usage: gust [options] file.gust
 
 Options for looking into what the compiler does, and for its test suite.
 
 Options:
   --tokens              Print the file's tokens.
   --parse               Stop after parsing.
-  --check               Stop after typechecking, as goose check does.
+  --check               Stop after typechecking, as gust check does.
   --dump                Print the parsed program back as source.
   --dump-docs           Print the documentation comments of the program's
                         declarations, fields and variants.
@@ -1041,14 +1042,14 @@ int Main(int argc, char **argv) {
         auto topic = argc > 2 ? string(argv[2]) : string();
         auto help = HelpText(topic);
         if (help.empty()) {
-            fprintf(stderr, "no help on %s: goose help lists the commands\n", topic.c_str());
+            fprintf(stderr, "no help on %s: gust help lists the commands\n", topic.c_str());
             return 1;
         }
         fputs(help.c_str(), stdout);
         return 0;
     }
     if (verb == "version") {
-        printf("goose runtime %s\n", RuntimeVersion().c_str());
+        printf("gust runtime %s\n", RuntimeVersion().c_str());
         return 0;
     }
     if (verb == "lsp") return RunLsp(exe, vector<string>(argv + firstarg, argv + argc));
@@ -1172,7 +1173,7 @@ int Main(int argc, char **argv) {
         else if (arg == "-D" && i + 1 < argc) cdefines.push_back(argv[++i]);
         else if (arg.rfind("-D", 0) == 0 && arg.size() > 2) cdefines.push_back(arg.substr(2));
         else if (!arg.empty() && arg[0] == '-') {
-            fprintf(stderr, "unknown option: %s (goose --help lists them)\n", arg.c_str());
+            fprintf(stderr, "unknown option: %s (gust --help lists them)\n", arg.c_str());
             return 1;
         }
         else files.push_back(arg);
@@ -1199,7 +1200,7 @@ int Main(int argc, char **argv) {
     string builddir;
     if (verb == "run") {
         if (!outname.empty()) {
-            fprintf(stderr, "goose run takes no -o: it compiles and runs the program in this "
+            fprintf(stderr, "gust run takes no -o: it compiles and runs the program in this "
                             "process\n");
             return 1;
         }
@@ -1212,7 +1213,7 @@ int Main(int argc, char **argv) {
         parseonly = true;
     } else if (verb == "build") {
         if (multitest || !headername.empty()) {
-            fprintf(stderr, "goose build takes one program and no --header; the flag form "
+            fprintf(stderr, "gust build takes one program and no --header; the flag form "
                             "(-o out.c) writes the C for a C host\n");
             return 1;
         }
@@ -1235,8 +1236,8 @@ int Main(int argc, char **argv) {
     if (files.empty()) {
         auto help = HelpText(verb);
         fprintf(stderr, "%s\n%s\n", help.substr(0, help.find("\n\n") + 1).c_str(),
-                verb.empty() ? "goose --help lists the commands and common options."
-                             : cat("goose ", verb, " --help lists its options.").c_str());
+                verb.empty() ? "gust --help lists the commands and common options."
+                             : cat("gust ", verb, " --help lists its options.").c_str());
         return 1;
     }
     // With no output file the program is compiled into this process and run,

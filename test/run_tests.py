@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """Goose test runner: parses every test file, checks dump/reparse/dump
 roundtrips to identical output, typechecks files not marked `parse-only` on
 their first line, checks that error tests fail in the right phase, and (when a
@@ -1959,6 +1960,21 @@ def main():
         if jit:
             code, out, err = tc.run_capture([exe, "run", probe])
             checks.append(("run", code == 0 and out.strip() == "verbs", out + err))
+        # Gust's own extension: a .gust program importing a module of its own
+        # spelled .gust and one spelled .goose, and the standard library.
+        gustdir = gendir / "gust_sources"
+        gustdir.mkdir(exist_ok=True)
+        tc.write_text(gustdir / "helper.gust", "fn twice(x: i64) -> i64 { x * 2 }\n")
+        tc.write_text(gustdir / "legacy.goose", "fn thrice(x: i64) -> i64 { x * 3 }\n")
+        tc.write_text(gustdir / "main.gust", 'import std;\nimport helper;\nimport legacy;\n'
+                      'fn main() { print(twice(21), " ", thrice(5), " ", max(1, 2)); }\n')
+        code, out, err = tc.run_capture([exe, "check", gustdir / "main.gust"])
+        checks.append((".gust sources (check)", code == 0 and "typechecked ok" in out + err,
+                       out + err))
+        if jit:
+            code, out, err = tc.run_capture([exe, "run", gustdir / "main.gust"])
+            checks.append((".gust sources (run)", code == 0 and out.strip() == "42 15 2",
+                           out + err))
         code, out, err = tc.run_capture([exe, "check", probe])
         checks.append(("check", code == 0 and "typechecked ok" in out + err and
                        "verbs" not in out, out + err))
@@ -1966,7 +1982,7 @@ def main():
         checks.append(("run -o (refused)", code != 0 and "takes no -o" in err, out + err))
         code, out, err = tc.run_capture([exe, "version"])
         checks.append(("version", code == 0 and
-                       re.match(r"goose runtime [0-9a-f]{12}\s*$", out) is not None, out + err))
+                       re.match(r"gust runtime [0-9a-f]{12}\s*$", out) is not None, out + err))
         # Less than a page or two of data stack is no reservation to run on.
         code, out, err = tc.run_capture([exe, "check", "--stack-reserve", "5000", probe])
         checks.append(("check --stack-reserve 5000 (refused)",
@@ -1981,7 +1997,7 @@ def main():
         for cmd in ["run", "build", "check", "fetch", "toolchain", "version"]:
             code, out, err = tc.run_capture([exe, cmd, "--help"])
             checks.append((f"{cmd} --help", code == 0 and
-                           out.startswith(f"usage: goose {cmd}"), out + err))
+                           out.startswith(f"usage: gust {cmd}"), out + err))
             pages += out
         for topic in ["c", "internals"]:
             code, out, err = tc.run_capture([exe, "help", topic])
@@ -2001,8 +2017,8 @@ def main():
         code, out, err = tc.run_capture([exe])
         checks.append(("(no file)", code == 1 and "usage:" in err and "--help" in err, out + err))
         code, out, err = tc.run_capture([exe, "build"])
-        checks.append(("build (no file)", code == 1 and "usage: goose build" in err and
-                       "goose build --help" in err, out + err))
+        checks.append(("build (no file)", code == 1 and "usage: gust build" in err and
+                       "gust build --help" in err, out + err))
         # The compiler's own toolchain discovery: where this runner found a C
         # compiler, the compiler must find one too, and say so as JSON.
         code, out, err = tc.run_capture([exe, "toolchain", "--json"])

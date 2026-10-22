@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """Lays out a release of the compiler from a CMake build of it, for
 .github/workflows/release.yml, and as a way to try one locally.
 
@@ -163,7 +164,7 @@ def main():
 
     build = Path(args.build).resolve()
     out = Path(args.out).resolve()
-    exe_name = "goose" + EXE_SUFFIX
+    exe_name = "gust" + EXE_SUFFIX
     exe = next((p for p in (build / args.config / exe_name, build / exe_name) if p.exists()), None)
     if not exe:
         fail(f"no {exe_name} under {build} for {args.config}")

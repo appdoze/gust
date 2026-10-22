@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — a package's native part (docs/design/packages.md §5): the
 // C its sidecar names, built once per toolchain into what an AOT program
 // links (its objects and system libraries, in a response file) and the
@@ -153,7 +154,7 @@ inline vector<string> PackageExternNames(const Ast &ast, int pkg, set<string> *l
                     it.disable_recursion_pending();
                 continue;
             }
-            if (it->path().extension() != ".goose" || !it->is_regular_file(fec)) continue;
+            if (!IsSourceExtension(it->path().extension().string()) || !it->is_regular_file(fec)) continue;
             string text;
             if (!LoadSource(path, text)) continue;
             try {

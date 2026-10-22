@@ -1,3 +1,4 @@
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 # Builds a release of the compiler on each platform whenever a version tag
 # (v1.0, v1.2.3, v2.0-rc1, ...) is pushed, and publishes the archives as a
 # GitHub release of that tag once every platform has built and passed. Run by
@@ -72,7 +73,7 @@ jobs:
         shell: bash
         run: |
           if [ "$GITHUB_REF_TYPE" = tag ]; then version="$GITHUB_REF_NAME"; else version="snapshot-${GITHUB_SHA::7}"; fi
-          echo "RELEASE_NAME=goose-$version-${{ matrix.platform }}" >> "$GITHUB_ENV"
+          echo "RELEASE_NAME=gust-$version-${{ matrix.platform }}" >> "$GITHUB_ENV"
 
       - name: Configure
         run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DGOOSE_BUILTIN_LIBS=all
@@ -97,7 +98,7 @@ jobs:
       - name: Test the release
         shell: bash
         run: |
-          python samples/run_samples.py --exe "dist/$RELEASE_NAME/goose${{ runner.os == 'Windows' && '.exe' || '' }}"
+          python samples/run_samples.py --exe "dist/$RELEASE_NAME/gust${{ runner.os == 'Windows' && '.exe' || '' }}"
           if [ -e build/goose-home/pkg ]; then
             echo "the release fetched packages it has compiled in:"; ls -R build/goose-home/pkg | head -20; exit 1
           fi
