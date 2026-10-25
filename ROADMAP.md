@@ -56,6 +56,11 @@ Both move into `compare/` in Phase 0.
   removes more of the checks.
 - **`extern fn` audit**: `--externs` lists every `extern fn` outside the standard library,
   `--deny-externs` refuses them, the equivalent of auditing Rust's `unsafe`. **(done)**
+  `--externs` also reports each struct whose Gust and C layouts differ, with the `pad`
+  that fixes it, and a sidecar's `c_headers` lets the C compiler check every prototype
+  against its header **(done; `docs/gust/checked_and_externs.md`)**. CI builds and runs
+  every sample with `--checked` on all three platforms, which found two samples
+  truncating floats with `as` **(done)**.
 - **`simd fn`**: its AVX2 / AVX-512 copies can be *slower* than the plain function
   (measured: 0.160 s against 0.105 s on the nbody lane prototype). Investigated: the cause
   is not the per-function `target` attribute; clang's SLP vectorizer does not vectorize
@@ -109,7 +114,12 @@ Write the spec first; these change the language.
 - **Work-stealing runtime**, so loops balance themselves.
 - **Deterministic reductions**: the same floating-point result at any thread count.
 - **Freeze-then-share**: large read-only data built at run time, read by every worker in
-  place.
+  place. The API example (`docs/gust/backend_api.md`) needs it for any shared data not
+  known at compile time.
+- **Addressed mailboxes**: replies a worker can wait for itself. (A **non-blocking
+  `thread_wait`** would also save a thread per connection in a thread-per-connection
+  server; measured, it halves that server's memory but not its tail latency, and the
+  API example's pool does not need it.)
 - **Zero-copy tree transfer**: structures linked by relative references cross a queue as one
   block, or by handing over the memory region (Goose's open item 9).
 - Add multithreaded versions of raytrace and nbody to `compare/`, with Rust + rayon
@@ -152,6 +162,11 @@ the plain function.
   compile time), instead of closures-as-objects.
 - **Thread-per-core async I/O**: each worker owns its connections and event loop; then an
   HTTP server and client library on it.
+- Started early, as `examples/api/`: an HTTP/1.1 JSON API served by a pool of
+  event-loop workers (one per CPU), measured against a thread per connection and
+  against Go (net/http, and Go with the same HTTP) in `docs/gust/backend_api.md`,
+  whose roadmap orders the backend work: a `net` module with the loop, epoll /
+  kqueue / IOCP, runtime-owned cancellation, M:N workers, then the items above.
 
 **Exit:** an HTTP server and a callback-heavy GUI program written idiomatically; HTTP
 throughput compared against a Rust (tokio) server in `compare/`.

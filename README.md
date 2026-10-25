@@ -28,9 +28,23 @@ Early fork. The language today is Goose's, with these changes
   where Goose and Rust wrap silently in release builds. It costs about 5% on
   average (17% at most) across the benchmarks below.
 - `--externs` lists the C functions a program calls outside the standard
-  library, which the safety rules cannot see into; `--deny-externs` refuses
-  them, as auditing Rust's `unsafe` would.
+  library, which the safety rules cannot see into, and where a struct they
+  take is laid out differently in C; `--deny-externs` refuses them, as
+  auditing Rust's `unsafe` would. A sidecar's `c_headers` has the C compiler
+  check each `extern fn` against its header.
+- A thread's data stacks commit memory as they grow from 16 KB, not 1 MB at
+  a time, so a server with a thread per connection stays small.
+- [examples/api/](examples/api/README.md) is a JSON API over HTTP/1.1 with
+  FastAPI-style validation errors, served by a pool of event-loop workers
+  and measured against Go.
 - Its cache lives in `~/.gust`, apart from any Goose install.
+
+Design notes for these are in [docs/gust/](docs/gust/): the
+[`--checked` and `extern fn` audit](docs/gust/checked_and_externs.md), the
+[compiler architecture](docs/gust/compiler_architecture.md) (why Gust keeps
+generating C), [backends and the API benchmark](docs/gust/backend_api.md),
+[what other languages do](docs/gust/language_research.md), and
+[rust-lang/rust#164250 and Gust](docs/gust/soundness_rust_164250.md).
 
 Not renamed yet, so that Goose's changes keep merging: the documentation in
 [GOOSE.md](GOOSE.md) (Goose's overview) and [docs/](docs/index.md), which

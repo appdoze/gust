@@ -58,8 +58,38 @@ git log upstream/master..main
   defines such a function in the generated file itself (`--include`) takes
   `const T *` (`test/extern_types.py` follows).
 
+## Runtime
+
+- `src/runtime/runtime_impl.h` (and `src/runtime_inline.h`, regenerated):
+  on Windows and macOS, where the fault handler commits a data stack as it
+  grows, a fault commits as much as the region has committed already, from
+  16 KB up to 1 MB, instead of 1 MB every time. A program with many threads
+  touches several stacks per thread, most a few bytes deep: with a thread
+  per connection, the API example's commit charge per idle connection fell
+  from 4.1 MB to 0.33 MB (Windows PrivateUsage).
+- `test/runtime/runtime_commit_chunks.c`, `test/threads/stack_commit_growth.goose`,
+  `test/ffi_stack_writes.py`, `test/threads/thread_contained_overflow.goose`
+  (new): the commit sequence, sparse touches, the clamp at a region's end,
+  release, system calls writing into data-stack memory, growth in workers,
+  and that a data stack overrun ends the process even in a contained worker.
+- `docs/implementation.md`: the commit chunk as it now is.
+
+## Examples
+
+- `examples/api/` (new): a JSON API over HTTP/1.1 (`api.gust`, `http.gust`,
+  `jsonx.gust`, sockets and a poller in `net.c` behind `net.gust`), served
+  by a pool of event-loop workers or a thread per connection; its Go twins
+  (`go/server` on net/http, `go/rawserver` with the same minimal HTTP), a
+  load generator (`go/loadgen`), behaviour tests (`test_api.py`), the
+  benchmark and its measurement scripts, and raw results; see
+  `docs/gust/backend_api.md`.
+
 ## Scripts and tests
 
+- `test/api_example.py` (new), `test/run_tests.py`, `docs/testing.md`: the
+  suite builds the API example normally and with `--checked` and runs its
+  behaviour tests over sockets, against the pool and a thread per
+  connection (baseline profile).
 - `scripts/toolchain.py`, `scripts/check_doc_examples.py`: find a `gust`
   binary under `build/`, and a `goose` one from before the rename.
 - `scripts/package_release.py`, `test/lsp_sweep.py`,

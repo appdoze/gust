@@ -40,8 +40,8 @@ machine (Intel i7-11700F) and labelled as measured.
 
 | | **C, compiled by clang** (today, improved) | **LLVM IR, through LLVM's API** | **A backend of our own** |
 |---|---|---|---|
-| Runtime performance | Rust parity on compute, measured; ahead where Gust's layouts win | the same LLVM; at most what metadata C cannot carry adds | far below for years: Goose's TinyCC path, a simple backend, ran n-body 11x slower than clang (measured) |
-| Compilation speed | front end 0.06 s of a 1.0 s release build; clang's optimizer and the link are the rest (measured below) | skips parsing the C, 0.12 s of that 1.0 s; the optimizer and link remain | can be very fast (Go, Zig's self-hosted x86 backend) |
+| Runtime performance | Rust parity on compute, measured; ahead where Gust's layouts win | the same LLVM; at most what metadata C cannot carry adds | far below for years: Goose's TinyCC path, a simple backend, ran n-body 11x slower than clang (measured); Hare's QBE backend is at 25–75% of LLVM by its own FAQ |
+| Compilation speed | front end 0.06 s of a 1.0 s release build; clang's optimizer and the link are the rest (measured below) | skips parsing the C (0.12 s of that 1.0 s, measured) but builds IR instead (not measured); the optimizer and link remain | can be very fast (Go, Zig's self-hosted x86 backend) |
 | Optimization opportunities | anything C can say: `restrict`, `__builtin_assume`, vector types, `musttail`, `#pragma` loops, per-function targets | also `noalias` scopes, range and alias metadata, the pass pipeline itself | whatever we build |
 | Debugging | C-level today; `#line` directives would give source-level stepping and profiles at almost no cost | full DWARF / CodeView from Gust's own types | we would write the debug info |
 | Diagnostics | Gust's own; a C compiler error is a compiler bug | the same | the same |
@@ -145,10 +145,28 @@ What these say for the choice:
 - **The front end is 6% of a release build.** Gust's own work, everything
   that makes the program safe and fast, takes 62 ms; the rest is the C
   compiler's optimizer (about 0.42 s), the link (0.25 s) and parsing the C.
-- **Generating C costs 12% of a release build.** Parsing 241 KB of C is the
-  step an LLVM IR backend would skip: 0.12 s of 1.0 s. The optimizer and
-  the link remain whatever the backend is, so IR would make release builds
-  at most about an eighth faster, which does not pay for the costs above.
+- **Parsing the generated C is 12% of a release build (measured).** clang
+  spends 0.119 s parsing and checking 241 KB of C (`-fsyntax-only`) of the
+  1.0 s build. That bounds what removing the C *parsing* step can save on
+  this program; it is not a measurement of an LLVM IR pipeline, which would
+  differ in ways not measured here:
+  - building the IR through LLVM's API costs time of its own (likely less
+    than parsing C, not zero);
+  - the IR Gust would emit is not the IR clang makes from the C, so the
+    optimizer's 0.42 s could shrink or grow;
+  - debug information and the link (0.25 s) remain.
+  So an IR backend's compile-time saving on this program is somewhere below
+  0.12 s, which does not pay for the costs in the table above. That is the
+  limit of this conclusion: one program, compile time only.
+- **What IR would do for the generated code is not measured.** The
+  expectation that it adds little rests on two things: on eight benchmarks,
+  Gust's C through clang matched Rust, another LLVM front end, and the one
+  case that looked like it needed IR (`simd fn`) was solved in C. Code where
+  alias and range metadata matter (hot loops over many references with
+  distinct roots) could show otherwise; step 7's entry criterion exists for
+  that case. For the third option, Hare's FAQ puts its own simple backend
+  (QBE) at roughly 25–75% of LLVM's runtime performance, an outside
+  estimate, not measured here.
 - **The development loop is already faster than Rust's**, through TinyCC:
   `gust run` compiles and starts the program in 0.09 s, against 0.45 s for
   an unoptimized rustc build. A debug build through clang (0.84 s) is slower

@@ -6046,7 +6046,14 @@ starting from the page that faulted. On both, a chunk is as large as what
 the region has committed already, from 16 KB up to 1 MB (Gust; Goose
 commits 1 MB at a time), so a stack that stays small commits little: a
 server with a thread per connection holds several stacks per connection,
-most of them a few bytes deep. Linux reserves with overcommit and protects only
+most of them a few bytes deep. Only that granularity changed: not the
+reservation (`GS_STACK_RESERVE`, 2 GB by default), the guard gap, Linux
+(which commits on touch, without the handler), nor the native thread
+stacks the runtime creates its threads with (the platform default, with a
+64 KB `SetThreadStackGuarantee` on Windows).
+`test/runtime/runtime_commit_chunks.c` checks the sequence, sparse first
+touches, the clamp at a region's end, release, and the system-call rule
+above. Linux reserves with overcommit and protects only
 the gap. Runtime C therefore writes to a stack only in user mode (`memcpy`,
 `gs_bld_append`) and never through a system call, because a system call
 would fail on an unopened page instead of faulting. A debugger sees each
