@@ -1,0 +1,8 @@
+gust      c=  64:   165516 req/s, p99    2299 us, p99.9    5284 us, 0.44 switches per request (system-wide), 19 threads at most, server CPU 71%
+gust      c= 256:   141383 req/s, p99   10148 us, p99.9   45388 us, 0.60 switches per request (system-wide), 19 threads at most, server CPU 60%
+gustthreads c=  64:   142719 req/s, p99    2936 us, p99.9   13611 us, 1.42 switches per request (system-wide), 131 threads at most, server CPU 70%
+gustthreads c= 256:   124033 req/s, p99    7942 us, p99.9   52132 us, 1.70 switches per request (system-wide), 505 threads at most, server CPU 66%
+goraw     c=  64:   104280 req/s, p99    4767 us, p99.9   13866 us, 1.51 switches per request (system-wide), 16 threads at most, server CPU 61%
+goraw     c= 256:   106295 req/s, p99    8399 us, p99.9   23419 us, 1.07 switches per request (system-wide), 16 threads at most, server CPU 67%
+go        c=  64:    70050 req/s, p99    6318 us, p99.9   11320 us, 2.68 switches per request (system-wide), 17 threads at most, server CPU 68%
+go        c= 256:    64154 req/s, p99   31834 us, p99.9   55689 us, 2.86 switches per request (system-wide), 16 threads at most, server CPU 64%

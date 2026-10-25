@@ -1,0 +1,8 @@
+rep 1 no added load                gust  :   164889 req/s, p99    6169 us, p99.9   13362 us
+rep 1 no added load                goraw :   121470 req/s, p99    7225 us, p99.9   15864 us
+rep 1 busy loops on CPUs [0, 2]    gust  :   157377 req/s, p99    7752 us, p99.9   28902 us
+rep 1 busy loops on CPUs [0, 2]    goraw :   103980 req/s, p99   15409 us, p99.9   48927 us
+rep 2 no added load                gust  :   163181 req/s, p99    5978 us, p99.9   12418 us
+rep 2 no added load                goraw :   136415 req/s, p99    5950 us, p99.9   15935 us
+rep 2 busy loops on CPUs [0, 2]    gust  :   167181 req/s, p99    6615 us, p99.9   23797 us
+rep 2 busy loops on CPUs [0, 2]    goraw :   113336 req/s, p99   12562 us, p99.9   30891 us

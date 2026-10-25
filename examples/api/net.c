@@ -281,7 +281,7 @@ int64_t net_poller_wait(int64_t poller, int64_t ms, int64_t *tags, int64_t *even
 #ifdef _WIN32
         Sleep((DWORD)ms);
 #else
-        usleep((useconds_t)(ms * 1000));
+        poll(NULL, 0, (int)ms);   /* usleep left POSIX in 2008 */
 #endif
         return 0;
     }

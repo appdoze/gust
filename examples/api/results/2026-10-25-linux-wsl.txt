@@ -1,0 +1,53 @@
+Linux check in WSL2 (examples/api/README.md, docs/gust/backend_api.md section 7): C written by gust on Windows (--standalone), built with gcc there.
+
+Linux 6.6.114.1-microsoft-standard-WSL2 x86_64
+gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+== net.c, strict
+net.c: In function ‘net_poller_wait’:
+net.c:284:9: error: implicit declaration of function ‘usleep’; did you mean ‘sleep’? [-Wimplicit-function-declaration]
+  284 |         usleep((useconds_t)(ms * 1000));
+      |         ^~~~~~
+      |         sleep
+== runtime commit chunks (C test, Linux path)
+runtime commit chunks ok
+== stack growth in workers
+grown 40000000 bytes, 0 wrong
+recursion true
+big 1 0 9 2
+workers true
+== contained overflow (expected: data stack overflow, exit 1)
+spawning
+goose runtime error: data stack overflow: a value on worker 0's data stacks grew past the 1 MB reserved for it; --stack-reserve or -DGS_STACK_RESERVE raises the reservation, up to 256 TB
+exit 1
+== api server
+-- api --workers 2
+ok   a client that does not read holds back only its own responses: others served True, slowest 0 ms; 3000 of 3000 responses in order
+ok   a client resetting mid-response does not disturb the server
+ok   connection churn: 300 of 300 in 0.05 s
+ok   a request trickled in is cut off at its deadline: b'HTTP/1.1 408 Request Tim' after 5.2 s
+ok   a request in flight at shutdown is answered, then the connection closed: 201 close
+ok   an idle connection is closed at shutdown
+ok   graceful shutdown (exit 0)
+all checks passed
+-- api_checked --workers 2
+ok   a client that does not read holds back only its own responses: others served True, slowest 0 ms; 3000 of 3000 responses in order
+ok   a client resetting mid-response does not disturb the server
+ok   connection churn: 300 of 300 in 0.05 s
+ok   a request trickled in is cut off at its deadline: b'HTTP/1.1 408 Request Tim' after 5.2 s
+ok   a request in flight at shutdown is answered, then the connection closed: 201 close
+ok   an idle connection is closed at shutdown
+ok   graceful shutdown (exit 0)
+all checks passed
+-- api --thread-per-connection
+ok   a client that does not read holds back only its own responses: others served True, slowest 1 ms; 3000 of 3000 responses in order
+ok   a client resetting mid-response does not disturb the server
+ok   connection churn: 300 of 300 in 0.12 s
+ok   a request trickled in is cut off at its deadline: b'HTTP/1.1 408 Request Tim' after 5.2 s
+ok   a request in flight at shutdown is answered, then the connection closed: 201 close
+ok   an idle connection is closed at shutdown
+ok   graceful shutdown (exit 0)
+all checks passed
+
+== after the usleep fix
+net.c: strict POSIX, -Wall -Wextra -Werror: ok
+net.c: gnu default: ok

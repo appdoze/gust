@@ -1,0 +1,140 @@
+{
+ "gust": [
+  {
+   "connections": 0,
+   "reserved_mb": 12330.52734375,
+   "committed_mb": 0.41796875,
+   "data_stack_committed_mb": 0.046875,
+   "thread_stack_committed_mb": 0.1171875,
+   "other_committed_mb": 0.25390625,
+   "resident_mb": 4.49609375,
+   "threads": 3
+  },
+  {
+   "connections": 250,
+   "reserved_mb": 4110847.52734375,
+   "committed_mb": 71.67578125,
+   "data_stack_committed_mb": 15.671875,
+   "thread_stack_committed_mb": 37.2265625,
+   "other_committed_mb": 18.77734375,
+   "resident_mb": 36.4296875,
+   "threads": 503,
+   "reserved_kb_per_connection": 16787525.632,
+   "committed_kb_per_connection": 291.872,
+   "resident_kb_per_connection": 130.8,
+   "data_stack_committed_kb_per_connection": 64.0,
+   "thread_stack_committed_kb_per_connection": 152.0,
+   "other_committed_kb_per_connection": 75.872,
+   "threads_per_connection": 2.0
+  },
+  {
+   "connections": 1000,
+   "reserved_mb": 16406406.96484375,
+   "committed_mb": 285.3515625,
+   "data_stack_committed_mb": 62.546875,
+   "thread_stack_committed_mb": 148.5546875,
+   "other_committed_mb": 74.25,
+   "resident_mb": 131.84765625,
+   "threads": 2003,
+   "reserved_kb_per_connection": 16787534.272,
+   "committed_kb_per_connection": 291.772,
+   "resident_kb_per_connection": 130.408,
+   "data_stack_committed_kb_per_connection": 64.0,
+   "thread_stack_committed_kb_per_connection": 152.0,
+   "other_committed_kb_per_connection": 75.772,
+   "threads_per_connection": 2.0
+  }
+ ],
+ "go": [
+  {
+   "connections": 0,
+   "reserved_mb": 5258.78125,
+   "committed_mb": 11.703125,
+   "data_stack_committed_mb": 0.0,
+   "thread_stack_committed_mb": 0.125,
+   "other_committed_mb": 11.578125,
+   "resident_mb": 8.06640625,
+   "threads": 6
+  },
+  {
+   "connections": 250,
+   "reserved_mb": 5280.3515625,
+   "committed_mb": 22.1171875,
+   "data_stack_committed_mb": 0.0,
+   "thread_stack_committed_mb": 0.2421875,
+   "other_committed_mb": 21.875,
+   "resident_mb": 17.45703125,
+   "threads": 12,
+   "reserved_kb_per_connection": 88.352,
+   "committed_kb_per_connection": 42.656,
+   "resident_kb_per_connection": 38.464,
+   "data_stack_committed_kb_per_connection": 0.0,
+   "thread_stack_committed_kb_per_connection": 0.48,
+   "other_committed_kb_per_connection": 42.176,
+   "threads_per_connection": 0.024
+  },
+  {
+   "connections": 1000,
+   "reserved_mb": 5293.4296875,
+   "committed_mb": 36.76953125,
+   "data_stack_committed_mb": 0.0,
+   "thread_stack_committed_mb": 0.2421875,
+   "other_committed_mb": 36.52734375,
+   "resident_mb": 31.98046875,
+   "threads": 12,
+   "reserved_kb_per_connection": 35.48,
+   "committed_kb_per_connection": 25.668,
+   "resident_kb_per_connection": 24.488,
+   "data_stack_committed_kb_per_connection": 0.0,
+   "thread_stack_committed_kb_per_connection": 0.12,
+   "other_committed_kb_per_connection": 25.548,
+   "threads_per_connection": 0.006
+  }
+ ],
+ "goraw": [
+  {
+   "connections": 0,
+   "reserved_mb": 5258.53125,
+   "committed_mb": 11.12109375,
+   "data_stack_committed_mb": 0.0,
+   "thread_stack_committed_mb": 0.12109375,
+   "other_committed_mb": 11.0,
+   "resident_mb": 6.77734375,
+   "threads": 6
+  },
+  {
+   "connections": 250,
+   "reserved_mb": 5279.84375,
+   "committed_mb": 21.09765625,
+   "data_stack_committed_mb": 0.0,
+   "thread_stack_committed_mb": 0.23828125,
+   "other_committed_mb": 20.859375,
+   "resident_mb": 16.12109375,
+   "threads": 12,
+   "reserved_kb_per_connection": 87.296,
+   "committed_kb_per_connection": 40.864,
+   "resident_kb_per_connection": 38.272,
+   "data_stack_committed_kb_per_connection": 0.0,
+   "thread_stack_committed_kb_per_connection": 0.48,
+   "other_committed_kb_per_connection": 40.384,
+   "threads_per_connection": 0.024
+  },
+  {
+   "connections": 1000,
+   "reserved_mb": 5302.90625,
+   "committed_mb": 43.98828125,
+   "data_stack_committed_mb": 0.0,
+   "thread_stack_committed_mb": 0.2578125,
+   "other_committed_mb": 43.73046875,
+   "resident_mb": 38.0625,
+   "threads": 13,
+   "reserved_kb_per_connection": 45.44,
+   "committed_kb_per_connection": 33.656,
+   "resident_kb_per_connection": 32.036,
+   "data_stack_committed_kb_per_connection": 0.0,
+   "thread_stack_committed_kb_per_connection": 0.14,
+   "other_committed_kb_per_connection": 33.516,
+   "threads_per_connection": 0.007
+  }
+ ]
+}
