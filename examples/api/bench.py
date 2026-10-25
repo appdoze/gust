@@ -68,7 +68,7 @@ class Server:
         return m
 
     def go_stats(self):
-        if self.kind == "gust":
+        if self.kind.startswith("gust"):
             return None
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/debug/vars", timeout=5) as r:
             ms = json.load(r)["memstats"]
@@ -215,13 +215,17 @@ SCENARIOS = [
     {"name": "mixed, new connection per request, 16 clients", "args": ["-mix", "mixed", "-c", "16", "-churn"]},
 ]
 
-KINDS = ["gust", "go", "goraw"]
-# The executable each server kind runs, and the arguments it gets after its port.
-EXES = {"gust": "api_gust", "go": "server_go", "goraw": "rawserver_go"}
-SERVER_ARGS = {}
+KINDS = ["gust", "gustthreads", "go", "goraw"]
+# The executable each server kind runs, and the arguments it gets after its
+# port: the Gust pool gets as many workers as the server has CPUs, as Go's
+# servers get GOMAXPROCS=8.
+EXES = {"gust": "api_gust", "gustthreads": "api_gust", "go": "server_go", "goraw": "rawserver_go"}
+SERVER_ARGS = {"gust": ["--workers", "8"], "gustthreads": ["--thread-per-connection"]}
 
-KEYS = ["rps", "p50_us", "p90_us", "p99_us", "p999_us", "max_us", "due_p50_us", "due_p99_us", "due_p999_us",
-        "server_cpu_share", "client_cpu_share", "peak_rss_mb", "peak_private_mb", "peak_threads",
+KEYS = ["rps", "p50_us", "p90_us", "p95_us", "p99_us", "p999_us", "max_us", "due_p50_us", "due_p95_us",
+        "due_p99_us", "due_p999_us",
+        "server_cpu_share", "client_cpu_share", "loadgen_gcs", "loadgen_gc_pause_ms",
+        "peak_rss_mb", "peak_private_mb", "peak_threads",
         "page_faults_per_1k_requests", "go_mallocs_per_request", "go_bytes_per_request", "go_gcs", "go_gc_pause_ms"]
 
 def main():
@@ -261,6 +265,11 @@ def main():
         summary = {}
         for kind, rs in runs.items():
             summary[kind] = {k: statistics.median([r[k] for r in rs]) for k in KEYS if all(k in r for r in rs)}
+            # The spread over the reps, for the numbers the tables show.
+            for k in ("rps", "p99_us", "p999_us", "due_p99_us", "due_p999_us"):
+                if all(k in r for r in rs):
+                    summary[kind][k + "_min"] = min(r[k] for r in rs)
+                    summary[kind][k + "_max"] = max(r[k] for r in rs)
             summary[kind]["errors"] = sum(r["errors"] for r in rs)
             summary[kind]["status_mismatches"] = sum(r["status_mismatches"] for r in rs)
         report["scenarios"].append({"name": sc["name"], "args": sc["args"], "median": summary, "runs": runs})

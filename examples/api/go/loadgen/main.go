@@ -30,6 +30,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"sort"
 	"strconv"
 	"sync"
@@ -132,17 +133,23 @@ type result struct {
 	RPS         float64 `json:"rps"`
 	P50         float64 `json:"p50_us"`
 	P90         float64 `json:"p90_us"`
+	P95         float64 `json:"p95_us"`
 	P99         float64 `json:"p99_us"`
 	P999        float64 `json:"p999_us"`
 	Max         float64 `json:"max_us"`
 	// With -rate: from when each request was due, not when it went out.
 	DueP50     float64 `json:"due_p50_us,omitempty"`
+	DueP95     float64 `json:"due_p95_us,omitempty"`
 	DueP99     float64 `json:"due_p99_us,omitempty"`
 	DueP999    float64 `json:"due_p999_us,omitempty"`
 	DueMax     float64 `json:"due_max_us,omitempty"`
 	Errors     int64   `json:"errors"`
 	Mismatches int64   `json:"status_mismatches"`
 	FirstError string  `json:"first_error,omitempty"`
+	// The load generator's own collections during the measured window, whose
+	// pauses would add to every server's latencies alike.
+	OwnGCs       uint32  `json:"loadgen_gcs"`
+	OwnGCPauseMs float64 `json:"loadgen_gc_pause_ms"`
 }
 
 func main() {
@@ -242,10 +249,13 @@ func main() {
 		}(c)
 	}
 	time.Sleep(*warm)
+	var ms0, ms1 runtime.MemStats
+	runtime.ReadMemStats(&ms0)
 	recording.Store(true)
 	t0 := nanos()
 	time.Sleep(*dur)
 	recording.Store(false)
+	runtime.ReadMemStats(&ms1)
 	elapsed := float64(nanos()-t0) / 1e9
 	stopping.Store(true)
 	wg.Wait()
@@ -272,12 +282,13 @@ func main() {
 	res := result{
 		Mix: *mixName, Connections: *conns, Rate: *rate, Seconds: elapsed, Churn: *churn,
 		Requests: len(all), Total: total.Load(), RPS: float64(len(all)) / elapsed,
-		P50: pct(all, 0.50), P90: pct(all, 0.90), P99: pct(all, 0.99), P999: pct(all, 0.999), Max: pct(all, 1),
+		P50: pct(all, 0.50), P90: pct(all, 0.90), P95: pct(all, 0.95), P99: pct(all, 0.99), P999: pct(all, 0.999), Max: pct(all, 1),
 		Errors: errs.Load(), Mismatches: mismatches.Load(),
+		OwnGCs: ms1.NumGC - ms0.NumGC, OwnGCPauseMs: float64(ms1.PauseTotalNs-ms0.PauseTotalNs) / 1e6,
 	}
 	if *rate > 0 {
 		d := sorted(dueLats)
-		res.DueP50, res.DueP99, res.DueP999, res.DueMax = pct(d, 0.50), pct(d, 0.99), pct(d, 0.999), pct(d, 1)
+		res.DueP50, res.DueP95, res.DueP99, res.DueP999, res.DueMax = pct(d, 0.50), pct(d, 0.95), pct(d, 0.99), pct(d, 0.999), pct(d, 1)
 	}
 	if e, ok := firstErr.Load().(string); ok {
 		res.FirstError = e

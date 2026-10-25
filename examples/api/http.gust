@@ -1,14 +1,22 @@
 // HTTP/1.1, the server side of what a JSON API needs: requests parsed in
-// place in one buffer per connection, keep-alive and pipelining,
-// Content-Length bodies, limits on what a client may send, and the error
-// responses a server owes a client that breaks them. Not here: chunked
-// request bodies (refused with 501), TLS (terminated in front, as many Go
-// services do behind a load balancer) and HTTP/2.
+// place, keep-alive and pipelining, Content-Length bodies, limits on what a
+// client may send, and the error responses a server owes a client that
+// breaks them. Not here: chunked request bodies (refused with 501), TLS
+// (terminated in front, as many Go services do behind a load balancer) and
+// HTTP/2.
 //
-// Memory: a connection's buffer and every response are built on its
-// thread's data stacks and released at the end of their scope, so serving a
-// request allocates nothing from the heap and a connection's memory is
-// bounded by the limits below.
+// Two ways to serve, with the same parsing, limits and responses:
+// - serve_loop (the default in api.gust): one thread per CPU, each
+//   multiplexing its connections over non-blocking sockets and a poller. A
+//   connection holds a buffer only while a request of it is partly read or
+//   a response partly sent; an idle one holds a few dozen bytes. Handlers
+//   must not block, since a worker's thread is all of its connections'.
+// - serve: one thread per connection, blocking reads and writes, a buffer
+//   per connection on its thread's data stack. Handlers may block.
+//
+// Memory: buffers and responses live on data stacks and are released at
+// the end of their scope, so serving a request allocates nothing from the
+// heap, and a connection's memory is bounded by the limits below.
 import std;
 import net;
 
@@ -18,6 +26,7 @@ import net;
 const MAX_HEAD = 8192;
 const MAX_BODY = 8192;
 const IDLE_MS = 5000;
+const REQUEST_MS = 5000;         // from a request's first byte to its last (Go's ReadHeaderTimeout)
 const POLL_MS = 100;             // how often a waiting connection looks at the stop flag
 const SEND_TIMEOUT_MS = 5000;
 
@@ -38,7 +47,8 @@ struct Response {
 }
 
 // What a connection served, for the server's totals.
-struct Counts { requests: i64 = 0, ok: i64 = 0, client_errors: i64 = 0, server_errors: i64 = 0, refused: i64 = 0 }
+struct Counts { requests: i64 = 0, ok: i64 = 0, client_errors: i64 = 0, server_errors: i64 = 0, refused: i64 = 0,
+               connections: i64 = 0 }
 
 fn reason(status: i64) -> const u8[:] {
     return match status {
@@ -164,9 +174,8 @@ fn parse_head(head: const u8[:]) -> Request, i64, i64 {
     return req, length, 0;
 }
 
-// The status line, the headers and the body, sent in one write.
-fn send_response(sock: i64, res: Response&, body: const u8[:], keep_alive: bool) -> bool {
-    var out: u8[>..] = [];
+// The status line, the headers and the body.
+fn format_response(out: u8[>..]&, res: Response&, body: const u8[:], keep_alive: bool) {
     format(out, "HTTP/1.1 ", res.status, " ", reason(res.status), "\r\n");
     out.append("Content-Type: application/json\r\n");
     format(out, "Content-Length: ", body.len, "\r\n");
@@ -174,7 +183,18 @@ fn send_response(sock: i64, res: Response&, body: const u8[:], keep_alive: bool)
     if !keep_alive { out.append("Connection: close\r\n"); }
     out.append("\r\n");
     out.append(body);
+}
+
+// A response sent in one write on a blocking socket.
+fn send_response(sock: i64, res: Response&, body: const u8[:], keep_alive: bool) -> bool {
+    var out: u8[>..] = [];
+    format_response(out, res, body, keep_alive);
     return send_all(sock, out);
+}
+
+// A refusal's body: {"detail":"<reason>"}.
+fn refusal_body(out: u8[>..]&, status: i64) {
+    format(out, "{\"detail\":\"", reason(status), "\"}");
 }
 
 // A refusal the server makes itself, before any handler sees the request;
@@ -182,7 +202,7 @@ fn send_response(sock: i64, res: Response&, body: const u8[:], keep_alive: bool)
 fn refuse(sock: i64, status: i64, counts: Counts&) {
     var res = Response { status: status, .. };
     var body: u8[>..] = [];
-    format(body, "{\"detail\":\"", reason(status), "\"}");
+    refusal_body(body, status);
     send_response(sock, res, body, false);
     counts.refused += 1;
 }
@@ -194,18 +214,20 @@ fn count(counts: Counts&, status: i64) {
     else { counts.server_errors += 1; }
 }
 
-// Waits for more bytes and reads them into buf[have..limit]: the count, or 0
+// Waits for more bytes and reads them into buf[have..limit]: the count; 0
 // when the connection should end (closed, failed, idle too long, or, with
-// nothing of a request read yet, the server is stopping).
-fn fill(sock: i64, buf: u8[:], have: i64, limit: i64, idle_ms: i64) -> i64 {
+// nothing of a request read yet, the server is stopping); -1 when the
+// request it is reading ran past deadline, a clock() time (0: none).
+fn fill(sock: i64, buf: u8[:], have: i64, limit: i64, deadline: f64) -> i64 {
     var waited = 0;
     loop {
         if have == 0 && net_stop_requested() != 0 { return 0; }
+        if deadline > 0.0 && clock() > deadline { return -1; }
         let ready = net_wait_readable(sock, POLL_MS);
         if ready < 0 { return 0; }
         if ready > 0 { return max(0, recv_into(sock, buf, have, limit)); }
         waited += POLL_MS;
-        if waited >= idle_ms { return 0; }
+        if waited >= IDLE_MS { return 0; }
     }
 }
 
@@ -219,12 +241,16 @@ fn serve<H, S>(sock: i64, state: S&) -> Counts {
     buf.resize(MAX_HEAD + MAX_BODY, 0);
     var have = 0;
     loop {
-        // The head: everything through the blank line, within MAX_HEAD.
+        // The head: everything through the blank line, within MAX_HEAD, and
+        // the whole request within REQUEST_MS of its first byte.
+        var deadline = if have > 0 { clock() + REQUEST_MS / 1000.0 } else { 0.0 };
         var end = head_end(buf[0..have], 0);
         while end < 0 {
             if have >= MAX_HEAD { refuse(sock, 431, counts); return counts; }
-            let n = fill(sock, buf, have, MAX_HEAD + MAX_BODY, IDLE_MS);
+            let n = fill(sock, buf, have, MAX_HEAD + MAX_BODY, deadline);
+            if n < 0 { refuse(sock, 408, counts); return counts; }
             if n == 0 { return counts; }
+            if deadline == 0.0 { deadline = clock() + REQUEST_MS / 1000.0; }
             let from = max(0, have - 3);
             have += n;
             end = head_end(buf[0..have], from);
@@ -237,7 +263,8 @@ fn serve<H, S>(sock: i64, state: S&) -> Counts {
             if status != 0 { refuse(sock, status, counts); return counts; }
             // The body, Content-Length bytes after the head.
             while have < end + length {
-                let n = fill(sock, buf, have, MAX_HEAD + MAX_BODY, IDLE_MS);
+                let n = fill(sock, buf, have, MAX_HEAD + MAX_BODY, deadline);
+                if n < 0 { refuse(sock, 408, counts); return counts; }
                 if n == 0 { return counts; }
                 have += n;
             }
@@ -256,4 +283,308 @@ fn serve<H, S>(sock: i64, state: S&) -> Counts {
         for i in have - done { buf[i] = buf[done + i]; }
         have -= done;
     }
+}
+
+// --- the event loop ---------------------------------------------------------
+
+const IN_SLOT = MAX_HEAD + MAX_BODY;   // a request partly read
+const OUT_SLOT = 16384;                // a response partly sent
+const LOOP_MS = 50;                   // the longest wait, so timeouts and the stop flag are looked at
+const LOOP_GRACE_S = 10.0;             // after a stop, for requests in flight
+const READY_CAP = 512;                 // events taken from the poller at once
+const LISTENER = 0;                    // the listener's tag; a connection's is its index + 1
+
+// One connection of a worker's loop. state is the application's, of any
+// fixed-size type with a `conn` field, which the loop sets to the
+// connection's number when it opens.
+struct Conn<S> {
+    sock: i64 = -1,              // -1: a free entry
+    in_slot: i64 = -1,           // the slot holding a request not yet whole
+    have: i64 = 0,
+    out_slot: i64 = -1,          // the slot holding response bytes not yet taken
+    out_len: i64 = 0,
+    out_sent: i64 = 0,
+    close_after: bool = false,   // end the connection once its output is sent
+    started: f64 = 0.0,          // when the request in the in slot began
+    last: f64 = 0.0,             // the last read or write
+    state: S,
+}
+
+// A slot of size bytes: a free one, or a new one at the end of bytes.
+fn take_slot(bytes: u8[>..]&, free: i64[>..<]&, size: i64) -> i64 {
+    if free.len > 0 {
+        let slot = free[free.len - 1];
+        free.pop();
+        return slot;
+    }
+    bytes.resize(bytes.len + size, 0);
+    return bytes.len / size - 1;
+}
+
+// Serves connections from listener (non-blocking, and shared with the other
+// workers, who take turns accepting) over poller, until the server stops.
+// H(state, req, res, body) handles each request, as serve's does; it must
+// not block. Connections are numbered first, first + step, ...; at most
+// limit are open at once, past which one is answered 503 and closed.
+fn serve_loop<H, S>(listener: i64, poller: i64, proto: S, first: i64, step: i64, limit: i64) -> Counts {
+    var counts = Counts { .. };
+    var conns: Conn<S>[>..] = [];
+    var free_conns: i64[>..<] = [];
+    // The slabs only grow, which lets a request hold views of its slot: a
+    // reference into a grow-shrink array may never be stored (§5.2).
+    var ins: u8[>..] = [];           // IN_SLOT bytes per slot
+    var free_ins: i64[>..<] = [];
+    var outs: u8[>..] = [];          // OUT_SLOT bytes per slot
+    var free_outs: i64[>..<] = [];
+    var scratch: u8[>..] = [];       // where a read lands when no request is under way
+    scratch.resize(IN_SLOT, 0);
+    var tags: i64[>..] = [];
+    tags.resize(READY_CAP, 0);
+    var events: i64[>..] = [];
+    events.resize(READY_CAP, 0);
+    var live = 0;
+    var next_id = first;
+    var listening = net_poller_add(poller, listener, LISTENER, NET_READ, 0) == 0;
+    var stop_at = 0.0;
+
+    // The poller owns the socket: removing it closes it.
+    fn close(i: i64) {
+        net_poller_remove(poller, i + 1);
+        if conns[i].in_slot >= 0 { free_ins.push(conns[i].in_slot); }
+        if conns[i].out_slot >= 0 { free_outs.push(conns[i].out_slot); }
+        conns[i].sock = -1;
+        conns[i].in_slot = -1;
+        conns[i].out_slot = -1;
+        free_conns.push(i);
+        live -= 1;
+    }
+
+    // A refusal, sent as far as the socket takes it now, then the end.
+    fn refuse_conn(i: i64, status: i64) {
+        var res = Response { status: status, .. };
+        var body: u8[>..] = [];
+        refusal_body(body, status);
+        var out: u8[>..] = [];
+        format_response(out, res, body, false);
+        send_some(conns[i].sock, out);
+        counts.refused += 1;
+        close(i);
+    }
+
+    // Sends what the socket takes of bytes now, and keeps the rest for when
+    // it takes more; false when the connection ended.
+    fn start_send(i: i64, bytes: const u8[:], now: f64) -> bool {
+        var sent = 0;
+        while sent < bytes.len {
+            let n = send_some(conns[i].sock, bytes[sent..]);
+            if n == NET_AGAIN { break; }
+            if n < 0 { close(i); return false; }
+            sent += n;
+        }
+        conns[i].last = now;
+        if sent == bytes.len { return true; }
+        let left = bytes.len - sent;
+        if left > OUT_SLOT {
+            counts.server_errors += 1;
+            close(i);
+            return false;
+        }
+        let slot = take_slot(outs, free_outs, OUT_SLOT);
+        let base = slot * OUT_SLOT;
+        for k in left { outs[base + k] = bytes[sent + k]; }
+        conns[i].out_slot = slot;
+        conns[i].out_len = left;
+        conns[i].out_sent = 0;
+        net_poller_set(poller, i + 1, NET_WRITE);
+        return true;
+    }
+
+    // Answers every whole request at the start of buf: the bytes it used,
+    // or -1 when the connection ended. Stops while output is pending, so
+    // that responses go out in order and a client that does not read is
+    // not sent more.
+    fn process(i: i64, buf: const u8[:], now: f64) -> i64 {
+        var used = 0;
+        while used < buf.len && conns[i].out_slot < 0 {
+            let rest = buf[used..];
+            let end = head_end(rest, 0);
+            if end < 0 {
+                if rest.len >= MAX_HEAD { refuse_conn(i, 431); return -1; }
+                return used;
+            }
+            if end > MAX_HEAD { refuse_conn(i, 431); return -1; }
+            var keep = false;
+            var done = 0;
+            {
+                var req, length, status = parse_head(rest[0..end]);
+                if status != 0 { refuse_conn(i, status); return -1; }
+                if rest.len < end + length { return used; }
+                done = end + length;
+                req.body = rest[end..done];
+                var res = Response { .. };
+                var body: u8[>..] = [];
+                H(conns[i].state, req, res, body);
+                keep = req.keep_alive && !res.close && stop_at == 0.0;
+                count(counts, res.status);
+                var out: u8[>..] = [];
+                format_response(out, res, body, keep);
+                if !start_send(i, out, now) { return -1; }
+            }
+            used += done;
+            if !keep {
+                if conns[i].out_slot >= 0 {
+                    conns[i].close_after = true;
+                    return used;
+                }
+                close(i);
+                return -1;
+            }
+        }
+        return used;
+    }
+
+    // Requests waiting in the in slot, once output no longer holds them back.
+    fn drain_slot(i: i64, now: f64) {
+        let slot = conns[i].in_slot;
+        let base = slot * IN_SLOT;
+        let used = process(i, ins[base..base + conns[i].have], now);
+        if used < 0 { return; }
+        let left = conns[i].have - used;
+        for k in left { ins[base + k] = ins[base + used + k]; }
+        conns[i].have = left;
+        if left == 0 {
+            free_ins.push(slot);
+            conns[i].in_slot = -1;
+        } else if used > 0 {
+            conns[i].started = now;
+        }
+    }
+
+    fn readable(i: i64, now: f64) {
+        if conns[i].in_slot >= 0 {
+            let base = conns[i].in_slot * IN_SLOT;
+            let n = recv_into(conns[i].sock, ins, base + conns[i].have, base + IN_SLOT);
+            if n == NET_AGAIN { return; }
+            if n <= 0 { close(i); return; }
+            conns[i].have += n;
+            conns[i].last = now;
+            drain_slot(i, now);
+            return;
+        }
+        // No request under way: read into the scratch buffer, and keep only
+        // what is left of a request not yet whole.
+        let n = recv_into(conns[i].sock, scratch, 0, IN_SLOT);
+        if n == NET_AGAIN { return; }
+        if n <= 0 { close(i); return; }
+        conns[i].last = now;
+        let used = process(i, scratch[0..n], now);
+        if used < 0 || used == n { return; }
+        let slot = take_slot(ins, free_ins, IN_SLOT);
+        let base = slot * IN_SLOT;
+        for k in n - used { ins[base + k] = scratch[used + k]; }
+        conns[i].in_slot = slot;
+        conns[i].have = n - used;
+        conns[i].started = now;
+    }
+
+    fn writable(i: i64, now: f64) {
+        let base = conns[i].out_slot * OUT_SLOT;
+        while conns[i].out_sent < conns[i].out_len {
+            let n = send_some(conns[i].sock, outs[base + conns[i].out_sent..base + conns[i].out_len]);
+            if n == NET_AGAIN { return; }
+            if n < 0 { close(i); return; }
+            conns[i].out_sent += n;
+            conns[i].last = now;
+        }
+        free_outs.push(conns[i].out_slot);
+        conns[i].out_slot = -1;
+        if conns[i].close_after { close(i); return; }
+        net_poller_set(poller, i + 1, NET_READ);
+        if conns[i].in_slot >= 0 { drain_slot(i, now); }
+    }
+
+    fn accept_all(now: f64) {
+        loop {
+            let sock = net_accept(listener);
+            if sock < 0 { return; }      // none left: this worker or another took them
+            if live >= limit || net_set_nonblocking(sock) != 0 {
+                // Over the limit: refused at once, still blocking.
+                var res = Response { status: 503, .. };
+                send_response(sock, res, "{\"detail\":\"Service Unavailable\"}", false);
+                net_close(sock);
+                counts.refused += 1;
+                continue;
+            }
+            var i = conns.len;
+            if free_conns.len > 0 {
+                i = free_conns[free_conns.len - 1];
+                free_conns.pop();
+            } else {
+                conns.push(Conn { state: proto, .. });
+            }
+            conns[i] = Conn { sock: sock, last: now, state: proto, .. };
+            conns[i].state.conn = next_id;
+            next_id += step;
+            if net_poller_add(poller, sock, i + 1, NET_READ, 1) != 0 {
+                net_close(sock);
+                conns[i].sock = -1;
+                free_conns.push(i);
+                continue;
+            }
+            live += 1;
+            counts.connections += 1;
+        }
+    }
+
+    // Timeouts: a response the client does not take, a request it does not
+    // finish, a connection it leaves idle; and, once stopping, every idle
+    // connection.
+    fn sweep(now: f64) {
+        for i in conns.len {
+            if conns[i].sock < 0 { continue; }
+            if conns[i].out_slot >= 0 {
+                if now - conns[i].last > SEND_TIMEOUT_MS / 1000.0 { close(i); }
+            } else if conns[i].in_slot >= 0 {
+                if now - conns[i].started > REQUEST_MS / 1000.0 { refuse_conn(i, 408); }
+            } else if stop_at > 0.0 || now - conns[i].last > IDLE_MS / 1000.0 {
+                close(i);
+            }
+        }
+    }
+
+    var last_sweep = clock();
+    loop {
+        let n = wait_ready(poller, LOOP_MS, tags, events);
+        let now = clock();
+        if n < 0 { break; }
+        for k in n {
+            let tag = tags[k];
+            if tag == LISTENER {
+                if listening { accept_all(now); }
+                continue;
+            }
+            let i = tag - 1;
+            if i >= conns.len || conns[i].sock < 0 { continue; }
+            if conns[i].out_slot >= 0 { writable(i, now); } else { readable(i, now); }
+        }
+        if stop_at == 0.0 && net_stop_requested() != 0 {
+            stop_at = now;
+            if listening {
+                net_poller_remove(poller, LISTENER);
+                listening = false;
+            }
+        }
+        if stop_at > 0.0 || now - last_sweep >= 0.1 {
+            sweep(now);
+            last_sweep = now;
+        }
+        if stop_at > 0.0 && (live == 0 || now - stop_at > LOOP_GRACE_S) {
+            for i in conns.len {
+                if conns[i].sock >= 0 { close(i); }
+            }
+            break;
+        }
+    }
+    if listening { net_poller_remove(poller, LISTENER); }
+    return counts;
 }

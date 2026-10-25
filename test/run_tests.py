@@ -2407,8 +2407,8 @@ def main():
         from api_example import check_api_example
         try:
             check_api_example(exe, gendir)
-            r.ok("api example: HTTP routes, validation, limits, containment and shutdown, "
-                 "normal and --checked")
+            r.ok("api example: HTTP routes, validation, limits, slow and resetting clients, churn, "
+                 "containment and shutdown; pool and thread per connection, normal and --checked")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("api example", str(e))
     if cc and args.profile == "baseline":

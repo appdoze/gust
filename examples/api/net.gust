@@ -1,32 +1,64 @@
 // The sockets of net.c. api.build names net.h in its c_headers, so the C
 // compiler checks every declaration here against the header's prototype.
 //
-// Two of them take a pointer and a length, which Gust cannot check against
-// each other; recv_into and send_all below are the only callers, and they
-// derive both from one slice, so the rest of the program cannot get it wrong.
+// Four of them take a pointer and a length, which Gust cannot check against
+// each other; recv_into, send_all, send_some and wait_ready below are their
+// only callers, and derive both from one slice, so the rest of the program
+// cannot get them wrong.
+
+// What a call on a non-blocking socket returns when it would have to wait.
+const NET_AGAIN = -2;
+// Poller events.
+const NET_READ = 1;
+const NET_WRITE = 2;
+const NET_HUP = 4;
 
 extern fn net_init() -> i64;
 extern fn net_listen(port: i64, backlog: i64) -> i64;
 extern fn net_wait_accept(listener: i64, ms: i64) -> i64;
 extern fn net_accept(listener: i64) -> i64;
+extern fn net_set_nonblocking(sock: i64) -> i64;
 extern fn net_wait_readable(sock: i64, ms: i64) -> i64;
 extern fn net_set_send_timeout(sock: i64, ms: i64) -> i64;
 extern fn net_recv(sock: i64, buf: u8&, cap: i64) -> i64;
 extern fn net_send(sock: i64, buf: const u8&, len: i64) -> i64;
+extern fn net_send_some(sock: i64, buf: const u8&, len: i64) -> i64;
 extern fn net_close(sock: i64);
+extern fn net_poller_new() -> i64;
+extern fn net_poller_free(poller: i64);
+extern fn net_poller_add(poller: i64, sock: i64, tag: i64, events: i64, owned: i64) -> i64;
+extern fn net_poller_set(poller: i64, tag: i64, events: i64);
+extern fn net_poller_remove(poller: i64, tag: i64);
+extern fn net_poller_count(poller: i64) -> i64;
+extern fn net_poller_wait(poller: i64, ms: i64, tags: i64&, events: i64&, cap: i64) -> i64;
 extern fn net_catch_signals();
 extern fn net_request_stop();
 extern fn net_stop_requested() -> i64;
 
 // Bytes from the socket into buf[at..limit]: the count, 0 when the peer
-// closed, < 0 on an error.
+// closed, NET_AGAIN when a non-blocking socket has none yet, < 0 on an error.
 fn recv_into(sock: i64, buf: u8[:], at: i64, limit: i64) -> i64 {
     if at < 0 || at >= limit || limit > buf.len { return -1; }
     return net_recv(sock, buf[at], limit - at);
 }
 
-// Sends all of bytes; false when the peer is gone.
+// Sends all of bytes on a blocking socket; false when the peer is gone.
 fn send_all(sock: i64, bytes: const u8[:]) -> bool {
     if bytes.len == 0 { return true; }
     return net_send(sock, bytes[0], bytes.len) == bytes.len;
+}
+
+// What a non-blocking socket takes of bytes now: the count, NET_AGAIN, or
+// < 0 on an error.
+fn send_some(sock: i64, bytes: const u8[:]) -> i64 {
+    if bytes.len == 0 { return 0; }
+    return net_send_some(sock, bytes[0], bytes.len);
+}
+
+// Waits up to ms for the poller's sockets: how many are ready, with their
+// tags and events in the first entries of tags and events.
+fn wait_ready(poller: i64, ms: i64, tags: i64[:], events: i64[:]) -> i64 {
+    let cap = min(tags.len, events.len);
+    if cap == 0 { return -1; }
+    return net_poller_wait(poller, ms, tags[0], events[0], cap);
 }

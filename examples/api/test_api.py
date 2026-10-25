@@ -6,7 +6,7 @@ Starts the server on a free port, sends each case, compares the status and
 the JSON body (and a few headers), then stops it with Ctrl-C's signal and
 checks the graceful shutdown. Exits 1 on any mismatch.
 """
-import argparse, json, os, signal, socket, subprocess, sys, time
+import argparse, json, os, signal, socket, struct, subprocess, sys, threading, time
 
 def free_port():
     with socket.socket() as s:
@@ -120,16 +120,113 @@ def keep_alive_and_pipelining(port, fails):
     if not ok:
         fails.append("keep-alive")
 
+def report(fails, name, ok, detail=""):
+    print(("ok   " if ok else "FAIL ") + name + (f": {detail}" if detail else ""))
+    if not ok:
+        fails.append(name)
+
+def connect(port):
+    # Blocking, with no timeout: on Windows a socket with a timeout waits in
+    # select() on the 15.6 ms system timer.
+    return socket.create_connection(("127.0.0.1", port))
+
+def slow_reader(port, fails):
+    """A client that pipelines many requests and reads nothing for a while:
+    the server holds its output back (a partial write, then waiting for the
+    socket) without stalling other clients, then delivers every response,
+    complete and in order, once it reads."""
+    n = 3000
+    a = connect(port)
+    a.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
+    reqs = b"".join(b"GET /v1/items/%d HTTP/1.1\r\nHost: x\r\n\r\n" % (1 + i % 8) for i in range(n))
+    sender = threading.Thread(target=a.sendall, args=(reqs,), daemon=True)
+    sender.start()
+    time.sleep(0.5)
+    worst, others = 0.0, True
+    for _ in range(20):
+        t0 = time.perf_counter()
+        with connect(port) as b:
+            b.sendall(http("GET", "/health"))
+            r = read_response(b.makefile("rb"))
+        worst = max(worst, time.perf_counter() - t0)
+        others = others and r is not None and r[0] == 200
+    f = a.makefile("rb")
+    got = 0
+    for i in range(n):
+        r = read_response(f)
+        if r is None or r[0] != 200 or json.loads(r[2])["id"] != 1 + i % 8:
+            break
+        got += 1
+    sender.join(10)
+    a.close()
+    report(fails, "a client that does not read holds back only its own responses",
+           others and worst < 1.0 and got == n,
+           f"others served {others}, slowest {worst * 1000:.0f} ms; {got} of {n} responses in order")
+
+def slow_request(port, fails):
+    """A client that trickles its request is cut off at the request
+    deadline (5 s from its first byte), answered 408 or closed."""
+    s = connect(port)
+    msg = b"GET /health HTTP/1.1\r\nHost: x\r\nX-Pad: " + b"a" * 60 + b"\r\n\r\n"
+    t0 = time.time()
+    answer = None
+    for byte in msg:
+        try:
+            s.send(bytes([byte]))
+        except OSError:
+            answer = b"(closed)"
+            break
+        time.sleep(0.2)
+        s.setblocking(False)
+        try:
+            data = s.recv(4096)
+            answer = data or b"(closed)"
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError:
+            answer = b"(closed)"
+        s.setblocking(True)
+        if answer is not None or time.time() - t0 > 9:
+            break
+    elapsed = time.time() - t0
+    s.close()
+    ok = answer is not None and (answer.startswith(b"HTTP/1.1 408") or answer == b"(closed)") and 4.0 < elapsed < 7.5
+    report(fails, "a request trickled in is cut off at its deadline", ok,
+           f"{(answer or b'no answer')[:24]!r} after {elapsed:.1f} s")
+
+def disconnect_mid_response(port, fails):
+    """A client that asks for a lot and resets the connection before reading
+    it: the server drops the connection and goes on serving."""
+    s = connect(port)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    s.sendall(b"GET /v1/items HTTP/1.1\r\nHost: x\r\n\r\n" * 300)
+    time.sleep(0.1)
+    s.close()
+    time.sleep(0.3)
+    r = request(port, http("GET", "/health"))
+    report(fails, "a client resetting mid-response does not disturb the server", r is not None and r[0] == 200)
+
+def churn(port, fails):
+    """Connections opened, used once and closed, one after another."""
+    good, t0 = 0, time.perf_counter()
+    for _ in range(300):
+        with connect(port) as s:
+            s.sendall(http("GET", "/v1/items/2"))
+            r = read_response(s.makefile("rb"))
+            good += r is not None and r[0] == 200
+    report(fails, "connection churn", good == 300, f"{good} of 300 in {time.perf_counter() - t0:.2f} s")
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exe", required=True)
     ap.add_argument("--crash-route", action="store_true",
                     help="also check that an aborting handler ends only its connection (Gust)")
     ap.add_argument("--go", action="store_true", help="the server is the Go twin")
+    ap.add_argument("--server-args", default="", help="more arguments for the server, space-separated")
     args = ap.parse_args()
     port = free_port()
     flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-    cmd = [args.exe, str(port)] + (["--crash-route"] if args.crash_route else [])
+    cmd = [args.exe, str(port)] + (["--crash-route"] if args.crash_route else []) + args.server_args.split()
     proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, creationflags=flags)
     deadline = time.time() + 10
     while time.time() < deadline:
@@ -159,6 +256,11 @@ def main():
         if not good:
             fails.append(name)
     keep_alive_and_pipelining(port, fails)
+    slow_reader(port, fails)
+    disconnect_mid_response(port, fails)
+    churn(port, fails)
+    if not args.go:
+        slow_request(port, fails)
 
     if args.crash_route:
         try:
@@ -167,26 +269,41 @@ def main():
         except (ConnectionError, socket.timeout):
             crashed = True
         after = request(port, http("GET", "/health"))
-        ok = crashed and after and after[0] == 200
-        print(("ok   " if ok else "FAIL ") + "an aborting handler closes its connection; the server keeps serving")
-        if not ok:
-            fails.append("crash")
+        report(fails, "an aborting handler closes its connection; the server keeps serving",
+               crashed and after is not None and after[0] == 200)
 
-    # Graceful shutdown with a connection open and idle: it is closed, and
-    # the server exits on its own.
-    idle = socket.create_connection(("127.0.0.1", port), timeout=5)
+    # Graceful shutdown with one connection idle and one halfway through a
+    # request: the idle one is closed, the other is answered, with
+    # Connection: close, and the server exits on its own.
+    idle = connect(port)
+    partial = connect(port)
+    body = b'{"item_id":1,"quantity":2}'
+    partial.sendall(b"POST /v1/orders HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(body))
     time.sleep(0.2)
     if os.name == "nt":
         proc.send_signal(signal.CTRL_BREAK_EVENT)
     else:
         proc.send_signal(signal.SIGINT)
+    time.sleep(0.5)
+    partial.sendall(body)
+    r = read_response(partial.makefile("rb"))
+    report(fails, "a request in flight at shutdown is answered, then the connection closed",
+           r is not None and r[0] == 201 and r[1].get("connection") == "close",
+           f"{r[0] if r else None} {r[1].get('connection') if r else ''}")
+    idle.settimeout(5)
     try:
-        out, err = proc.communicate(timeout=15)
+        idle_closed = idle.recv(1) == b""
+    except OSError:
+        idle_closed = True
+    report(fails, "an idle connection is closed at shutdown", idle_closed)
+    try:
+        out, err = proc.communicate(timeout=20)
     except subprocess.TimeoutExpired:
         proc.kill()
         out, err = proc.communicate()
         fails.append("shutdown timeout")
     idle.close()
+    partial.close()
     text = out.decode(errors="replace")
     print("server stdout:", text.strip().replace("\n", " | "))
     if err.strip():
@@ -194,9 +311,7 @@ def main():
     ok = proc.returncode == 0 and "served" in text
     if args.crash_route:
         ok = ok and "1 aborted" in text and b"index" in err
-    print(("ok   " if ok else "FAIL ") + f"graceful shutdown (exit {proc.returncode})")
-    if not ok:
-        fails.append("shutdown")
+    report(fails, f"graceful shutdown (exit {proc.returncode})", ok)
     print(f"{len(fails)} failure(s)" if fails else "all checks passed")
     sys.exit(1 if fails else 0)
 
