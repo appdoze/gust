@@ -28,7 +28,7 @@ fn generate(img: u8[>..]&) {
             if d < 60.0 { v = 230.0; }
             if (x / 64 + y / 64) % 2 == 0 && y > H * 3 / 4 { v = 40.0; }
             v += r.rand_int(21) - 10;
-            img.push(clamp(v, 0.0, 255.0) as u8);
+            img.push(clamp(v, 0.0, 255.0) as! u8);
         }
     }
 }

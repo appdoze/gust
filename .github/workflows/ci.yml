@@ -15,10 +15,13 @@ on:
   pull_request:
   workflow_dispatch:
 
-# A newer push to the same branch makes the running job's answer stale.
+# A newer push to a branch or pull request makes the running job's answer
+# stale, so it is cancelled there. On the default branch every commit runs to
+# the end, so that each one has a complete result: cancelling there left
+# commits with no answer from three of the four jobs.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != format('refs/heads/{0}', github.event.repository.default_branch) }}
 
 jobs:
   test:
@@ -67,6 +70,12 @@ jobs:
 
       - name: Test
         run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }} --profile baseline --cc native --require-clang
+
+      # Gust's --checked builds: the suite's GS_DEBUG=1 programs already run
+      # optimized above; this builds every sample the same way, where a
+      # check that fires on a correct program is a bug in the checks.
+      - name: Samples, checked
+        run: python samples/run_samples.py --exe build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }} --checked --no-jit --cc native
 
       - uses: actions/setup-node@v7
         with:

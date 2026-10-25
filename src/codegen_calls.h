@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — codegen's calls (definitions of CodeGen members,
 // codegen.h): calls to specializations by the C.3 convention, extern
 // functions (§7.10), function values spliced inline (§7.6), and case-function
@@ -145,8 +146,12 @@ inline string CodeGen::ExternProto(FnSpec *sp) {
             params += ", ";
             args += ", ";
         }
-        s += CT(sp->argtypes[i]);
-        Append(params, CT(sp->argtypes[i]), " a", i);
+        // Gust: a `const T&` is a pointer to const in C as well, so that the
+        // prototype matches a header that declares it (c_headers, --include).
+        auto ct = CT(sp->argtypes[i]);
+        if (sp->argtypes[i]->kind == TY_REF && sp->argtypes[i]->cq) ct = cat("const ", ct);
+        s += ct;
+        Append(params, ct, " a", i);
         Append(args, "a", i);
     }
     if (sp->argtypes.empty()) s += "void", params = "void";

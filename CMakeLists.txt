@@ -77,6 +77,7 @@ add_executable(goose
     src/runtime/runtime_os.h
     src/runtime/goose.h
     src/gfx.h
+    src/gust_ffi.h
 )
 # Gust: the compiler's command is gust; the target keeps Goose's name, which
 # the rest of this file and upstream's changes to it use.

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """Compiles every sample, builds the generated C, runs it and compares its
 stdout, byte for byte after newline normalization, with expected/<name>.out.
 Samples run with this directory as the working directory; a sample reads
@@ -62,6 +63,9 @@ def main():
                     help="require this C toolchain instead of optional auto-discovery")
     ap.add_argument("--no-jit", action="store_true",
                     help="skip the in-process TinyCC runs even where they are available")
+    ap.add_argument("--checked", action="store_true",
+                    help="build every sample with --checked (Gust): the overflow, range and "
+                         "tag checks in an optimized build, which a correct sample never trips")
     ap.add_argument("-j", "--jobs", type=int, default=min(os.cpu_count() or 1, 32),
                     help="how many samples are worked on at once; 1 runs them in order")
     ap.add_argument("--gpu-jobs", type=int, default=0,
@@ -87,7 +91,8 @@ def main():
     # JIT comparison against them has nothing to say until that has happened.
     jit = not args.no_jit and not args.bless
 
-    gendir = tc.REPO_ROOT / "build" / "gen" / args.profile / "samples"
+    profile = args.profile + ("-checked" if args.checked else "")
+    gendir = tc.REPO_ROOT / "build" / "gen" / profile / "samples"
     gendir.mkdir(parents=True, exist_ok=True)
     runtime = tc.GooseRuntime(exe, gendir / "runtime")
     (HERE / "expected").mkdir(exist_ok=True)
@@ -119,7 +124,7 @@ def main():
         # The native modules the sample imports.
         modules = tc.native_imports(f.read_text(encoding="utf-8"))
         expfile = HERE / "expected" / f"{name}.out"
-        gargs = ["-O2"]
+        gargs = ["-O2"] + (["--checked"] if args.checked else [])
         header = HERE / f"{name}.h"
         if header.exists():
             gargs += ["--include", str(header)]
@@ -167,6 +172,7 @@ def main():
             # Built as a user builds: the compiler finds the C compiler, the
             # runtime object and the packages' link inputs itself.
             code, out, err = tc.run_capture([exe, "build", "-O2", "-o", str(efile)] +
+                                            (["--checked"] if args.checked else []) +
                                             (["--include", str(header)] if header.exists() else []) +
                                             [str(f)])
             ok, log = code == 0, out + err

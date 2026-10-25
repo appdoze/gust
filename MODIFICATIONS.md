@@ -43,6 +43,20 @@ git log upstream/master..main
   library and the packages compiled into the compiler (the C a program
   calls, which the safety rules cannot see into); `--deny-externs` makes
   each one an error.
+- `src/gust_ffi.h` (new), `src/main.cpp`: `--externs` runs after type
+  checking and prints, under each extern fn, where a struct it passes by
+  value, by reference or as a slice is laid out differently by Goose (packed)
+  and C (natural alignment), with the `pad` that fixes it; that a struct with
+  pads passes by value; and that a shared library's prototype is unchecked.
+  `--deny-externs` still refuses before type checking.
+- `src/ast.h`, `src/packages.h`, `src/main.cpp`, `src/codegen.h`: a sidecar's
+  `c_headers` (a path, or `<name>` for a system header) is included by the
+  generated C before its extern prototypes, so the C compiler checks each
+  prototype against the header's declaration.
+- `src/codegen_calls.h`: an extern fn's `const T&` parameter is a pointer to
+  `const` in its C prototype, as the header that declares it says. C that
+  defines such a function in the generated file itself (`--include`) takes
+  `const T *` (`test/extern_types.py` follows).
 
 ## Scripts and tests
 
@@ -56,8 +70,20 @@ git log upstream/master..main
   versions (checkout, setup-python and setup-node v7, upload-artifact v7,
   download-artifact v7, configure-pages v6, upload-pages-artifact and
   deploy-pages v5), as GitHub retires Node.js 20 on its runners.
+- `.github/workflows/ci.yml`: every commit on the default branch runs to the
+  end (superseded runs are still cancelled elsewhere), and each platform runs
+  the samples with `--checked`.
+- `samples/run_samples.py`: `--checked` builds and runs every sample with
+  `--checked`, which CI does on every platform.
+- `samples/21_raytrace.goose`, `samples/22_image_filters.goose`: a float
+  scaled to a byte converts with `as!`, the spec's form for a conversion
+  meant to drop the fraction; with `as`, `--checked` aborts there, as the
+  spec says it must (`140.25 as u8`). Output unchanged.
 - `test/run_tests.py`: the driver checks expect the `gust` wording and test
   `.gust` sources (a program importing a `.gust` and a `.goose` module); the
   no-C-compiler check also hides `%ProgramFiles%` and `%ProgramW6432%`; new
-  checks cover `--checked` (an overflow aborts, optimized) and `--externs` /
-  `--deny-externs`.
+  checks cover `--checked` (an overflow aborts, optimized, in a worker too),
+  `--externs` / `--deny-externs` and their layout report, and `c_headers`.
+- `test/errors_tc/covariant_store_*.goose`, `test/lifetimes/holder_stores_valid.goose`
+  (new): the rust-lang/rust#164250 regression tests
+  (`docs/gust/soundness_rust_164250.md`).

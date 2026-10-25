@@ -1,3 +1,4 @@
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """Included C adapters can use every declared extern's types, even when unused."""
 from pathlib import Path
 
@@ -23,7 +24,7 @@ static float native_sum(sl_f32 values) {
     for (int64_t i = 0; i < values.len; ++i) result += values.data[i];
     return result;
 }
-static int32_t native_input(Input_g *value) {
+static int32_t native_input(const Input_g *value) {
     return value->values_g.e[0] + value->values_g.e[1];
 }
 static Result_g native_result(void) {

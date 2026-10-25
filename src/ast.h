@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — parsed program data: type expressions, AST nodes, and symbols.
 // All objects are owned centrally by Ast (append-only tables of pointers); the
 // trees just point at each other, so no per-node destructors are needed.
@@ -2359,6 +2360,10 @@ struct Package {
     string sidecar;
     bool hassidecar = false;
     vector<string> csources, cincludes;     // Absolute.
+    // Gust: headers the program's generated C includes, so that the C
+    // compiler checks each extern fn's prototype against the real one
+    // (`c_headers`). Absolute.
+    vector<string> cheaders;
     vector<string> cdefines, cflags_cc, cflags_msvc, clibs;
     string cmake_target;
     vector<string> cmake_options;

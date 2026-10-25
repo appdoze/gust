@@ -81,7 +81,7 @@ recursive fn shade(origin: float3, dir: float3, depth: i64) -> float3 {
     return color;
 }
 
-fn to_byte(x: f32) -> u8 { (clamp(x, 0.0, 1.0) * 255.0) as u8 }
+fn to_byte(x: f32) -> u8 { (clamp(x, 0.0, 1.0) * 255.0) as! u8 }
 
 fn main() {
     spheres.push(Sphere { center: float3 { 0.0, 0.0, 4.0 }, radius: 1.0, color: float3 { 0.9, 0.2, 0.2 }, shine: 0.4 });

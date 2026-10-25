@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — C code generation. Consumes the optimized specialization
 // bodies (FnSpec::body) plus globals and emits one self-contained C file (the
 // runtime files from src/runtime/ are prepended by the driver).
@@ -1525,7 +1526,9 @@ struct CodeGen {
             // header name is undefined, and every C compiler on Windows takes
             // the slash form.
             for (auto &c : inc) if (c == '\\') c = '/';
-            Append(includes, "#include \"", inc, "\"\n");
+            // Gust: a `<name>` from a sidecar's c_headers is a system header.
+            if (!inc.empty() && inc[0] == '<') Append(includes, "#include ", inc, "\n");
+            else Append(includes, "#include \"", inc, "\"\n");
         }
         Append(head, "\n/* ---- types ---- */\n#pragma pack(push, 1)\n", tdecls, pdata,
                "#pragma pack(pop)\n\n/* ---- data ---- */\n", data);

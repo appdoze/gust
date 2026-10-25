@@ -131,8 +131,8 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     pkg.sidecar = cat(pkg.root, pkg.name, ".build");
     auto bf = LoadBuildFile(pkg.sidecar, pkg.hassidecar);
     if (!pkg.hassidecar) return;
-    const char *lists[] = { "c_sources", "c_include", "c_defines", "c_flags_cc", "c_flags_msvc",
-                            "c_libs", "dylibs" };
+    const char *lists[] = { "c_sources", "c_include", "c_headers", "c_defines", "c_flags_cc",
+                            "c_flags_msvc", "c_libs", "dylibs" };
     vector<string> known = { "cmake_target", "cmake_options", "main_thread_only", "exclude" };
     for (auto key : lists)
         for (auto suffix : { "", "_windows", "_linux", "_macos" }) known.push_back(cat(key, suffix));
@@ -155,6 +155,11 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     };
     pkg.csources = list("c_sources", true);
     pkg.cincludes = list("c_include", true);
+    // A `<name>` entry is a system header, left for the include path to find.
+    pkg.cheaders = list("c_headers", false);
+    for (auto &h : pkg.cheaders)
+        if (!h.empty() && h[0] != '<' && !IsAbsoluteSource(h))
+            h = ForwardSlashes(AbsolutePath(cat(pkg.root, h)));
     pkg.cdefines = list("c_defines", false);
     pkg.cflags_cc = list("c_flags_cc", false);
     pkg.cflags_msvc = list("c_flags_msvc", false);

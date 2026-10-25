@@ -48,6 +48,7 @@
 #include "toolchain.h"
 #include "builtin.h"
 #include "build.h"
+#include "gust_ffi.h"
 #include "packages.h"
 #include "native.h"
 #include "lsp_rpc.h"
@@ -1331,32 +1332,29 @@ int Main(int argc, char **argv) {
         if (!ast.errors.empty()) return 1;
         // Gust: the extern fns outside the standard library and the packages
         // compiled into the compiler, which are C the safety rules cannot see
-        // into (§7.10): listed by --externs, refused by --deny-externs, as
+        // into (§7.10): refused here by --deny-externs, and listed with the
+        // layouts they pass by --externs once the types are checked, as
         // auditing Rust's `unsafe` would.
-        if (listexterns || denyexterns) {
-            auto count = 0;
+        auto eachextern = [&](auto &&fn) {
             for (auto sf : ast.functions) {
                 if (!sf->isextern) continue;
                 auto fi = sf->line.fileidx;
                 auto known = fi >= 0 && fi < (int)ast.filepkg.size();
                 auto &pkg = ast.packages[known ? ast.filepkg[fi] : 0];
                 if (pkg.stdlib || pkg.builtin >= 0) continue;
-                count++;
-                auto what = cat("extern fn ", sf->qname, " calls the C symbol ",
-                                sf->cname.empty() ? string(sf->name) : sf->cname,
-                                sf->dylib.empty() ? string() : cat(" from ", sf->dylib),
-                                " (package ", pkg.name, ")");
-                if (denyexterns) {
-                    Diagnostic d;
-                    d.where = LocOf(sf->line);
-                    d.message = cat(what, ", which --deny-externs refuses");
-                    ast.Report(std::move(d));
-                } else {
-                    printf("%s:%d: %s\n", ast.sources[fi].first.c_str(), sf->line.line,
-                           what.c_str());
-                }
+                fn(sf, fi, cat("extern fn ", sf->qname, " calls the C symbol ",
+                               sf->cname.empty() ? string(sf->name) : sf->cname,
+                               sf->dylib.empty() ? string() : cat(" from ", sf->dylib),
+                               " (package ", pkg.name, ")"));
             }
-            if (listexterns) printf("%d extern fn(s) outside the standard library\n", count);
+        };
+        if (denyexterns) {
+            eachextern([&](SFunction *sf, int, const string &what) {
+                Diagnostic d;
+                d.where = LocOf(sf->line);
+                d.message = cat(what, ", which --deny-externs refuses");
+                ast.Report(std::move(d));
+            });
             if (!ast.errors.empty()) return 1;
         }
         // Printed by every run that gets this far, so that one which goes on
@@ -1374,6 +1372,21 @@ int Main(int argc, char **argv) {
         TypeCheckProgram(ast, library, nocgen);
         // The checker reported the errors it went on past, root by root.
         if (!ast.errors.empty()) return 1;
+        // Gust: --externs, with what each extern fn's C must agree with that
+        // the C compiler does not check: the layouts it passes (gust_ffi.h),
+        // and for one bound from a shared library, its whole prototype.
+        if (listexterns) {
+            auto count = 0;
+            eachextern([&](SFunction *sf, int fi, const string &what) {
+                count++;
+                printf("%s:%d: %s\n", ast.sources[fi].first.c_str(), sf->line.line, what.c_str());
+                if (!sf->dylib.empty())
+                    printf("    prototype: bound by name when the program starts; no C compiler "
+                           "sees it, so it must match the library's exactly\n");
+                for (auto &h : FfiLayoutHazards(sf)) printf("    layout: %s\n", h.c_str());
+            });
+            printf("%d extern fn(s) outside the standard library\n", count);
+        }
         Optimizer opt(ast, optlevel);
         if (specs) {
             string s;
@@ -1423,8 +1436,16 @@ int Main(int argc, char **argv) {
         // not a file from here is one the C compiler is meant to find on its
         // own include path, and is left alone. A JIT run has no file to be
         // relative to and resolves them from the working directory.
+        // Gust: after them, the headers packages name in `c_headers`, so that
+        // the C compiler checks each extern fn's prototype against the one the
+        // header declares, where a mismatch would otherwise link and misbehave.
+        auto progincludes = includes;
+        for (auto &p : ast.packages)
+            for (auto &h : p.cheaders)
+                if (std::find(progincludes.begin(), progincludes.end(), h) == progincludes.end())
+                    progincludes.push_back(h);
         if (!outfile.empty())
-            for (auto &inc : includes)
+            for (auto &inc : progincludes)
                 if (FileExists(inc)) inc = RelativeTo(inc, DirOf(outfile));
         // The extern-support runtime is written against the generated types,
         // so it goes in after them rather than up front.
@@ -1432,7 +1453,7 @@ int Main(int argc, char **argv) {
         for (auto &rf : runtime_files)
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
         auto stackcfg = StackConfigOf(cdefines);
-        CodeGen cg(ast, runtime_ext_text, includes, norfcheck, library, stackcfg.maxstacks);
+        CodeGen cg(ast, runtime_ext_text, progincludes, norfcheck, library, stackcfg.maxstacks);
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT
         // run takes functions from and a build links: its own, when it has

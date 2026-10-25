@@ -2094,6 +2094,73 @@ def main():
         code, out, err = tc.run_capture([exe, "check", "--deny-externs", probe])
         checks.append(("check --deny-externs (the standard library's own pass)", code == 0,
                        out + err))
+        # --externs reports where a struct's packed Goose layout and C's natural
+        # one disagree, and that an extern block's prototype is unchecked.
+        layout = gendir / "externs_layout.goose"
+        tc.write_text(layout, "struct Rect { x: i32, y: i32, w: i32, h: i32 }\n"
+                      "struct Bad { a: u8, b: i32 }\n"
+                      "struct Tail { a: i32, b: u8 }\n"
+                      "struct Padded { a: u8, pad 3, b: i32 }\n"
+                      "extern fn take_rect(r: const Rect&) -> i32;\n"
+                      "extern fn take_bad(b: Bad&);\n"
+                      "extern fn fill(xs: Tail[:]);\n"
+                      "extern fn by_value(p: Padded);\n"
+                      'extern "m" { fn cbrt(x: f64) -> f64; }\n'
+                      "fn main() {}\n")
+        code, out, err = tc.run_capture([exe, "check", "--externs", layout])
+        checks.append(("check --externs (layouts)", code == 0 and
+                       "Bad.b is at offset 1 in Goose and 4 in C: write `pad 3` before it" in out and
+                       "Tail is 5 bytes in Goose and 8 in C" in out and
+                       "Padded passes by value with its pads" in out and
+                       "prototype: bound by name when the program starts" in out and
+                       "take_rect (package externs_layout)\n    layout" not in out and
+                       "5 extern fn(s) outside the standard library" in out, out + err))
+        if cc:
+            # --checked reaches a worker, which is a program of its own.
+            worker = gendir / "checked_worker.goose"
+            tc.write_text(worker, "import os;\nstruct Job { n: i64 }\nstruct Done { v: i64 }\n"
+                          "thread_fn work() { let j = qget<Job>(); "
+                          "qput(Done { 9223372036854775807 + j.n }); }\n"
+                          "fn main() { let id = thread_spawn(work); qput(Job { args().len }); "
+                          "let d = qget<Done>(); thread_wait(id); print(d.v); }\n")
+            wexe = gendir / ("checked_worker" + tc.EXE_SUFFIX)
+            code, out, err = tc.run_capture([exe, "build", "--checked", "-o", str(wexe), worker])
+            good = code == 0 and wexe.exists()
+            if good:
+                code, out2, err2 = tc.run_capture([wexe])
+                good = code != 0 and "integer overflow" in err2 and out2.strip() == ""
+                out, err = out + out2, err + err2
+            checks.append(("build --checked (overflow in a worker aborts)", good, out + err))
+            # c_headers: the generated C includes the header the sidecar names,
+            # so the C compiler checks each extern fn's prototype against it.
+            hdir = gendir / "c_headers"
+            hdir.mkdir(exist_ok=True)
+            tc.write_text(hdir / "shim.h", "#include <stdint.h>\n"
+                          "int64_t shim_add(int64_t a, int64_t b);\n"
+                          "int64_t shim_sum(const uint8_t *p, int64_t n);\n")
+            tc.write_text(hdir / "shim.c", '#include "shim.h"\n'
+                          "int64_t shim_add(int64_t a, int64_t b) { return a + b; }\n"
+                          "int64_t shim_sum(const uint8_t *p, int64_t n) "
+                          "{ int64_t s = 0; for (int64_t i = 0; i < n; i++) s += p[i]; return s; }\n")
+            body = ("extern fn shim_sum(p: const u8&, n: i64) -> i64;\n"
+                    'fn main() { let s = "abc"; print(shim_add(40, 2), " ", shim_sum(s[0], s.len)); }\n')
+            for name, add in (("right", "extern fn shim_add(a: i64, b: i64) -> i64;\n"),
+                              ("wrong", "extern fn shim_add(a: i32, b: i32) -> i32;\n")):
+                tc.write_text(hdir / f"{name}.goose", add + body)
+                tc.write_text(hdir / f"{name}.build",
+                              'c_sources = ["shim.c"];\nc_headers = ["shim.h", "<stdlib.h>"];\n')
+            rexe = hdir / ("right" + tc.EXE_SUFFIX)
+            code, out, err = tc.run_capture([exe, "build", "-o", str(rexe), hdir / "right.goose"])
+            good = code == 0 and rexe.exists()
+            if good:
+                code, out2, err2 = tc.run_capture([rexe])
+                good = code == 0 and out2.strip() == "42 294"
+                out, err = out + out2, err + err2
+            checks.append(("build with c_headers (prototypes agree)", good, out + err))
+            code, out, err = tc.run_capture([exe, "build", "-o", str(hdir / ("wrong" + tc.EXE_SUFFIX)),
+                                             hdir / "wrong.goose"])
+            checks.append(("build with c_headers (a wrong prototype is refused)",
+                           code != 0 and "shim_add" in out + err, out + err))
         for what, good, text in checks:
             if good:
                 r.ok(f"goose {what}")
