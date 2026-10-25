@@ -1,0 +1,135 @@
+// JSON for the API's own types, written once for every struct with
+// `const for`, Gust's compile-time reflection: each copy of a loop body below
+// is ordinary code for one field, with no runtime metadata.
+//
+// A type opts in to encoding with a one-line overload, as a Rust type
+// derives Serialize:
+//
+//     fn encode_value(out: u8[>..]&, v: Item) { encode_fields(out, v); }
+//
+// and decodes with decode_fields(r, v). (Gust has no compile-time test of a
+// type's kind yet, `const if` in docs/design/const_for.md, which would make
+// even that line unneeded.) There is no namespace here, so that the generic
+// functions see the program's overloads.
+import json;
+
+// Text fields are inline strings of a few fixed sizes, which double as their
+// maximum length, as VARCHAR(64) does: no allocation, and the limit is part
+// of the type.
+type Str64 = u8[..64];
+type Str256 = u8[..256];
+
+fn encode_value(out: u8[>..]&, v: i64) { json::format_int(out, v); }
+fn encode_value(out: u8[>..]&, v: f64) { json::format_number(out, v); }
+fn encode_value(out: u8[>..]&, v: bool) { json::format_bool(out, v); }
+fn encode_value(out: u8[>..]&, v: const u8[:]) { json::format_string(out, v); }
+
+// A struct as an object, its fields in declaration order.
+fn encode_fields<T>(out: u8[>..]&, v: T) {
+    out.push('{');
+    var first = true;
+    const for <N, A> in fields<T> {
+        if !first { out.push(','); }
+        first = false;
+        json::format_key(out, N);
+        encode_value(out, v.A);
+    }
+    out.push('}');
+}
+
+fn decode_value(r: json::Reader&, v: i64&) { v = json::read_int(r); }
+fn decode_value(r: json::Reader&, v: f64&) { v = json::read_number(r); }
+fn decode_value(r: json::Reader&, v: bool&) { v = json::read_bool(r); }
+fn decode_value(r: json::Reader&, v: Str64&) { read_text(r, v); }
+fn decode_value(r: json::Reader&, v: Str256&) { read_text(r, v); }
+
+// A string into an inline string, or the reader's sticky error when it is
+// longer than the field holds.
+fn read_text<S>(r: json::Reader&, v: S&) {
+    var scratch: u8[>..] = [];
+    let s = json::read_string(r, scratch);
+    v.clear();
+    if s.len > v.cap { json::fail(r, "a string longer than its field"); return; }
+    v.append(s);
+}
+
+// What decode_fields found: a bit per field of T, in declaration order, for
+// each one the text gave; and the index of the field whose value was
+// malformed, if the reader's error happened in one (-1 otherwise).
+struct Decoded { seen: i64 = 0, failed: i64 = -1 }
+
+// The members of an object into a struct's fields by name. Members the type
+// does not have are skipped; fields the text does not mention keep their
+// values.
+fn decode_fields<T>(r: json::Reader&, v: T&) -> Decoded {
+    var d = Decoded { .. };
+    json::each_member(r) { key =>
+        var i = 0;
+        var matched = false;
+        const for <N, A> in fields<T> {
+            if !matched && key == N {
+                decode_value(r, v.A);
+                if r.error.len == 0 { d.seen |= 1 << i; }
+                else if d.failed < 0 { d.failed = i; }
+                matched = true;
+            }
+            i += 1;
+        }
+        if !matched { json::skip(r); }
+    };
+    return d;
+}
+
+// The index of v's field called name, or -1.
+fn field_index<T>(v: const T&, name: const u8[:]) -> i64 {
+    var i = 0;
+    var found = -1;
+    const for <N, A> in fields<T> {
+        if found < 0 && N == name { found = i; }
+        i += 1;
+    }
+    return found;
+}
+
+// The name of v's field i, or "".
+fn field_name<T>(v: const T&, i: i64) -> const u8[:] {
+    var k = 0;
+    var name: const u8[:] = "";
+    const for <N, A> in fields<T> {
+        if k == i { name = N; }
+        k += 1;
+    }
+    return name;
+}
+
+// Whether the text gave v's field called name. A name T has no field for is
+// a mistake in the program, so it aborts.
+fn gave<T>(d: Decoded, v: const T&, name: const u8[:]) -> bool {
+    let i = field_index(v, name);
+    if i < 0 { abort(str("jsonx: no field called ", name)); }
+    return (d.seen >> i) & 1 != 0;
+}
+
+// Validation errors in FastAPI's shape, so a client written for either reads
+// both: {"detail":[{"loc":["body","quantity"],"msg":"...","type":"..."}]}.
+// The location is the body alone when field is empty.
+struct Problems { count: i64 = 0 }
+
+fn problem(p: Problems&, out: u8[>..]&, field: const u8[:], msg: const u8[:], kind: const u8[:]) {
+    out.append(if p.count == 0 { "{\"detail\":[" } else { "," });
+    out.append("{\"loc\":[\"body\"");
+    if field.len > 0 {
+        out.push(',');
+        json::format_string(out, field);
+    }
+    out.append("],\"msg\":");
+    json::format_string(out, msg);
+    out.append(",\"type\":");
+    json::format_string(out, kind);
+    out.push('}');
+    p.count += 1;
+}
+
+fn finish_problems(p: Problems&, out: u8[>..]&) {
+    if p.count > 0 { out.append("]}"); }
+}

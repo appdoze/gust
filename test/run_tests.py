@@ -2403,6 +2403,17 @@ def main():
     if cc:
         r.show_task(ffi_stack_writes)
 
+    def api_example():
+        from api_example import check_api_example
+        try:
+            check_api_example(exe, gendir)
+            r.ok("api example: HTTP routes, validation, limits, containment and shutdown, "
+                 "normal and --checked")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("api example", str(e))
+    if cc and args.profile == "baseline":
+        r.show_task(api_example)
+
     show_goose_in_goose()
 
     # --- JIT: the same programs, compiled and run inside the compiler --------

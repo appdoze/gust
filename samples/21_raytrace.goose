@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // A small ray tracer: a few spheres on a checkered floor, one light, hard
 // shadows and mirror reflections, written with the library's vec3 math.
 // `float3` is an ordinary struct of three f32s; `a + b`, `a - b`, `a * b`

@@ -1,0 +1,261 @@
+// A JSON API in Gust: a product catalog and orders, served over HTTP/1.1,
+// with validation errors in FastAPI's shape. Its Go twins are
+// examples/api/go/server (net/http) and go/rawserver (the same HTTP as
+// here); bench.py drives all three with the same workload.
+//
+//   gust build examples/api/api.gust -o api.exe
+//   api.exe [port]                  (default 8080; Ctrl-C stops it gracefully)
+//
+//   GET  /health              {"status":"ok"}
+//   GET  /v1/items            {"items":[...]}
+//   GET  /v1/items/{id}       an item, or 404
+//   POST /v1/orders           {"item_id":1,"quantity":2,"note":"..."} -> 201, or 422
+//
+// How the parts fit Gust's model:
+// - Concurrency. Each connection is a thread of its own, the way Go gives
+//   each connection a goroutine; Gust threads share no memory, so a handler
+//   cannot race another. What they all read is the catalog, a `const` that
+//   is static data: shared as it is, never copied.
+// - Memory. A connection's buffer and each response live on its thread's
+//   data stacks, released when their scope ends: no heap allocation per
+//   request, and no collector.
+// - Identity without shared state. An order's id is its connection's
+//   number and its count on that connection, unique with no counter shared
+//   between threads.
+// - Failure. A connection's thread is contained: a bug that aborts it (an
+//   index out of range, say) ends that connection only. A supervisor thread
+//   per connection closes the socket and reports the message, as Go's
+//   net/http recovers a handler's panic and closes the connection.
+// - Shutdown. Ctrl-C (or SIGTERM) sets a flag; the server stops accepting,
+//   every connection finishes the request it is serving and closes, and
+//   the server reports what it served once they are done, or after
+//   SHUTDOWN_GRACE_S seconds.
+import std;
+import os;
+import json;
+import net;
+import http;
+import jsonx;
+
+// Each connection takes 8 data-stack regions of address space (6 for its
+// thread, 2 for its supervisor; `gust build --stacks` reports them), and
+// the default 2 GB per region leaves room for about 2,000: past this limit
+// a connection is answered 503 rather than given a thread the runtime may
+// not have. `--stack-reserve 256M` makes room for eight times as many.
+const MAX_CONNECTIONS = 1024;
+const SHUTDOWN_GRACE_S = 10.0;
+
+struct Item { id: i64, name: Str64, price_cents: i64, rating: f64, in_stock: bool }
+fn encode_value(out: u8[>..]&, v: Item) { encode_fields(out, v); }
+
+struct OrderIn { item_id: i64, quantity: i64, note: Str64 }
+
+struct Order { id: i64, item_id: i64, quantity: i64, total_cents: i64, note: Str64 }
+fn encode_value(out: u8[>..]&, v: Order) { encode_fields(out, v); }
+
+const CATALOG = [
+    Item { 1, "Espresso", 250, 4.6, true },
+    Item { 2, "Cappuccino", 380, 4.4, true },
+    Item { 3, "Flat white", 390, 4.7, true },
+    Item { 4, "Cold brew", 420, 4.1, false },
+    Item { 5, "Croissant", 310, 4.5, true },
+    Item { 6, "Banana bread", 295, 3.9, true },
+    Item { 7, "Oat milk latte", 450, 4.3, true },
+    Item { 8, "Matcha", 470, 4.0, false },
+];
+
+// One connection's state, which only its thread sees.
+struct Session { conn: i64, orders: i64 = 0, crash_route: bool = false }
+
+fn not_found(res: Response&, out: u8[>..]&) {
+    res.status = 404;
+    out.append("{\"detail\":\"Not Found\"}");
+}
+
+fn not_allowed(res: Response&, out: u8[>..]&, allow: const u8[:]) {
+    res.status = 405;
+    res.allow = allow;
+    out.append("{\"detail\":\"Method Not Allowed\"}");
+}
+
+// The routes. A path that names a resource but not this method is a 405
+// naming the ones it has, as Go 1.22's ServeMux answers.
+fn handle(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
+    let path = req.path;
+    if path == "/health" {
+        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
+        out.append("{\"status\":\"ok\"}");
+        return;
+    }
+    if path == "/v1/items" {
+        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
+        out.append("{\"items\":[");
+        for i in CATALOG.len {
+            if i > 0 { out.push(','); }
+            encode_value(out, CATALOG[i]);
+        }
+        out.append("]}");
+        return;
+    }
+    if starts_with(path, "/v1/items/") {
+        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
+        let id, ok = parse_int(path[10..]);
+        if !ok || id < 1 || id > CATALOG.len { not_found(res, out); return; }
+        encode_value(out, CATALOG[id - 1]);
+        return;
+    }
+    if path == "/v1/orders" {
+        if req.method != "POST" { not_allowed(res, out, "POST"); return; }
+        create_order(s, req, res, out);
+        return;
+    }
+    if path == "/debug/crash" && s.crash_route {
+        // A deliberate bug, to show what containment does with one: an index
+        // past the end aborts this connection's thread and nothing else.
+        let i = CATALOG.len + req.body.len;
+        encode_value(out, CATALOG[i]);
+        return;
+    }
+    not_found(res, out);
+}
+
+fn create_order(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
+    var r = json::reader(req.body);
+    var o = OrderIn { item_id: 0, quantity: 0, note: "" };
+    let d = decode_fields(r, o);
+    json::finish(r);
+    var p = Problems { .. };
+    if r.error.len > 0 {
+        if d.failed >= 0 { problem(p, out, field_name(o, d.failed), r.error, "value_error"); }
+        else { problem(p, out, "", json::message(r), "json_invalid"); }
+    } else {
+        if !gave(d, o, "item_id") { problem(p, out, "item_id", "Field required", "missing"); }
+        else if o.item_id < 1 || o.item_id > CATALOG.len {
+            problem(p, out, "item_id", "No item has this id", "value_error");
+        }
+        if !gave(d, o, "quantity") { problem(p, out, "quantity", "Field required", "missing"); }
+        else if o.quantity < 1 { problem(p, out, "quantity", "Input should be greater than or equal to 1", "greater_than_equal"); }
+        else if o.quantity > 100 { problem(p, out, "quantity", "Input should be less than or equal to 100", "less_than_equal"); }
+    }
+    if p.count > 0 {
+        finish_problems(p, out);
+        res.status = 422;
+        return;
+    }
+    let item = CATALOG[o.item_id - 1];
+    if !item.in_stock {
+        res.status = 409;
+        out.append("{\"detail\":\"Out of stock\"}");
+        return;
+    }
+    s.orders += 1;
+    let order = Order { id: (s.conn << 20) | s.orders, item_id: o.item_id, quantity: o.quantity,
+                        total_cents: item.price_cents * o.quantity, note: o.note };
+    res.status = 201;
+    encode_value(out, order);
+}
+
+// A connection, served on a thread of its own; what it served goes back to
+// main as one Counts.
+thread_fn connection(sock: i64, conn: i64, crash_route: bool) {
+    var s = Session { conn: conn, crash_route: crash_route, .. };
+    let counts = serve(sock, s, handle);
+    net_close(sock);
+    qput(counts);
+}
+
+// How a connection ended, from its supervisor.
+struct Ended { conn: i64, aborted: bool, message: u8[] }
+
+// Runs one connection contained and waits for it: an abort in it leaves the
+// socket open (a contained worker's extern resources stay open), so this
+// closes it.
+thread_fn supervise(sock: i64, conn: i64, crash_route: bool) {
+    let id = thread_spawn_contained(connection, sock, conn, crash_route);
+    var message: u8[>..] = [];
+    let ok = thread_wait(id, message);
+    if !ok { net_close(sock); }
+    qput(Ended { conn: conn, aborted: !ok, message: copy(message) });
+}
+
+struct Totals { connections: i64 = 0, live: i64 = 0, aborted: i64 = 0, busy: i64 = 0 }
+
+fn ended(t: Totals&, e: const Ended&) {
+    t.live -= 1;
+    if e.aborted {
+        t.aborted += 1;
+        write_stderr(str("connection ", e.conn, " aborted: ", e.message, "\n"));
+    }
+}
+
+fn add(sum: Counts&, c: Counts) {
+    sum.requests += c.requests;
+    sum.ok += c.ok;
+    sum.client_errors += c.client_errors;
+    sum.server_errors += c.server_errors;
+    sum.refused += c.refused;
+}
+
+fn main() {
+    let a = args();
+    var port = 8080;
+    var crash_route = false;
+    for i in 1..a.len {
+        if a[i] == "--crash-route" { crash_route = true; continue; }
+        let n, ok = parse_int(a[i]);
+        if !ok || n < 1 || n > 65535 { abort(str("usage: api [port] [--crash-route]; got ", a[i])); }
+        port = n;
+    }
+    if net_init() != 0 { abort("net_init failed"); }
+    net_catch_signals();
+    let listener = net_listen(port, 1024);
+    if listener < 0 { abort(str("cannot listen on port ", port)); }
+    print("listening on :", port);
+
+    var t = Totals { .. };
+    var sum = Counts { .. };
+    while net_stop_requested() == 0 {
+        let ready = net_wait_accept(listener, POLL_MS);
+        if ready < 0 { break; }
+        if ready > 0 {
+            let sock = net_accept(listener);
+            if sock >= 0 {
+                t.connections += 1;
+                if t.live >= MAX_CONNECTIONS {
+                    // Over the limit: refused here, without a thread.
+                    var res = Response { status: 503, .. };
+                    send_response(sock, res, "{\"detail\":\"Service Unavailable\"}", false);
+                    net_close(sock);
+                    t.busy += 1;
+                } else {
+                    thread_spawn(supervise, sock, t.connections, crash_route);
+                    t.live += 1;
+                }
+            }
+        }
+        loop {
+            let e, got = qpoll<Ended>();
+            if !got { break; }
+            ended(t, e);
+        }
+    }
+
+    // Graceful shutdown: no new connections; each open one finishes the
+    // request it is on, answers it with Connection: close, and ends.
+    net_close(listener);
+    print("stopping: waiting for ", t.live, " connection(s)");
+    let deadline = clock() + SHUTDOWN_GRACE_S;
+    while t.live > 0 && clock() < deadline {
+        let e, got = qget<Ended>(100);
+        if got { ended(t, e); }
+    }
+    loop {
+        let c, got = qpoll<Counts>();
+        if !got { break; }
+        add(sum, c);
+    }
+    print("served ", sum.requests, " request(s) on ", t.connections, " connection(s): ",
+          sum.ok, " ok, ", sum.client_errors, " client errors, ", sum.server_errors, " server errors, ",
+          sum.refused, " refused, ", t.busy, " turned away busy, ", t.aborted, " aborted");
+    if t.live > 0 { print(t.live, " connection(s) still open at the deadline"); }
+}

@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Image kernels over row slices. A grayscale image is generated, blurred,
 // and run through a Sobel edge detector, and the result is written as a
 // PGM file. The kernels take the three source rows and the destination row

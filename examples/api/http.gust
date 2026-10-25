@@ -1,0 +1,259 @@
+// HTTP/1.1, the server side of what a JSON API needs: requests parsed in
+// place in one buffer per connection, keep-alive and pipelining,
+// Content-Length bodies, limits on what a client may send, and the error
+// responses a server owes a client that breaks them. Not here: chunked
+// request bodies (refused with 501), TLS (terminated in front, as many Go
+// services do behind a load balancer) and HTTP/2.
+//
+// Memory: a connection's buffer and every response are built on its
+// thread's data stacks and released at the end of their scope, so serving a
+// request allocates nothing from the heap and a connection's memory is
+// bounded by the limits below.
+import std;
+import net;
+
+// What a client may send, as Go's http.Server has MaxHeaderBytes and a
+// handler http.MaxBytesReader: the request line and headers, the body, and
+// how long a connection may sit idle between requests.
+const MAX_HEAD = 8192;
+const MAX_BODY = 8192;
+const IDLE_MS = 5000;
+const POLL_MS = 100;             // how often a waiting connection looks at the stop flag
+const SEND_TIMEOUT_MS = 5000;
+
+// A request, every slice of it a view of the connection's buffer.
+struct Request {
+    method: const u8[:],
+    path: const u8[:],           // the target up to its '?'
+    query: const u8[:],          // after the '?', or empty
+    body: const u8[:],
+    keep_alive: bool,
+}
+
+// What a handler sets besides the body it writes.
+struct Response {
+    status: i64 = 200,
+    allow: const u8[:] = "",     // the methods a 405 names
+    close: bool = false,         // end the connection after this response
+}
+
+// What a connection served, for the server's totals.
+struct Counts { requests: i64 = 0, ok: i64 = 0, client_errors: i64 = 0, server_errors: i64 = 0, refused: i64 = 0 }
+
+fn reason(status: i64) -> const u8[:] {
+    return match status {
+        200 => "OK",
+        201 => "Created",
+        400 => "Bad Request",
+        404 => "Not Found",
+        405 => "Method Not Allowed",
+        408 => "Request Timeout",
+        413 => "Content Too Large",
+        422 => "Unprocessable Content",
+        431 => "Request Header Fields Too Large",
+        500 => "Internal Server Error",
+        501 => "Not Implemented",
+        503 => "Service Unavailable",
+        _ => "Unknown",
+    };
+}
+
+fn lower(c: u8) -> u8 { if c >= 'A' && c <= 'Z' { c + 32 } else { c } }
+
+// Whether s equals word, ignoring ASCII case; word is lower case.
+fn equal_fold(s: const u8[:], word: const u8[:]) -> bool {
+    if s.len != word.len { return false; }
+    for i in s.len {
+        if lower(s[i]) != word[i] { return false; }
+    }
+    return true;
+}
+
+// Whether a comma-separated header value holds token, ignoring case
+// (`Connection: keep-alive, Upgrade`).
+fn has_token(value: const u8[:], token: const u8[:]) -> bool {
+    var start = 0;
+    for i in value.len + 1 {
+        if i == value.len || value[i] == ',' {
+            if equal_fold(trim(value[start..i]), token) { return true; }
+            start = i + 1;
+        }
+    }
+    return false;
+}
+
+// Where the head ends (just past its blank line) in b, searching from
+// `from`; -1 if it is not there yet.
+fn head_end(b: const u8[:], from: i64) -> i64 {
+    var i = max(from, 3);
+    while i < b.len {
+        if b[i] == '\n' && b[i - 1] == '\r' && b[i - 2] == '\n' && b[i - 3] == '\r' { return i + 1; }
+        i++;
+    }
+    return -1;
+}
+
+// A Content-Length value: digits only, at most MAX_BODY; -1 if malformed,
+// MAX_BODY + 1 if larger.
+fn content_length(v: const u8[:]) -> i64 {
+    if v.len == 0 { return -1; }
+    var n = 0;
+    for c in v {
+        if c < '0' || c > '9' { return -1; }
+        n = min(n * 10 + (c - '0'), MAX_BODY + 1);
+    }
+    return n;
+}
+
+// The request in head (its request line and headers, through the blank
+// line), with its body still empty, and the body's length; or a status to
+// refuse it with (0 when it is fine).
+fn parse_head(head: const u8[:]) -> Request, i64, i64 {
+    var req = Request { method: "", path: "", query: "", body: "", keep_alive: false };
+    // The request line: METHOD SP target SP HTTP/1.x CRLF.
+    var eol = 0;
+    while eol < head.len && head[eol] != '\r' { eol++; }
+    let line = head[0..eol];
+    var sp1 = 0;
+    while sp1 < line.len && line[sp1] != ' ' { sp1++; }
+    var sp2 = sp1 + 1;
+    while sp2 < line.len && line[sp2] != ' ' { sp2++; }
+    if sp1 == 0 || sp2 >= line.len || sp2 == sp1 + 1 { return req, 0, 400; }
+    req.method = line[0..sp1];
+    let target = line[sp1 + 1..sp2];
+    let version = line[sp2 + 1..line.len];
+    if target[0] != '/' { return req, 0, 400; }
+    var q = 0;
+    while q < target.len && target[q] != '?' { q++; }
+    req.path = target[0..q];
+    req.query = if q < target.len { target[q + 1..target.len] } else { "" };
+    if version == "HTTP/1.1" { req.keep_alive = true; }
+    else if version != "HTTP/1.0" { return req, 0, 400; }
+
+    var length = 0;
+    var seen_length = false;
+    var hosts = 0;
+    var at = eol + 2;
+    while at < head.len - 2 {
+        var end = at;
+        while end < head.len && head[end] != '\r' { end++; }
+        let h = head[at..end];
+        at = end + 2;
+        var colon = 0;
+        while colon < h.len && h[colon] != ':' { colon++; }
+        if colon == 0 || colon == h.len { return req, 0, 400; }
+        let name = h[0..colon];
+        let value = trim(h[colon + 1..h.len]);
+        if equal_fold(name, "content-length") {
+            let n = content_length(value);
+            if n < 0 || (seen_length && n != length) { return req, 0, 400; }
+            length = n;
+            seen_length = true;
+        } else if equal_fold(name, "transfer-encoding") {
+            return req, 0, 501;
+        } else if equal_fold(name, "connection") {
+            if has_token(value, "close") { req.keep_alive = false; }
+            else if has_token(value, "keep-alive") { req.keep_alive = true; }
+        } else if equal_fold(name, "host") {
+            hosts++;
+        }
+    }
+    // RFC 9112 §3.2: an HTTP/1.1 request has exactly one Host header.
+    if hosts > 1 || (hosts == 0 && version == "HTTP/1.1") { return req, 0, 400; }
+    if length > MAX_BODY { return req, length, 413; }
+    return req, length, 0;
+}
+
+// The status line, the headers and the body, sent in one write.
+fn send_response(sock: i64, res: Response&, body: const u8[:], keep_alive: bool) -> bool {
+    var out: u8[>..] = [];
+    format(out, "HTTP/1.1 ", res.status, " ", reason(res.status), "\r\n");
+    out.append("Content-Type: application/json\r\n");
+    format(out, "Content-Length: ", body.len, "\r\n");
+    if res.allow.len > 0 { format(out, "Allow: ", res.allow, "\r\n"); }
+    if !keep_alive { out.append("Connection: close\r\n"); }
+    out.append("\r\n");
+    out.append(body);
+    return send_all(sock, out);
+}
+
+// A refusal the server makes itself, before any handler sees the request;
+// the connection ends after it.
+fn refuse(sock: i64, status: i64, counts: Counts&) {
+    var res = Response { status: status, .. };
+    var body: u8[>..] = [];
+    format(body, "{\"detail\":\"", reason(status), "\"}");
+    send_response(sock, res, body, false);
+    counts.refused += 1;
+}
+
+fn count(counts: Counts&, status: i64) {
+    counts.requests += 1;
+    if status < 400 { counts.ok += 1; }
+    else if status < 500 { counts.client_errors += 1; }
+    else { counts.server_errors += 1; }
+}
+
+// Waits for more bytes and reads them into buf[have..limit]: the count, or 0
+// when the connection should end (closed, failed, idle too long, or, with
+// nothing of a request read yet, the server is stopping).
+fn fill(sock: i64, buf: u8[:], have: i64, limit: i64, idle_ms: i64) -> i64 {
+    var waited = 0;
+    loop {
+        if have == 0 && net_stop_requested() != 0 { return 0; }
+        let ready = net_wait_readable(sock, POLL_MS);
+        if ready < 0 { return 0; }
+        if ready > 0 { return max(0, recv_into(sock, buf, have, limit)); }
+        waited += POLL_MS;
+        if waited >= idle_ms { return 0; }
+    }
+}
+
+// Serves requests on sock until the client closes, the connection goes idle,
+// a request breaks the limits, or the server stops. H(state, req, res, body)
+// handles each request: it sets res and writes the body.
+fn serve<H, S>(sock: i64, state: S&) -> Counts {
+    var counts = Counts { .. };
+    net_set_send_timeout(sock, SEND_TIMEOUT_MS);
+    var buf: u8[>..] = [];
+    buf.resize(MAX_HEAD + MAX_BODY, 0);
+    var have = 0;
+    loop {
+        // The head: everything through the blank line, within MAX_HEAD.
+        var end = head_end(buf[0..have], 0);
+        while end < 0 {
+            if have >= MAX_HEAD { refuse(sock, 431, counts); return counts; }
+            let n = fill(sock, buf, have, MAX_HEAD + MAX_BODY, IDLE_MS);
+            if n == 0 { return counts; }
+            let from = max(0, have - 3);
+            have += n;
+            end = head_end(buf[0..have], from);
+        }
+        if end > MAX_HEAD { refuse(sock, 431, counts); return counts; }
+        var done = 0;
+        var keep = false;
+        {
+            var req, length, status = parse_head(buf[0..end]);
+            if status != 0 { refuse(sock, status, counts); return counts; }
+            // The body, Content-Length bytes after the head.
+            while have < end + length {
+                let n = fill(sock, buf, have, MAX_HEAD + MAX_BODY, IDLE_MS);
+                if n == 0 { return counts; }
+                have += n;
+            }
+            done = end + length;
+            req.body = buf[end..done];
+            var res = Response { .. };
+            var body: u8[>..] = [];
+            H(state, req, res, body);
+            keep = req.keep_alive && !res.close && net_stop_requested() == 0;
+            count(counts, res.status);
+            if !send_response(sock, res, body, keep) { return counts; }
+        }
+        if !keep { return counts; }
+        // What the client sent after this request (pipelining) moves to
+        // the front.
+        for i in have - done { buf[i] = buf[done + i]; }
+        have -= done;
+    }
+}
