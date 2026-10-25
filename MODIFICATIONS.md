@@ -17,10 +17,6 @@ git log upstream/master..main
   `%ProgramFiles%\LLVM\bin`, where the LLVM installer puts it without adding
   it to PATH, before falling back to MSVC through vcvars64; the not-found
   message names that place. The default `GOOSE_HOME` is `~/.gust`.
-- `src/native.h`: a CMake package's link closure is written to the response
-  file with forward slashes for cc-style compilers, which read response
-  files with Unix quoting (clang on Windows took `pkg\cmk.lib` for
-  `pkgcmk.lib`).
 - `docs/design/packages.md`: the not-found message as it now reads.
 
 ## Name

@@ -125,9 +125,9 @@ def has_bce_annotations(f):
 def front_args(line, bce):
     """The flags of a positive fixture's one parse, roundtrip and typecheck
     run, by its first line and whether it has bce annotations."""
-    # The default -O1 is what the bce annotations describe.
+    # The bce annotations describe -O1.
     return ["--roundtrip"] + (["--parse"] if "parse-only" in line else
-                              ["--check"] + (["--bce-test"] if bce else []))
+                              ["--check"] + (["-O1", "--bce-test"] if bce else []))
 
 
 def runtime_defines(source):
@@ -606,12 +606,16 @@ class Runner:
             self.fail(f"{label} {path.name} (exit {code})", out + err)
             return False
         markers = error_markers(path)
-        # Match diagnostic headers and structural expansion contexts, not
-        # echoed source (which may itself name the expected message).
-        # The missing-main error has no source location.
+        # Match diagnostic headers and structural lines -- expansion
+        # contexts, the instantiation chain's frames less where they were
+        # instantiated from, an overload candidate's reason -- not echoed
+        # source (which may itself name the expected message). The
+        # missing-main error has no source location.
         diagnostics = []
         for line in err.splitlines():
-            match = re.match(r"^\S.*:\d+(?::\d+)?: error: (.*)$", line)
+            match = (re.match(r"^\S.*:\d+(?::\d+)?: error: (.*)$", line) or
+                     re.match(r"^  (in (?:fn|thread_fn) .*) instantiated from .*:\d+$", line) or
+                     re.match(r"^  candidate \S+ at .*?:\d+: (.*)$", line))
             if match:
                 diagnostics.append(match[1])
             elif line.startswith("  in const for "):
@@ -1470,8 +1474,8 @@ def main():
              f.name != "lexer_tokens.goose"]
     if len({f.stem for f in tests}) != len(tests):
         ap.error("fixture names must be unique across categories (shared expected/ and build outputs)")
-    # A gfx, physics or ui fixture with error markers is a rejection test,
-    # kept beside what it rejects (for gfx, shaders).
+    # A native module's (audio, gfx, physics or ui) fixture with error markers
+    # is a rejection test, kept beside what it rejects (for gfx, shaders).
     native_errors = [f for f in tests if f.parent.name in native and error_markers(f)]
     tests = [f for f in tests if f not in native_errors]
 
@@ -1595,7 +1599,7 @@ def main():
 
     # --- what the log shows, in order ---------------------------------------
 
-    r.section("lexer, shader compiler and native module APIs")
+    r.section("lexer and shader compiler")
 
     def lexer_tokens():
         code, out, err = r.goose("--tokens", HERE / "syntax" / "lexer_tokens.goose")
@@ -1639,13 +1643,13 @@ def main():
     for name in ("gfx_err_shader_syntax", "gfx_err_shader_part"):
         r.show_task(shader_error_line, name)
 
-
     r.section("parse, roundtrip and typecheck")
     for f in tests:
         r.show(lambda f=f: fixtures[f].result().front)
 
-    # The optimizer runs at -O1 in every typecheck above; also exercise the
-    # other levels (and the --specs dump path) on the optimizer coverage file.
+    # The optimizer runs in every typecheck above, at -O1 for bce annotations
+    # and -O2 otherwise; also exercise every level (and the --specs dump path)
+    # on the optimizer coverage file.
     r.section("optimizer, stack report and C shapes")
 
     def optimize(lvl):
@@ -1804,10 +1808,9 @@ def main():
 
         # Direct runtime lifecycle checks use small region limits and allocator
         # instrumentation that cannot be expressed by a Goose program. Keep
-        # this one focused native test in both profiles.
-        def runtime_lifecycle():
-            name = "runtime_threads_lifecycle"
-            src = HERE / "threads" / f"{name}.c"
+        # these focused native tests in both profiles.
+        def runtime_lifecycle(name, directory):
+            src = HERE / directory / f"{name}.c"
             out_exe = gendir / f"{name}{tc.EXE_SUFFIX}"
             ok, log = cc.compile(src, out_exe, opt=2 if args.profile == "baseline" else 1,
                                  extra=extra, strict_decls=True,
@@ -1818,7 +1821,8 @@ def main():
                 out = r.run_expected([out_exe], name, name)
                 if out is not None and r.check_stdout(name, name, out):
                     r.ok(f"runtime {name}")
-        r.show_task(runtime_lifecycle)
+        r.show_task(runtime_lifecycle, "runtime_threads_lifecycle", "threads")
+        r.show_task(runtime_lifecycle, "runtime_trim_memory", "runtime")
 
         # The same coverage test through clang, release and debug. A compiler
         # that accepts more C than the standard does is not what checks the
@@ -1902,53 +1906,7 @@ def main():
             r.show_task(clang_simd, "stdlib_base64", HERE / "stdlib" / "stdlib_base64.goose",
                         clang_simd_named("base64_encode", "base64_decode"))
 
-    def extern_types():
-        from extern_types import check_extern_types
-        try:
-            check_extern_types(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
-            r.ok("extern types: unused and partially used C adapters")
-        except RuntimeError as e:
-            r.fail("extern types", str(e))
-    if cc or jit:
-        r.section("extern types")
-        r.show_task(extern_types)
-
-    def extern_dylib():
-        from extern_dylib import check_extern_dylib
-        try:
-            check_extern_dylib(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
-            r.ok("extern dylib: a block's members bound from a shared library by name, "
-                 "missing library and symbol, unused members, a package with both kinds")
-        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
-            r.fail("extern dylib", str(e))
-    if cc:
-        r.section("extern dylib")
-        r.show_task(extern_dylib)
-
-    def resource_paths():
-        from resource_paths import check_resource_paths
-        try:
-            check_resource_paths(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
-            r.ok("resource paths: JIT/native roots, relocation and unchanged cwd")
-        except RuntimeError as e:
-            r.fail("resource paths", str(e))
-    if cc or jit:
-        r.section("resource paths")
-        r.show_task(resource_paths)
-
-    def git_packages():
-        from packages_git import check_git_packages
-        try:
-            skipped = check_git_packages(exe, gendir, jit=jit)
-            if skipped:
-                r.say(f"skip packages from git ({skipped})")
-            else:
-                r.ok("packages from git: concurrent fetches, submodules, interrupted fetch, "
-                     "tag, commit, update, differing ref, offline")
-        except RuntimeError as e:
-            r.fail("packages from git", str(e))
-    r.section("packages from git")
-    r.show_task(git_packages)
+    r.section("driver, diagnostics and language server")
 
     def driver_verbs():
         """The verb forms of the command line against the flag forms they
@@ -1994,7 +1952,7 @@ def main():
         checks.append(("--help", code == 0 and "build" in overview and
                        "--multi-test" not in overview, overview + err))
         pages = overview
-        for cmd in ["run", "build", "check", "fetch", "toolchain", "version"]:
+        for cmd in ["run", "build", "check", "fetch", "toolchain", "version", "lsp"]:
             code, out, err = tc.run_capture([exe, cmd, "--help"])
             checks.append((f"{cmd} --help", code == 0 and
                            out.startswith(f"usage: gust {cmd}"), out + err))
@@ -2141,15 +2099,29 @@ def main():
                 r.ok(f"goose {what}")
             else:
                 r.fail(f"goose {what}", text)
-    r.section("driver verbs")
     r.show_task(driver_verbs)
+
+    def compiler_discovery():
+        import unittest
+        import toolchain_selection
+        result = unittest.TestResult()
+        unittest.defaultTestLoader.loadTestsFromModule(toolchain_selection).run(result)
+        if result.testsRun and result.wasSuccessful():
+            r.ok("compiler discovery: --exe as given, else build/'s Release, RelWithDebInfo, "
+                 "single-configuration and Debug compilers in that order; a missing --exe, "
+                 "or no compiler, refused")
+        else:
+            r.fail("compiler discovery", "".join(trace for _, trace in result.errors +
+                                                 result.failures) or "no tests ran")
+    r.show_task(compiler_discovery)
 
     def cli_paths():
         from cli_paths import check_cli_paths
         try:
             check_cli_paths(exe, cc, gendir)
             r.ok("command line paths: new -o directories, \".\" and \"..\" sources, rooted "
-                 "--include, unresolved imports, no runtime sources")
+                 "--include, unresolved imports, a directory as a source or an embed_file, "
+                 "no standard library, no runtime sources")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("command line paths", str(e))
     r.show_task(cli_paths)
@@ -2185,6 +2157,52 @@ def main():
             r.fail("language server", str(e))
     r.show_task(lsp_protocol)
 
+    r.section("native builds, packages and runtime I/O")
+
+    def extern_types():
+        from extern_types import check_extern_types
+        try:
+            check_extern_types(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
+            r.ok("extern types: unused and partially used C adapters")
+        except RuntimeError as e:
+            r.fail("extern types", str(e))
+    if cc or jit:
+        r.show_task(extern_types)
+
+    def extern_dylib():
+        from extern_dylib import check_extern_dylib
+        try:
+            check_extern_dylib(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
+            r.ok("extern dylib: a block's members bound from a shared library by name, "
+                 "missing library and symbol, unused members, a package with both kinds")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("extern dylib", str(e))
+    if cc:
+        r.show_task(extern_dylib)
+
+    def resource_paths():
+        from resource_paths import check_resource_paths
+        try:
+            check_resource_paths(exe, cc, gendir, jit=jit, runtime=r.runtime, extra=extra)
+            r.ok("resource paths: JIT/native roots, relocation and unchanged cwd")
+        except RuntimeError as e:
+            r.fail("resource paths", str(e))
+    if cc or jit:
+        r.show_task(resource_paths)
+
+    def git_packages():
+        from packages_git import check_git_packages
+        try:
+            skipped = check_git_packages(exe, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip packages from git ({skipped})")
+            else:
+                r.ok("packages from git: concurrent fetches, submodules, interrupted fetch, "
+                     "tag, commit, update, differing ref, offline")
+        except RuntimeError as e:
+            r.fail("packages from git", str(e))
+    r.show_task(git_packages)
+
     def runtime_cache():
         from runtime_cache import check_runtime_cache
         try:
@@ -2204,6 +2222,7 @@ def main():
             r.fail("native part cache", str(e))
     if cc:
         r.show_task(native_cache)
+
     def runtime_io():
         from runtime_io import check_runtime_io
         try:
@@ -2264,6 +2283,19 @@ def main():
             r.fail("native toolchain", str(e))
     if cc:
         r.show_task(native_toolchain)
+
+    def cmake_response_files():
+        from native_toolchain import check_cmake_response_files
+        try:
+            skipped = check_cmake_response_files(exe, gendir)
+            if skipped:
+                r.say(f"skip CMake response files ({skipped})")
+            else:
+                r.ok("CMake response files: cc-style archive paths with and without spaces")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("CMake response files", str(e))
+    if cc:
+        r.show_task(cmake_response_files)
 
     def native_rebuild():
         from native_rebuild import check_native_rebuild

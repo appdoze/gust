@@ -1388,15 +1388,10 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     // A nested function is specialized where it is declared (§7.5). A call
     // that reaches the declaration ahead of the declaring body (a nested
     // function declared earlier calling it) would have it name variables
-    // not bound yet; one after its declaring scope ended is keyed apart.
-    auto escaped = false;
-    if (sf->isnested && LexFrame(mi.env, sf) >= 0) {
-        auto it = declsiteof.find({ mi.env, sf });
-        if (it == declsiteof.end())
-            Error(callnode, cat(sf->name, " (declared at ", Where(sf->line),
-                                ") is called before its declaration is reached (§7.5)"));
-        escaped = ScopeEnded(*it->second);
-    }
+    // not bound yet.
+    if (sf->isnested && LexFrame(mi.env, sf) >= 0 && !declsiteof.count({ mi.env, sf }))
+        Error(callnode, cat(sf->name, " (declared at ", Where(sf->line),
+                            ") is called before its declaration is reached (§7.5)"));
     vector<VarDef *> narrowedenv;
     for (auto v : ExternalOptionals(mi))
         if (v->narrowed) narrowedenv.push_back(v);
@@ -1616,7 +1611,7 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
         // A reuse would merge an exemplar's call into what the real calls
         // agreed on (CheckExemplars).
         if (spec->id < exemplarbase) continue;
-        if (spec->lexparent != mi.env || spec->escaped != escaped) continue;
+        if (spec->lexparent != mi.env) continue;
         if (!spec->inprogress && spec->narrowedenv != narrowedenv) continue;
         // A cycle's member due for its next round is checked again below
         // with what it reads then. A failed one read what it read before
@@ -1736,7 +1731,6 @@ inline FnSpec *TypeCheck::GetOrCreateSpec(MatchInfo &mi, vector<Val> &argvals, N
     auto spec = ast.NewFnSpec();
     spec->sf = sf;
     spec->lexparent = mi.env;
-    spec->escaped = escaped;
     spec->narrowedenv = narrowedenv;
     spec->argtypes = mi.paramtypes;
     spec->roots = roots;

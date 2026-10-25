@@ -819,6 +819,9 @@ struct Parser {
                                  "\"; (§7.10)"));
                 }
                 if (sf->cname.empty()) sf->cname = string(sf->name);
+                // The runtime entry points that read every stack top through
+                // the registry rather than through their arguments.
+                sf->readsalltops = sf->cname == "gs_trim_memory";
                 Expect(T_SEMI, "extern declaration");
             } else if (lex.tok == T_ASSIGN) {
                 Error("only an extern fn takes a symbol after its signature: = \"symbol\" (§7.10)");

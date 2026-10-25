@@ -1464,6 +1464,10 @@ struct SFunction {
     // The shared library an extern block binds it from by that symbol as
     // the program starts (§7.10); empty for an extern the link resolves.
     string dylib;
+    // An extern that reads every data-stack top of its thread program
+    // (os.trim_memory): each caller, and transitively theirs, publishes all
+    // of its cached tops before the call (CodeGen::CollectSpecs, SyncReach).
+    bool readsalltops = false;
     bool isnested = false;
     SFunction *outer = nullptr;     // The function a nested one is declared in.
     Block *body = nullptr;
@@ -2191,11 +2195,6 @@ struct FnSpec {
     // view (VarDef::heldslice/heldholder), including stores made while the
     // body runs. cls is -1 for every other parameter. Part of the key.
     vector<RootArg> views;
-    // A nested function reached after the scope declaring it ended, its
-    // value having left that block or function value body (§7.5): part of
-    // the key, since its body may name nothing the scope declared, and one
-    // checked inside the scope may.
-    bool escaped = false;
     // Optional facts in the lexical environment at specialization entry.
     vector<VarDef *> narrowedenv;
     // What the body read of the variables outside its activation that it, or

@@ -603,22 +603,15 @@ inline VarDef *TypeCheck::NewVar(string_view name, TypeExpr *type, Line l, bool 
 // Name lookup: current frame's scopes innermost-out, then what the body sees
 // outside them (free variables of nested fns / function values, §7.5), then
 // globals, in the namespace order of docs/design/namespaces.md, unless a type
-// parameter or nested function of the name hides them (§11.1). A nested
-// function called after the scope declaring one of those ended cannot name
-// it, which `use`, the node naming it, reports; what the body finds of it
-// there is part of the body's key (NoteEnvRead).
+// parameter or nested function of the name hides them (§11.1). What a body
+// finds outside its own scopes, at `use`, is part of its key (NoteEnvRead).
 inline VarDef *TypeCheck::LookupVar(string_view name, string_view ns, Node *use) {
     auto top = (int)frames.size() - 1;
     for (auto i = (int)vars.size() - 1; i >= frames[top].varbase; i--)
         if (vars[i]->name == name) return vars[i];
     VarDef *found = nullptr;
-    ForOuterVars(top, [&](VarDef *v, int i, int fi) {
+    ForOuterVars(top, [&](VarDef *v) {
         if (v->name != name) return false;
-        if (use && !InScope(v, i)) {
-            auto fn = frames[fi].sf->name;
-            Error(use, cat(fn, " names ", v->name, " (bound at ", Where(v->line),
-                           "), whose scope has ended where ", fn, " is called (§7.5)"));
-        }
         v->captured = true;
         found = v;
         return true;
@@ -681,19 +674,13 @@ inline void TypeCheck::DefaultScopeName(string_view name, Node *at, bool fnonly)
     if (typeparam(sf)) return;
     if (fr.defaultsite) {
         if (!fnonly)
-            for (auto [v, i] : fr.defaultsite->vars)
+            for (auto v : fr.defaultsite->vars)
                 if (v->name == name) error(cat(name, ", a local where ", sf->name, " is declared"));
         for (auto &o : fr.defaultsite->fns)
             if (o.sf->name == name) error(cat(name, ", a nested function"));
     }
     for (auto o = sf->outer; o; o = o->outer)
         if (typeparam(o)) return;
-}
-
-// Whether the scope a nested function is declared in has ended: its value
-// left it, and it is called outside.
-inline bool TypeCheck::ScopeEnded(const DeclSite &d) {
-    return d.scope >= (int)scopes.size() || scopes[d.scope].serial != d.serial;
 }
 
 // A nested function: visible from here to the end of the scope, checked when
@@ -711,8 +698,6 @@ inline void TypeCheck::DeclareLocalFn(FnDecl *fd) {
     auto top = (int)frames.size() - 1;
     auto &fr = frames[top];
     auto &site = declsites.emplace_back();
-    site.scope = (int)scopes.size() - 1;
-    site.serial = scopes.back().serial;
     // Its type parameters hide the variables of their names (§11.1).
     auto visible = [&](VarDef *v) {
         for (auto &g : fd->sf->generics)
@@ -720,9 +705,9 @@ inline void TypeCheck::DeclareLocalFn(FnDecl *fd) {
         return true;
     };
     for (auto i = (int)vars.size() - 1; i >= fr.varbase; i--)
-        if (visible(vars[i])) site.vars.push_back({ vars[i], i });
-    ForOuterVars(top, [&](VarDef *v, int i, int) {
-        if (visible(v)) site.vars.push_back({ v, i });
+        if (visible(vars[i])) site.vars.push_back(vars[i]);
+    ForOuterVars(top, [&](VarDef *v) {
+        if (visible(v)) site.vars.push_back(v);
         return false;
     });
     for (auto bp = blockpos.rbegin(); bp != blockpos.rend() && bp->scopeidx >= fr.scopebase; ++bp) {

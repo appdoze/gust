@@ -734,7 +734,7 @@ Commands:
   help       Print this (or --help, -h); with a command, that command's help.
 
 Common options:
-  -O0, -O1, -O2   Inlining level (a run defaults to -O1, a build to -O2).
+  -O0, -O1, -O2   Inlining level (default -O2).
   --debug         Overflow, range and tag checks that name the source line
                   they fail on.
   --checked       The same checks, in an optimized build.
@@ -760,7 +760,7 @@ its exit code. What follows -- is the program's arguments. A program that
 starts threads needs gust build.
 
 Options:
-  -O0, -O1, -O2         Inlining level (default -O1).
+  -O0, -O1, -O2         Inlining level (default -O2).
 )", DEBUGOPTION, COMPILEOPTIONS,
 R"(  --cc name|path        The C compiler for packages' native parts: msvc,
                         clang-cl, clang, gcc, cc or a path (or GOOSE_CC).
@@ -869,7 +869,7 @@ Options:
   --<package>-link msvc|cc
                         Print the response file that links the native part of
                         a package compiled into gust (--gfx-link cc).
-  -O0, -O1, -O2         Inlining level (default -O1).
+  -O0, -O1, -O2         Inlining level (default -O2).
 )", DEBUGOPTION, COMPILEOPTIONS);
     if (topic == "internals") return cat(
 R"(usage: gust [options] file.gust
@@ -1072,9 +1072,9 @@ int Main(int argc, char **argv) {
     auto json = false, refresh = false, debug = false, verbose = false, dryrun = false;
     auto jsondiag = false;
     string ccrequest;
-    // A build is for a deliverable: the inlining at its highest. The C
-    // compiler optimizes whatever the level, unless --debug (Builder::CFlags).
-    auto optlevel = verb == "build" ? 2 : 1;
+    // The inlining at its highest. The C compiler optimizes whatever the
+    // level, unless --debug (Builder::CFlags).
+    auto optlevel = 2;
     vector<string> cdefines, progargs, includenames, files;
     for (int i = firstarg; i < argc; i++) {
         string arg = argv[i];

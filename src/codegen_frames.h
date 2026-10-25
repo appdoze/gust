@@ -45,7 +45,7 @@ inline string CodeGen::HandedStacks(Node *n) {
 // arguments carry, and the callee's globals.
 inline string CodeGen::SyncReach(FnSpec *callee, const vector<string> &args,
                                  const vector<Node *> &an) {
-    if (!cachetops) return "*";
+    if (!cachetops || sinfo[callee].readsalltops) return "*";
     for (auto fv : sinfo[callee].freevars)
         if (fv->reusable || (fv->type && HoldsFatRef(fv->type))) return "*";
     string handed;
@@ -157,6 +157,8 @@ inline void CodeGen::CollectSpecs() {
             // (GenAdtAdapted).
             if (auto from = AdtFrom(n)) si.needssp |= NeedsStack(from);
             if (auto c = Is<Call>(n)) {
+                if (c->spec && c->spec->sf->isextern && c->spec->sf->readsalltops)
+                    si.readsalltops = true;
                 auto add = [&](FnSpec *k) {
                     pair<FnSpec *, const Call *> e { k, c->fvremap.empty() ? nullptr : c };
                     if (k && k != sp && sinfo.count(k) && seencalls.insert(e).second)
@@ -198,7 +200,7 @@ inline void CodeGen::CollectSpecs() {
         };
         walk(sp->body);
     }
-    // All three summaries follow the same call edges. Iterate together to
+    // These summaries follow the same call edges. Iterate together to
     // handle recursion without repeatedly traversing the AST or retaining a
     // separate global-touch table that must track the specialization table.
     for (auto changed = true; changed;) {
@@ -221,6 +223,10 @@ inline void CodeGen::CollectSpecs() {
                     if (si.globals.insert(v).second) changed = true;
                 if (ki.needssp && !si.needssp) {
                     si.needssp = true;
+                    changed = true;
+                }
+                if (ki.readsalltops && !si.readsalltops) {
+                    si.readsalltops = true;
                     changed = true;
                 }
             }

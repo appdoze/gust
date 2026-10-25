@@ -5,6 +5,12 @@
 
 import std;
 
+// Return unused complete pages of this thread program's data stacks to the
+// OS. Live values, limited-array capacity and virtual reservations remain;
+// future growth still works. Call after a large workload, not for every
+// temporary. False means an OS request failed.
+extern fn trim_memory() -> bool = "gs_trim_memory";
+
 // Files. Paths are UTF-8 everywhere, Windows included.
 extern fn read_file(path: const u8[:], out: u8[>..]&) -> bool = "gs_os_read_file";    // appends the whole file
 extern fn write_file(path: const u8[:], data: const u8[:]) -> bool = "gs_os_write_file";

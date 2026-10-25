@@ -195,6 +195,16 @@ static int64_t gs_thread_cap = INT64_MAX;
 typedef struct {
     uint8_t *base;
     size_t usable, size;    /* size: with the guard gap */
+    gs_stack *stack;       /* Stable descriptor of the owning data stack. */
+    /* Windows and macOS: one past the highest page the fault handler has
+       committed, so gs_trim_memory releases only what was ever committed
+       rather than walking the whole reservation. Unused on Linux, which
+       commits on touch with no fault to note it. */
+    uint8_t *committed;
+    /* macOS: pages gs_trim_memory marked reusable that growth has not
+       committed again yet, or both NULL. The fault handler declares them
+       reused (MADV_FREE_REUSE) as it reopens them. */
+    uint8_t *reuse_lo, *reuse_hi;
 } gs_region;
 static GS_TLS gs_region *gs_regions;
 static GS_TLS volatile long gs_nregions;
@@ -310,7 +320,7 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
         return EXCEPTION_CONTINUE_SEARCH;
     uint8_t *hit = (uint8_t *)ep->ExceptionRecord->ExceptionInformation[1];
     for (long i = 0; i < gs_nregions; i++) {
-        const gs_region *r = &gs_regions[i];
+        gs_region *r = &gs_regions[i];
         if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
             /* Within the usable part: commit another chunk (clamped to the
                region) and resume, or where the system has no more memory to
@@ -320,8 +330,10 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
                 size_t n = GS_COMMIT_CHUNK;
                 if (page + n > r->base + r->usable)
                     n = (size_t)(r->base + r->usable - page);
-                if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE))
+                if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
+                    if (page + n > r->committed) r->committed = page + n;
                     return EXCEPTION_CONTINUE_EXECUTION;
+                }
                 static const char nomem[] =
                     "goose runtime error: out of memory committing a data stack\n";
                 DWORD written;
@@ -409,12 +421,54 @@ static GS_TLS void *gs_sigstack;
 /* What the fault handler replaced, for the faults that are not its own. */
 static struct sigaction gs_prev_segv, gs_prev_bus;
 
+/* For gs_trim_memory, which discards whole pages only, and the commit. */
+static size_t gs_page_size = 0;
+
+/* macOS commits as Windows does: a region's usable part starts PROT_NONE
+   (gs_os_reserve) and the fault handler opens it a chunk at a time. XNU's
+   madvise visits every page of its range, populated or not, so without a
+   commit mark a trim would cost time in proportion to the reservation; and
+   pages trimmed as reusable have to be declared reused when growth takes
+   them back, or the footprint goes on leaving them out. Opening them
+   through the handler is what gives growth that point. Runtime C only ever
+   writes a stack from user mode (memcpy, gs_bld_append), as Windows
+   already requires, so a system call never meets an unopened page. */
+#if defined(__APPLE__) && defined(MADV_FREE_REUSABLE) && defined(MADV_FREE_REUSE)
+#define GS_POSIX_COMMIT_ON_FAULT 1
+#define GS_COMMIT_CHUNK (1u << 20)
+
+/* Opens the chunk at hit (clamped to the region), declaring any of it
+   gs_trim_memory left reusable reused; whether it could. */
+static int gs_commit_chunk(gs_region *r, uint8_t *hit) {
+    uint8_t *page = (uint8_t *)((uintptr_t)hit & ~(uintptr_t)(gs_page_size - 1));
+    size_t n = GS_COMMIT_CHUNK;
+    if (page + n > r->base + r->usable) n = (size_t)(r->base + r->usable - page);
+    /* Writable first: XNU refuses reuse advice on a page that is not. */
+    if (mprotect(page, n, PROT_READ | PROT_WRITE)) return 0;
+    if (page < r->reuse_hi && page + n > r->reuse_lo) {
+        uint8_t *lo = page > r->reuse_lo ? page : r->reuse_lo;
+        uint8_t *hi = page + n < r->reuse_hi ? page + n : r->reuse_hi;
+        /* Only the accounting depends on it: the pages are usable either way. */
+        madvise(lo, (size_t)(hi - lo), MADV_FREE_REUSE);
+        if (lo == r->reuse_lo) r->reuse_lo = hi;
+        if (r->reuse_lo >= r->reuse_hi) r->reuse_lo = r->reuse_hi = NULL;
+    }
+    if (page + n > r->committed) r->committed = page + n;
+    return 1;
+}
+#endif
+
 static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
     (void)ctx;
     uint8_t *hit = (uint8_t *)info->si_addr;
     for (long i = 0; i < gs_nregions; i++) {
-        const gs_region *r = &gs_regions[i];
+        gs_region *r = &gs_regions[i];
         if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
+            /* Within the usable part: open another chunk and resume. Within
+               the gap, or where it cannot be opened: a data stack overran. */
+#ifdef GS_POSIX_COMMIT_ON_FAULT
+            if (hit < r->base + r->usable && gs_commit_chunk(r, hit)) return;
+#endif
             char msg[GS_OVERFLOW_TEXT];
             ssize_t w = write(2, msg, gs_overflow_text(msg, r));
             (void)w;
@@ -439,6 +493,7 @@ static size_t gs_os_page_size(void) {
 }
 
 static void gs_regions_init(void) {
+    gs_page_size = gs_os_page_size();
     struct sigaction sa;
     memset(&sa, 0, sizeof(sa));
     sa.sa_sigaction = gs_fault_handler;
@@ -512,8 +567,15 @@ static void gs_native_stack_free(void) {
 /* Address space for one region, or NULL where the platform has none left
    to give: its address space or an address-space limit exhausted, or
    strict overcommit accounting, which counts even a MAP_NORESERVE mapping.
-   Commit-on-touch via overcommit; the gap at the end stays PROT_NONE. */
+   Commit-on-touch via overcommit; the gap at the end stays PROT_NONE. On
+   macOS all of it starts PROT_NONE, and the fault handler opens the usable
+   part as the stack grows (GS_POSIX_COMMIT_ON_FAULT). */
 static uint8_t *gs_os_reserve(size_t usable, size_t size) {
+#ifdef GS_POSIX_COMMIT_ON_FAULT
+    void *p = mmap(NULL, size, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    if (p == MAP_FAILED) return NULL;
+    (void)usable;
+#else
     void *p = mmap(NULL, size, PROT_READ | PROT_WRITE,
                    MAP_PRIVATE | MAP_ANONYMOUS
                    #ifdef MAP_NORESERVE
@@ -525,6 +587,7 @@ static uint8_t *gs_os_reserve(size_t usable, size_t size) {
         munmap(p, size);
         gs_panic("cannot protect data stack guard gap");
     }
+#endif
     /* Most stacks hold a few bytes, which a transparent huge page at the
        start would commit 2 MB for. */
     #ifdef MADV_NOHUGEPAGE
@@ -572,7 +635,7 @@ static GS_NORETURN void gs_end(int code) {
    sooner. Workers racing through a refusal may each halve the size once
    more than needed, or restore a larger one for a moment; it only ever
    settles downward. */
-GS_API uint8_t *gs_reserve_region(void) {
+GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
     if (gs_nregions >= gs_regions_cap)
         gs_panic("too many data stack regions");
     size_t usable = gs_region_usable;
@@ -589,8 +652,88 @@ GS_API uint8_t *gs_reserve_region(void) {
     gs_regions[i].base = p;
     gs_regions[i].usable = usable;
     gs_regions[i].size = usable + gs_region_gap;
+    gs_regions[i].stack = stack;
+    gs_regions[i].committed = p;
+    gs_regions[i].reuse_lo = gs_regions[i].reuse_hi = NULL;
     gs_nregions = i + 1;  /* Publish only the initialized entry. */
     return p;
+}
+
+/* Explicit rather than on every rewind: short-lived scratch can reuse its
+   pages cheaply, while a long-running application can give them back after
+   replacing a large document. Keep the virtual reservation and the partly
+   used final page; limited-array capacity and live borrowed values are below
+   the synchronized top and remain intact. Each worker has its own registry.
+
+   Eager on purpose: Windows decommits, which returns the commit charge as
+   well as the physical pages (DiscardVirtualMemory and MEM_RESET keep the
+   charge), and Linux's MADV_DONTNEED drops the pages from RSS at once,
+   where MADV_FREE leaves them counted until the kernel is short of memory.
+   On macOS MADV_DONTNEED reclaims nothing reliably; MADV_FREE_REUSABLE is
+   what makes the footprint drop there, paired with MADV_FREE_REUSE when
+   the fault handler reopens the pages (gs_commit_chunk).
+
+   Only generated code may call this, through os.trim_memory, whose callers
+   publish their cached tops first (SFunction::readsalltops). C reached
+   from Goose through another extern must not: tops cached by the Goose
+   frames above it would still be stale, and live pages above them lost. */
+GS_API uint8_t gs_trim_memory(void) {
+    uintptr_t page = (uintptr_t)gs_page_size;
+    int ok = 1;
+    for (long i = 0; i < gs_nregions; i++) {
+        gs_region *r = &gs_regions[i];
+        uintptr_t base = (uintptr_t)r->base, top = (uintptr_t)r->stack->top;
+        /* A top outside its own region is a compiler or runtime bug, not
+           something the OS refused: carrying on could discard live data. */
+        if (top < base || top - base > r->usable)
+            gs_panic("data stack top outside its region in trim_memory");
+        uintptr_t start = (top + page - 1) / page * page;
+        uintptr_t end = (base + r->usable) / page * page;
+#if defined(_WIN32) || defined(GS_POSIX_COMMIT_ON_FAULT)
+        /* Nothing above the commit mark was ever committed (base is
+           allocation-aligned and the mark page-aligned). */
+        if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
+#endif
+        if (start >= end) continue;
+        size_t len = (size_t)(end - start);
+#ifdef _WIN32
+        /* The access-fault handler commits the pages again on growth. */
+        if (VirtualFree((void *)start, len, MEM_DECOMMIT))
+            r->committed = (uint8_t *)start;
+        else
+            ok = 0;
+#elif defined(GS_POSIX_COMMIT_ON_FAULT)
+        /* Reusable while writable, which XNU requires; then closed, so that
+           growth faults and gs_commit_chunk declares them reused. A growth
+           that skipped pages can leave a closed stretch below the mark, so
+           the range is opened first (which commits nothing). */
+        if (mprotect((void *)start, len, PROT_READ | PROT_WRITE) ||
+            madvise((void *)start, len, MADV_FREE_REUSABLE)) {
+            ok = 0;
+            continue;
+        }
+        if (mprotect((void *)start, len, PROT_NONE)) {
+            /* Still open, so nothing would declare them reused: undo. */
+            madvise((void *)start, len, MADV_FREE_REUSE);
+            ok = 0;
+            continue;
+        }
+        r->committed = (uint8_t *)start;
+        if (!r->reuse_hi) {
+            r->reuse_lo = (uint8_t *)start;
+            r->reuse_hi = (uint8_t *)end;
+        } else {
+            /* A cover of both: declaring a page reused twice is harmless. */
+            if ((uint8_t *)start < r->reuse_lo) r->reuse_lo = (uint8_t *)start;
+            if ((uint8_t *)end > r->reuse_hi) r->reuse_hi = (uint8_t *)end;
+        }
+#else
+        /* Linux walks only the page tables that were ever populated, so the
+           untouched rest of the reservation costs it little. */
+        if (madvise((void *)start, len, MADV_DONTNEED)) ok = 0;
+#endif
+    }
+    return (uint8_t)ok;
 }
 
 /* ---------------------------------------------------------------------------

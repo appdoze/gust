@@ -5,7 +5,8 @@ The site keeps the repository's layout: README.md becomes index.html, each
 docs/*.md becomes docs/*.html, samples/README.md becomes samples/index.html,
 and so on, so that every relative link between the files works after
 links.lua turns `.md` into `.html`. Each sample program gets a highlighted
-page of its own, which the links to it reach.
+page of its own, which the links to it reach, and the files under
+docs/html are copied as they are.
 
     python docs/site/build.py --out build/site --check
 
@@ -22,6 +23,7 @@ import shutil
 import subprocess
 import sys
 from html.parser import HTMLParser
+from urllib.parse import unquote
 
 SITE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(SITE))
@@ -52,6 +54,10 @@ SOURCES.append("LICENSE")
 COPIES = sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
                 for p in glob.glob(os.path.join(ROOT, "docs", "logo", "*.png")))
 COPIES.append("vscode/goose-language.vsix")
+# Finished HTML pages, and anything they load, are published untouched.
+COPIES += sorted(os.path.relpath(p, ROOT).replace(os.sep, "/")
+                 for p in glob.glob(os.path.join(ROOT, "docs", "html", "**", "*"), recursive=True)
+                 if os.path.isfile(p))
 
 
 def title_of(md_text, fallback):
@@ -154,7 +160,7 @@ def check(out_dir):
                     print("%s: missing fragment #%s" % (os.path.relpath(path, out_dir), frag))
                     bad += 1
                 continue
-            tpath = os.path.normpath(os.path.join(os.path.dirname(path), html.unescape(target)))
+            tpath = os.path.normpath(os.path.join(os.path.dirname(path), unquote(html.unescape(target))))
             if not os.path.exists(tpath):
                 print("%s: missing target %s" % (os.path.relpath(path, out_dir), href))
                 bad += 1

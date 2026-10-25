@@ -102,7 +102,10 @@ inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
     // to by the C side through its stack's top, so a cached top is written
     // back before the call and read again after it, as for a call into
     // Goose code.
-    auto grows = false;
+    // An extern that reads every top (SFunction::readsalltops) sees none of
+    // them through its arguments, so all cached ones are written back too;
+    // CollectSpecs makes every caller up the chain do the same.
+    auto grows = sp->sf->readsalltops;
     for (size_t i = 0; i < an.size(); i++) {
         auto pt = sp->argtypes[i];
         if (i) argstr += ", ";

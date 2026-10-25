@@ -1,0 +1,697 @@
+<!doctype html><html><head><meta charset=utf8><meta name=viewport content="width=device-width,initial-scale=1,viewport-fit=cover"><style>:root{color-scheme:light;box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}html{scroll-padding-top:env(safe-area-inset-top,0px)}body{margin:0;padding:0;font:14px -apple-system,BlinkMacSystemFont,sans-serif;background:#faf9f5;color:#141413}img{max-width:100%}[hidden]:not([hidden=until-found i]){display:none!important}</style></head><body>
+<title>Goose, Byte by Byte</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,100..900&family=Fragment+Mono&display=swap">
+<style>
+/* Layout: a long poster on a byte grid. Every diagram is drawn in one-byte cells,
+   and orange marks Goose and the stack pointer, where memory grows. Text and
+   figures sit side by side on wide screens and stack on phones. */
+:root {
+  --paper: #f2f4f5;      /* feather grey-white: page and chart surface */
+  --ink: #15181b;        /* neck black: text */
+  --ink-2: #4f5861;      /* secondary text, brackets */
+  --rule: #d3d9de;       /* hairlines and grid */
+  --cell: #e1e6ea;       /* a plain byte */
+  --cell-2: #c6ced6;     /* a length, header or tag byte */
+  --bill: #d9650a;       /* orange: Goose's marks and the stack pointer */
+  --on-bill: #15181b;
+  --pond: #2f6db8;       /* blue: the other side of a comparison */
+  --quiet: #a3abb3;      /* de-emphasised bars */
+  --code-bg: #e7ebee;
+  --tk: #22589f; --ts: #9a4508; --tc: #5f6973; --tn: #6b3fa0; --tt: #15181b; --tb: #9a2f6b; --td: #15181b;
+  --term-bg: #15181b; --term-ink: #e6e9ec; --term-err: #ff8a70; --term-loc: #9cc1f2;
+
+  --font-display: "Archivo", "Helvetica Neue", Arial, sans-serif;   /* set wide: font-stretch 112-125% */
+  --font-body: "Archivo", "Helvetica Neue", Arial, sans-serif;      /* set normal width */
+  --font-mono: "Fragment Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --t-hero: clamp(4.25rem, 2.2rem + 10vw, 9.5rem);
+  --t-h2: clamp(1.7rem, 1.1rem + 2.2vw, 2.55rem);
+  --t-h3: 1.15rem;
+  --t-lead: clamp(1.25rem, 1.05rem + 0.8vw, 1.55rem);
+  --t-body: 1.0625rem;
+  --t-small: 0.9rem;
+  --t-micro: 0.75rem;
+  --t-stat: clamp(2.3rem, 1.7rem + 2vw, 3.1rem);
+  --cw: 26px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --paper: #121517; --ink: #eceef0; --ink-2: #a4adb6; --rule: #2b3136;
+    --cell: #23292e; --cell-2: #3a434b; --bill: #e0701a; --on-bill: #121517;
+    --pond: #4a88d0; --quiet: #5b646d; --code-bg: #1a1f23;
+    --tk: #8db4ec; --ts: #f0a46b; --tc: #8b959f; --tn: #c3a2f0; --tt: #eceef0; --tb: #f08cbf; --td: #eceef0;
+    --term-bg: #0b0d0f; --term-ink: #e6e9ec; --term-err: #ff8a70; --term-loc: #9cc1f2;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --paper: #121517; --ink: #eceef0; --ink-2: #a4adb6; --rule: #2b3136;
+  --cell: #23292e; --cell-2: #3a434b; --bill: #e0701a; --on-bill: #121517;
+  --pond: #4a88d0; --quiet: #5b646d; --code-bg: #1a1f23;
+  --tk: #8db4ec; --ts: #f0a46b; --tc: #8b959f; --tn: #c3a2f0; --tt: #eceef0; --tb: #f08cbf; --td: #eceef0;
+  --term-bg: #0b0d0f; --term-ink: #e6e9ec; --term-err: #ff8a70; --term-loc: #9cc1f2;
+}
+
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--paper); color: var(--ink);
+  font-family: var(--font-body); font-size: var(--t-body); line-height: 1.6;
+  padding-inline: 20px; -webkit-font-smoothing: antialiased;
+}
+.page { max-width: 1180px; margin-inline: auto; padding-block: 40px 88px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 96px; }
+.page > *, .sec > *, .two > *, .hero > * { min-width: 0; }
+a { color: inherit; text-decoration-color: var(--bill); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+a:hover { color: var(--bill); }
+a:focus-visible, .row:focus-visible, summary:focus-visible { outline: 2px solid var(--pond); outline-offset: 3px; border-radius: 3px; }
+p { margin: 0; max-width: 62ch; }
+code { font-family: var(--font-mono); font-size: 0.88em; }
+p code, li code, figcaption code, .snote code { background: var(--code-bg); padding: 0.06em 0.3em; border-radius: 3px; }
+h3 { font-family: var(--font-body); font-weight: 700; font-size: var(--t-h3); line-height: 1.3; margin: 0; text-wrap: balance; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+::selection { background: color-mix(in srgb, var(--bill) 32%, transparent); color: inherit; }
+.mono { font-family: var(--font-mono); }
+
+/* Masthead and theme switch */
+.masthead { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
+.topbar { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 12px 24px; }
+.themes { display: inline-flex; gap: 2px; padding: 2px; border: 1px solid var(--rule); border-radius: 6px; }
+.themes button {
+  font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.06em; text-transform: uppercase;
+  color: var(--ink-2); background: transparent; border: 0; border-radius: 4px; padding: 6px 10px; cursor: pointer;
+}
+.themes button:hover { color: var(--ink); }
+.themes button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.themes button:focus-visible { outline: 2px solid var(--pond); outline-offset: 2px; }
+
+/* Hero */
+.hero { display: grid; grid-template-columns: minmax(0, 1fr); gap: 48px; align-items: center; }
+@media (min-width: 960px) { .hero { grid-template-columns: minmax(0, 1.08fr) minmax(0, 0.92fr); gap: 56px; } }
+.hero-text { display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; align-content: start; }
+.eyebrow { font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.08em; text-transform: uppercase; color: var(--ink-2); }
+.wordmark {
+  font-family: var(--font-display); font-weight: 900; font-stretch: 125%;
+  font-size: var(--t-hero); line-height: 0.82; letter-spacing: -0.035em; margin: 6px 0 0;
+}
+.namebytes { display: flex; align-items: center; gap: 2px; --nbw: 34px; }
+.namebytes .cell { width: var(--nbw); height: var(--nbw); font-size: 13px; background: var(--cell-2); }
+.np { display: inline-flex; align-items: center; gap: 6px; margin-left: 6px; font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); }
+.np i { width: 4px; height: 42px; border-radius: 2px; background: var(--bill); }
+.nb { animation: nbfill 0.36s ease-out both; animation-delay: calc(var(--i) * 110ms + 200ms); }
+.np { animation: npmove 0.55s steps(5, end) both; animation-delay: 200ms; }
+@keyframes nbfill { from { background: transparent; color: transparent; box-shadow: inset 0 0 0 1px var(--rule); } }
+@keyframes npmove { from { transform: translateX(calc(-5 * (var(--nbw) + 2px))); } }
+@media (prefers-reduced-motion: reduce) { .nb, .np { animation: none; } }
+.lead { font-size: var(--t-lead); font-weight: 650; line-height: 1.3; max-width: 26ch; text-wrap: balance; margin-top: 10px; }
+.intro { color: var(--ink-2); }
+
+/* Byte cells */
+.cells { display: flex; gap: 2px; }
+.cell {
+  width: var(--cw); height: var(--cw); flex: none; display: grid; place-items: center;
+  font-family: var(--font-mono); font-size: 11px; line-height: 1; border-radius: 3px;
+  background: var(--cell); color: var(--ink);
+}
+.cell.h { background: var(--cell-2); }
+.cell.sm { width: 12px; height: 12px; border-radius: 2px; }
+.cell.sm.c { background: var(--cell-2); }
+.cell.sm.h { background: var(--ink-2); }
+.cell.sm.e { background: transparent; box-shadow: inset 0 0 0 1px var(--quiet); }
+.cell.sm.g { background: var(--bill); }
+.cell.sm.q { background: var(--quiet); }
+.strip-row { display: flex; gap: 6px; align-items: flex-start; }
+.strip-row.wrap { flex-wrap: wrap; row-gap: 16px; }
+.grp { display: grid; gap: 5px; justify-items: stretch; }
+.lab {
+  font-family: var(--font-mono); font-size: 10px; line-height: 1.25; color: var(--ink-2);
+  border-top: 1px solid var(--ink-2); padding-top: 4px; white-space: pre-line;
+}
+.igrp { display: grid; gap: 8px; }
+.ilab { border-top: 2px solid var(--ink); color: var(--ink); font-size: 11px; }
+
+/* The data stack figure */
+.stackfig { margin: 0; display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 18px; row-gap: 2px; align-items: center; --cw: 24px; }
+.stackfig > div:not(.sptr):not(.smark) { grid-column: 1; }
+.stackfig .snote { grid-column: 2; font-size: var(--t-small); color: var(--ink-2); line-height: 1.45; }
+.snote b { color: var(--ink); }
+.sfree, .solder {
+  display: grid; place-items: center; border-radius: 4px; font-family: var(--font-mono); font-size: 11px; color: var(--ink-2);
+}
+.sfree { height: 72px; box-shadow: inset 0 0 0 1px var(--rule); background: repeating-linear-gradient(135deg, transparent 0 7px, var(--cell) 7px 8px); }
+.solder { height: 46px; background: var(--cell); }
+.sfree span, .solder span { background: var(--paper); padding: 1px 6px; border-radius: 3px; }
+.sptr, .smark { grid-column: 1; position: relative; height: 14px; }
+.sptr::before { content: ""; position: absolute; inset: 5px 0; background: var(--bill); border-radius: 2px; }
+.smark::before { content: ""; position: absolute; left: 0; right: 0; top: 6px; height: 2px; background: var(--ink-2); }
+.snote.bracket { align-self: stretch; display: flex; align-items: center; border-left: 2px solid var(--ink-2); padding-left: 12px; }
+.stackfig figcaption { grid-column: 1 / -1; margin-top: 14px; font-size: var(--t-small); color: var(--ink-2); max-width: 60ch; }
+
+/* KPI row */
+.kpis { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 32px 24px; }
+@media (min-width: 880px) { .kpis { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.kpi { border-top: 3px solid var(--ink); padding-top: 14px; display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; align-content: start; }
+.kv { font-weight: 650; font-stretch: 112%; font-size: var(--t-stat); line-height: 1; letter-spacing: -0.02em; }
+.kl { font-weight: 600; line-height: 1.3; }
+.kd { font-family: var(--font-mono); font-size: var(--t-micro); color: var(--ink-2); }
+.kpi-note { grid-column: 1 / -1; font-size: var(--t-small); color: var(--ink-2); max-width: 90ch; }
+
+/* Sections */
+.sec { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px; }
+.sec-head { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: baseline; gap: 8px 24px; border-top: 1px solid var(--rule); padding-top: 20px; }
+h2 {
+  font-family: var(--font-display); font-weight: 800; font-stretch: 112%;
+  font-size: var(--t-h2); line-height: 1.06; letter-spacing: -0.015em; margin: 0; max-width: 24ch; text-wrap: balance;
+}
+.ref { font-family: var(--font-mono); font-size: var(--t-micro); letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); text-decoration: none; white-space: nowrap; }
+.ref:hover { color: var(--bill); }
+.sec-lead { font-size: 1.12rem; line-height: 1.55; }
+.two { display: grid; grid-template-columns: minmax(0, 1fr); gap: 36px; align-items: start; }
+@media (min-width: 960px) { .two { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 48px; } }
+.panel { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; align-content: start; min-width: 0; }
+.stack14 { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; align-content: start; min-width: 0; }
+.aside { color: var(--ink-2); }
+
+/* Code */
+pre.code, pre.term {
+  margin: 0; padding: 14px 16px; border-radius: 6px; overflow-x: auto;
+  font-family: var(--font-mono); font-size: 0.8rem; line-height: 1.6; tab-size: 4;
+}
+pre.code { background: var(--code-bg); color: var(--ink); }
+pre.term { background: var(--term-bg); color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; }
+.tk { color: var(--tk); } .ts { color: var(--ts); } .tc { color: var(--tc); font-style: italic; }
+.tn { color: var(--tn); } .tt { color: var(--tt); font-weight: 600; } .tb { color: var(--tb); } .td { color: var(--td); font-weight: 600; }
+.terr { color: var(--term-err); font-weight: 600; } .tloc { color: var(--term-loc); }
+
+/* Array family */
+.family { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 2px; }
+@media (min-width: 900px) { .family { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.fam { background: var(--cell); padding: 16px 16px 18px; display: grid; gap: 6px; align-content: start; }
+.fam .spell { font-size: 1.25rem; background: none; padding: 0; }
+.fam b { font-size: var(--t-small); }
+.fam span { font-size: var(--t-small); color: var(--ink-2); line-height: 1.45; }
+.fam.hot { box-shadow: inset 0 -4px 0 var(--bill); }
+
+/* Byte strip figures */
+figure.bytes { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; }
+figure.bytes figcaption, .figcap { font-size: var(--t-small); color: var(--ink-2); max-width: 70ch; }
+.order { --cw: 26px; }
+.nodes, .enums { display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; }
+.nrow { display: grid; grid-template-columns: 5.2rem minmax(0, 1fr); gap: 4px 12px; align-items: start; }
+.nname { font-family: var(--font-mono); font-size: 12px; color: var(--ink-2); padding-top: 1px; }
+.ntot { grid-column: 2; font-weight: 700; font-size: var(--t-small); }
+.ntot span { font-weight: 400; color: var(--ink-2); }
+.nrow .strip-row { flex-wrap: wrap; row-gap: 10px; }
+.erow { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
+.ehead { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; font-size: var(--t-small); }
+.ehead span { color: var(--ink-2); }
+.ehead em { font-style: normal; font-weight: 700; margin-left: auto; }
+.ekey { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--t-micro); color: var(--ink-2); font-family: var(--font-mono); }
+.ekey span { display: inline-flex; align-items: center; gap: 6px; }
+.ekey .cell { display: inline-block; }
+
+/* Charts */
+.chart { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 14px; min-width: 0; --gap: 12px; }
+.chart figcaption { display: grid; gap: 4px; }
+.chart .sub, .cnote { font-size: var(--t-small); color: var(--ink-2); max-width: 62ch; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 18px; font-size: var(--t-small); color: var(--ink-2); }
+.legend span { display: inline-flex; align-items: center; gap: 7px; }
+.sw { width: 12px; height: 12px; border-radius: 2px; display: inline-block; }
+.sw.goose { background: var(--bill); } .sw.rust { background: var(--pond); }
+.plot { position: relative; display: grid; }
+.plot .grid { position: absolute; top: 0; bottom: 0; left: calc(var(--lw) + var(--gap)); right: 0; pointer-events: none; }
+.plot .grid span { position: absolute; top: 0; bottom: 0; width: 1px; background: var(--rule); }
+.plot .grid span.base { background: var(--ink-2); }
+.row { display: grid; grid-template-columns: var(--lw) minmax(0, 1fr); column-gap: var(--gap); align-items: center; min-height: 30px; position: relative; cursor: default; border-radius: 3px; }
+.row:hover .rlab, .row:focus-visible .rlab { text-decoration: underline; text-decoration-color: var(--bill); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.plot, .axis, .legend { -webkit-user-select: none; user-select: none; }
+.rlab { font-size: 0.84rem; line-height: 1.2; padding-block: 3px; }
+.rlab.mono { font-family: var(--font-mono); font-size: 0.8rem; }
+.track { position: relative; height: 30px; }
+.bar { position: absolute; top: 8px; height: 14px; background: var(--quiet); transition: filter 0.12s; }
+.bar.goose { background: var(--bill); } .bar.rust { background: var(--pond); }
+.bar.pos { border-radius: 0 4px 4px 0; } .bar.neg { border-radius: 4px 0 0 4px; }
+.row:hover .bar, .row:focus-visible .bar { filter: brightness(1.15) saturate(1.1); }
+.val {
+  position: absolute; top: 50%; transform: translateY(-50%); font-family: var(--font-mono); font-size: 11.5px; color: var(--ink);
+  white-space: nowrap; font-variant-numeric: tabular-nums; background: var(--paper); padding: 1px 4px; border-radius: 2px;
+}
+.val.in { color: var(--ink); background: none; padding: 0; }
+.axis { display: grid; grid-template-columns: var(--lw) minmax(0, 1fr); column-gap: var(--gap); }
+.ticks { position: relative; height: 16px; }
+.ticks span { position: absolute; transform: translateX(-50%); font-family: var(--font-mono); font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+details.tv summary { cursor: pointer; font-size: var(--t-small); color: var(--ink-2); width: max-content; }
+.tv-wrap { overflow-x: auto; margin-top: 10px; }
+.tv table { border-collapse: collapse; font-size: 0.84rem; min-width: 100%; }
+.tv th, .tv td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+.tv th { font-weight: 600; color: var(--ink-2); white-space: nowrap; }
+.tv td.n { text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.tv td.mono { font-family: var(--font-mono); }
+.tip {
+  position: fixed; z-index: 20; pointer-events: none; max-width: 280px; display: grid; gap: 3px;
+  background: var(--ink); color: var(--paper); padding: 9px 11px; border-radius: 6px; font-size: 0.82rem; line-height: 1.4;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+}
+.tip[hidden] { display: none; }
+.tip strong { font-size: 1rem; font-family: var(--font-mono); font-weight: 400; }
+
+/* Where the speed comes from */
+.mechs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 44px 48px; }
+@media (min-width: 900px) { .mechs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.mech { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; border-top: 3px solid var(--ink); padding-top: 14px; }
+.mech > p { color: var(--ink-2); }
+.chart.mini { gap: 8px; }
+.chart.mini figcaption { display: block; font-size: var(--t-micro); color: var(--ink-2); line-height: 1.5; }
+.chart.mini figcaption .mono { color: var(--ink); }
+.mini .row { min-height: 26px; }
+.mini .track { height: 26px; }
+.mini .bar { top: 8px; height: 10px; }
+.mini .rlab { font-size: 0.8rem; }
+
+/* Compared with C, C++ and Rust */
+.vs { margin: 0; display: grid; grid-template-columns: minmax(0, 1fr); gap: 7px; padding-top: 12px; border-top: 1px solid var(--rule); }
+.vs div { display: grid; grid-template-columns: 5.6rem minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.vs dt { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink); white-space: nowrap; }
+.vs dd { margin: 0; font-size: 0.88rem; line-height: 1.45; color: var(--ink-2); }
+.fam .eq { font-family: var(--font-mono); font-size: 0.72rem; line-height: 1.4; color: var(--ink-2); border-top: 1px solid var(--cell-2); padding-top: 8px; margin-top: 4px; }
+.termwrap { display: grid; grid-template-columns: minmax(0, 1fr); gap: 4px; }
+.tlabel { font-family: var(--font-mono); font-size: 0.7rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink-2); }
+
+/* Around the language */
+.around { display: grid; grid-template-columns: minmax(0, 1fr); gap: 32px 48px; }
+@media (min-width: 760px) { .around { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.blk { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; align-content: start; min-width: 0; border-top: 1px solid var(--ink-2); padding-top: 12px; }
+.blk p { color: var(--ink-2); }
+.two.tight { gap: 20px 36px; }
+
+/* Extras, costs, try */
+.extras { display: grid; grid-template-columns: minmax(0, 1fr); gap: 36px 40px; }
+@media (min-width: 760px) { .extras { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.extra { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-content: start; min-width: 0; border-top: 3px solid var(--ink); padding-top: 14px; }
+.extra p { color: var(--ink-2); }
+.costs { display: grid; grid-template-columns: minmax(0, 1fr); gap: 28px 40px; }
+@media (min-width: 640px) { .costs { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 980px) { .costs { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.cost { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; align-content: start; border-top: 1px solid var(--ink-2); padding-top: 12px; }
+.cost p { color: var(--ink-2); font-size: 0.97rem; }
+.steps { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: minmax(0, 1fr); gap: 18px; counter-reset: step; }
+.steps li { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; counter-increment: step; padding-left: 40px; position: relative; min-width: 0; }
+.steps li::before {
+  content: counter(step); position: absolute; left: 0; top: 0; width: 26px; height: 26px; border-radius: 3px;
+  display: grid; place-items: center; font-family: var(--font-mono); font-size: 12px; background: var(--bill); color: var(--on-bill);
+}
+.links { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px; align-content: start; }
+.links a { display: grid; gap: 2px; padding: 14px 16px; background: var(--cell); text-decoration: none; }
+.links a:hover { color: inherit; }
+.links a:hover b { text-decoration: underline; text-decoration-color: var(--bill); text-decoration-thickness: 2px; text-underline-offset: 3px; }
+.links b { font-weight: 700; }
+.links span { font-size: var(--t-small); color: var(--ink-2); }
+footer { border-top: 1px solid var(--rule); padding-top: 18px; font-size: var(--t-small); color: var(--ink-2); display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; }
+footer p { max-width: 100ch; }
+
+@media (max-width: 560px) {
+  :root { --cw: 22px; }
+  .stackfig { --cw: 20px; column-gap: 12px; }
+  .stackfig .cell { font-size: 9.5px; }
+  .order { --cw: 22px; }
+  .namebytes { --nbw: 30px; }
+  .chart { --gap: 8px; }
+  .chart { --lw: 7.6rem !important; }
+  .chart#vs-rust { --lw: 5.2rem !important; }
+  .row .rlab { font-size: 0.78rem; }
+}
+</style>
+
+<div class="page">
+  <header class="masthead">
+  <div class="topbar">
+    <p class="eyebrow">An unofficial introduction · Goose v2026.3</p>
+    <div class="themes" role="group" aria-label="Colour theme">
+      <button type="button" id="theme-auto" data-choice="auto" aria-pressed="true">Auto</button>
+      <button type="button" id="theme-light" data-choice="light" aria-pressed="false">Light</button>
+      <button type="button" id="theme-dark" data-choice="dark" aria-pressed="false">Dark</button>
+    </div>
+  </div>
+  <div class="hero">
+    <div class="hero-text">
+      <h1 class="wordmark">Goose</h1>
+      <div class="namebytes" aria-hidden="true"><span class="cell nb" style="--i:0" title="'G'">47</span><span class="cell nb" style="--i:1" title="'o'">6f</span><span class="cell nb" style="--i:2" title="'o'">6f</span><span class="cell nb" style="--i:3" title="'s'">73</span><span class="cell nb" style="--i:4" title="'e'">65</span><span class="np"><i></i>top</span></div>
+      <p class="lead">A memory-safe systems language with no heap, no garbage collector and no lifetime annotations.</p>
+      <p class="intro">Every growable value lives on one of a few data stacks, counted when the program compiles. Each stack holds at most one growing value, always on top, so growing it is a pointer bump that never moves anything. Leaving a scope frees everything it built with one store.</p>
+      <pre class="code" aria-label="Goose code"><code><span class="tk">var</span> words: <span class="tt">u8</span>[][&gt;..] = [];
+<span class="tk">for</span> i <span class="tk">in</span> <span class="tn">5</span> { words.<span class="tb">push</span>(<span class="tb">str</span>(<span class="ts">"word"</span>, i)); }</code></pre>
+      <dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++</dt><dd><code>vector&lt;string&gt;</code> keeps a 24 to 32-byte string object per element. Longer strings allocate on their own, and every element is destroyed one by one.</dd></div><div><dt>Rust</dt><dd><code>Vec&lt;String&gt;</code> keeps a 24-byte header per string and allocates every string separately, so these five words are six blocks to allocate and free.</dd></div></dl>
+    </div>
+    
+<figure class="stackfig" aria-labelledby="stack-cap">
+  <div class="sfree" style="grid-row:1"><span>reserved, untouched</span></div>
+  <p class="snote" style="grid-row:1">Each data stack reserves address space up front. Memory is used only as values grow into it.</p>
+  <div class="sptr" style="grid-row:2" aria-hidden="true"></div>
+  <p class="snote" style="grid-row:2"><b>top</b>. The next push writes here and moves the top up. No capacity check, and nothing moves.</p>
+  <div style="grid-row:3"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x34 &#x27;4&#x27;">4</span></div></div><div style="grid-row:4"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x33 &#x27;3&#x27;">3</span></div></div><div style="grid-row:5"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x32 &#x27;2&#x27;">2</span></div></div><div style="grid-row:6"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x31 &#x27;1&#x27;">1</span></div></div><div style="grid-row:7"><div class="cells srow" role="presentation"><span class="cell h" title="0x05">05</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell h" title="0x00">00</span><span class="cell ch" title="0x77 &#x27;w&#x27;">w</span><span class="cell ch" title="0x6f &#x27;o&#x27;">o</span><span class="cell ch" title="0x72 &#x27;r&#x27;">r</span><span class="cell ch" title="0x64 &#x27;d&#x27;">d</span><span class="cell ch" title="0x30 &#x27;0&#x27;">0</span></div></div>
+  <p class="snote bracket" style="grid-row:3 / span 5"><span><code>words</code> holds 5 strings in 45 bytes, one block, no pointers. Each string is a 4-byte length and its text.</span></p>
+  <div class="smark" style="grid-row:8" aria-hidden="true"></div>
+  <p class="snote" style="grid-row:8"><b>scope ends</b>. The top goes back to this mark. Freeing all 45 bytes is one store.</p>
+  <div class="solder" style="grid-row:9"><span>values of enclosing scopes</span></div>
+  <figcaption id="stack-cap" style="grid-row:10">The bytes of <code>words</code> after five pushes, as the compiler lays them out. Shaded cells are length bytes; the rest are text.</figcaption>
+</figure>
+  </div>
+  </header>
+
+  <section class="kpis" aria-label="Benchmark summary">
+    <div class="kpi"><div class="kv">3.54×</div><div class="kl">faster than idiomatic C++</div><div class="kd">MSVC build 3.51×</div></div><div class="kpi"><div class="kv">1.26×</div><div class="kl">faster than hand-tuned C++</div><div class="kd">MSVC build 1.24×</div></div><div class="kpi"><div class="kv">1.19×</div><div class="kl">faster than the best safe Rust</div><div class="kd">MSVC build 1.13×</div></div><div class="kpi"><div class="kv">1.25×</div><div class="kl">less peak memory than that Rust</div><div class="kd">1.95× less than idiomatic C++</div></div>
+    <p class="kpi-note">Geometric means over the 16 benchmarks in the Goose repository at their large sizes, clang build (Rust compiles through LLVM too), from the run of 16 October 2026 on a Ryzen 9 9950X3D. These are the project's own measurements.</p>
+  </section>
+
+  <section class="sec" id="arrays">
+    <div class="sec-head"><h2>Arrays are chosen by what their size does</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md#5-the-array-family">Tutorial §5</a></div>
+    <p class="sec-lead">There is no single array type. Every kind below except the slice is its metadata followed by its elements, inline and packed, with no pointer to a separate block. A slice is a view into one of the others.</p>
+    <div class="family"><div class="fam"><code class="spell">T[k]</code><b>Fixed</b><span>Size known when compiling. No metadata at all.</span><span class="eq">C T[k] · std::array · Rust [T; N]</span></div><div class="fam"><code class="spell">T[]</code><b>Frozen</b><span>Sized when built, then the length never changes.</span><span class="eq">Rust Box&lt;[T]&gt;, but stored inline</span></div><div class="fam"><code class="spell">T[varint]</code><b>Compact frozen</b><span>The same, with a length of 1 or 2 bytes.</span><span class="eq">No standard equivalent</span></div><div class="fam"><code class="spell">T[..k]</code><b>Limited</b><span>Grows and shrinks within k slots, inline in whatever holds it.</span><span class="eq">Boost static_vector · Rust ArrayVec</span></div><div class="fam"><code class="spell">T[..]</code><b>Limited, sized at build</b><span>Capacity chosen when the value is made.</span><span class="eq">No standard equivalent</span></div><div class="fam hot"><code class="spell">T[&gt;..]</code><b>Grow-only</b><span>The workhorse. References into it stay valid as it grows.</span><span class="eq">std::vector · Rust Vec, without reallocation</span></div><div class="fam"><code class="spell">T[&gt;..&lt;]</code><b>Grow-shrink</b><span>For stacks, queues and heaps.</span><span class="eq">std::vector · Rust Vec, used as a stack</span></div><div class="fam"><code class="spell">T[:]</code><b>Slice</b><span>A view of any of the above. Nothing is copied.</span><span class="eq">std::span · Rust &amp;[T]</span></div></div>
+    <p class="figcap">The last line of each tile names the closest equivalent in C, C++ or Rust.</p>
+    <p class="aside">Strings are <code>u8</code> arrays. <code>u8[&gt;..]</code> builds one, <code>u8[]</code> stores a finished one, <code>u8[..16]</code> fits a short one inside a struct, and <code>u8[:]</code> views someone else's bytes.</p>
+  </section>
+
+  <section class="sec" id="inline">
+    <div class="sec-head"><h2>Nested data stays inline</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md#8-nested-data-stays-inline">Tutorial §8</a></div>
+    <div class="two">
+      <div class="stack14">
+        <p class="sec-lead">A record with strings and a list inside it is one run of bytes. This order has a customer name and two line items, and the compiler lays it out in 29 bytes with no pointers and no allocations.</p>
+        <pre class="code" aria-label="Goose code"><code><span class="tk">struct</span> <span class="tt">Item</span>  { sku: <span class="tt">u8</span>[<span class="tt">varint</span>], qty: <span class="tt">varint</span>, cents: <span class="tt">varint</span> }
+<span class="tk">struct</span> <span class="tt">Order</span> { id: <span class="tt">varint</span>, customer: <span class="tt">u8</span>[<span class="tt">varint</span>], items: <span class="tt">Item</span>[<span class="tt">varint</span>] }
+
+book.<span class="tb">push</span>(<span class="tt">Order</span> { id: <span class="tn">1001</span>, customer: <span class="ts">"alice"</span>,
+                  items: [<span class="tt">Item</span> { sku: <span class="ts">"SKU-441"</span>, qty: <span class="tn">2</span>, cents: <span class="tn">1999</span> },
+                          <span class="tt">Item</span> { sku: <span class="ts">"SKU-7"</span>, qty: <span class="tn">1</span>, cents: <span class="tn">500</span> }] });</code></pre>
+      </div>
+      
+<figure class="chart" id="order-size" style="--lw:9.5rem">
+  <figcaption><h3>This one order in memory</h3><p class="sub">Bytes for the value plus everything it allocates, excluding allocator headers. C++ and Rust sizes come from the Goose tutorial, measured with MSVC and rustc.</p></figcaption>
+  <div class="plot"><div class="grid" aria-hidden="true"><span style="left:0.000%"></span><span style="left:22.727%"></span><span style="left:45.455%"></span><span style="left:68.182%"></span><span style="left:90.909%"></span></div><div class="row" tabindex="0" data-v="29 B" data-l="Goose. One inline record, no allocation." aria-label="Goose · 0 allocations: 29 B"><span class="rlab">Goose · 0 allocations</span><span class="track"><span class="bar goose pos" style="left:0;width:13.182%"></span><span class="val" style="left:calc(13.182% + 6px)">29 B</span></span></div><div class="row" tabindex="0" data-v="153 B" data-l="Rust. String plus Vec&lt;Item&gt;, each sku its own String." aria-label="Rust · 4 allocations: 153 B"><span class="rlab">Rust · 4 allocations</span><span class="track"><span class="bar pos" style="left:0;width:69.545%"></span><span class="val" style="left:calc(69.545% + 6px)">153 B</span></span></div><div class="row" tabindex="0" data-v="160 B" data-l="C++. std::string plus std::vector&lt;Item&gt;. Short strings fit the small-string buffer." aria-label="C++ · 1 allocation: 160 B"><span class="rlab">C++ · 1 allocation</span><span class="track"><span class="bar pos" style="left:0;width:72.727%"></span><span class="val" style="left:calc(72.727% + 6px)">160 B</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:0.000%">0</span><span style="left:22.727%">50</span><span style="left:45.455%">100</span><span style="left:68.182%">150</span><span style="left:90.909%">200</span></span></div>
+  <p class="cnote">C++ gets away with one allocation only because these strings fit its small-string buffer.</p>
+  <details class="tv"><summary>Show as a table</summary><div class="tv-wrap"><table><thead><tr><th>Language</th><th>Bytes</th><th>Allocations</th></tr></thead><tbody><tr><td class="">Goose</td><td class="n">29</td><td class="n">0</td></tr><tr><td class="">Rust (String, Vec&lt;Item&gt;)</td><td class="n">153</td><td class="n">4</td></tr><tr><td class="">C++ (std::string, std::vector&lt;Item&gt;)</td><td class="n">160</td><td class="n">1</td></tr></tbody></table></div></details>
+</figure>
+    </div>
+    <figure class="bytes" aria-labelledby="order-cap">
+      <div class="strip-row wrap order"><div class="grp "><div class="cells"><span class="cell h" title="0xd2">d2</span><span class="cell h" title="0x0f">0f</span></div><div class="lab">id 1001</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x05">05</span><span class="cell ch" title="0x61 &#x27;a&#x27;">a</span><span class="cell ch" title="0x6c &#x27;l&#x27;">l</span><span class="cell ch" title="0x69 &#x27;i&#x27;">i</span><span class="cell ch" title="0x63 &#x27;c&#x27;">c</span><span class="cell ch" title="0x65 &#x27;e&#x27;">e</span></div><div class="lab">customer</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x02">02</span></div><div class="lab">2
+items</div></div><div class="igrp"><div class="strip-row"><div class="grp "><div class="cells"><span class="cell h" title="0x07">07</span><span class="cell ch" title="0x53 &#x27;S&#x27;">S</span><span class="cell ch" title="0x4b &#x27;K&#x27;">K</span><span class="cell ch" title="0x55 &#x27;U&#x27;">U</span><span class="cell ch" title="0x2d &#x27;-&#x27;">-</span><span class="cell ch" title="0x34 &#x27;4&#x27;">4</span><span class="cell ch" title="0x34 &#x27;4&#x27;">4</span><span class="cell ch" title="0x31 &#x27;1&#x27;">1</span></div><div class="lab">sku</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x04">04</span></div><div class="lab">qty
+2</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x9e">9e</span><span class="cell h" title="0x1f">1f</span></div><div class="lab">cents
+1999</div></div></div><div class="lab ilab">item 1</div></div><div class="igrp"><div class="strip-row"><div class="grp "><div class="cells"><span class="cell h" title="0x05">05</span><span class="cell ch" title="0x53 &#x27;S&#x27;">S</span><span class="cell ch" title="0x4b &#x27;K&#x27;">K</span><span class="cell ch" title="0x55 &#x27;U&#x27;">U</span><span class="cell ch" title="0x2d &#x27;-&#x27;">-</span><span class="cell ch" title="0x37 &#x27;7&#x27;">7</span></div><div class="lab">sku</div></div><div class="grp "><div class="cells"><span class="cell h" title="0x02">02</span></div><div class="lab">qty
+1</div></div><div class="grp "><div class="cells"><span class="cell h" title="0xe8">e8</span><span class="cell h" title="0x07">07</span></div><div class="lab">cents
+500</div></div></div><div class="lab ilab">item 2</div></div></div>
+      <p class="sr-only">Hex dump of the 29 bytes: d2 0f 05 61 6c 69 63 65 02 07 53 4b 55 2d 34 34 31 04 9e 1f 05 53 4b 55 2d 37 02 e8 07</p>
+      <figcaption id="order-cap">The 29 bytes, read back from the compiler. Numbers are LEB128 varints, and fields store them zigzag-encoded, so 1001 is <code>d2 0f</code>. Each string and list starts with its length. Text bytes are shown as characters.</figcaption>
+    </figure>
+  </section>
+
+  <section class="sec" id="safe">
+    <div class="sec-head"><h2>References stay valid, and the compiler proves it</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md#4-where-values-live">Tutorial §4</a></div>
+    <div class="two">
+      <div class="panel">
+        <h3>Growing never moves anything</h3>
+        <pre class="code" aria-label="Goose code"><code><span class="tk">var</span> items: <span class="tt">Item</span>[&gt;..] = [];
+<span class="tk">let</span> first .= items.<span class="tb">push</span>(<span class="tt">Item</span> { <span class="tn">1</span>, <span class="tn">0.5</span> });       <span class="tc">// a reference to element 0</span>
+<span class="tk">for</span> i: <span class="tt">i32</span> <span class="tk">in</span> <span class="tn">2</span>..<span class="tn">1000001</span> { items.<span class="tb">push</span>(<span class="tt">Item</span> { i, <span class="tn">0.0</span> }); }
+first.weight = <span class="tn">99.5</span>;                            <span class="tc">// still valid</span>
+<span class="tb">print</span>(items.len, <span class="ts">" items, first is "</span>, items[<span class="tn">0</span>]);</code></pre>
+        <pre class="term">1000000 items, first is Item { 1, 99.5 }</pre>
+        <p><code>push</code> returns a reference to the new element. A <code>vector</code> or <code>Vec</code> may reallocate as it grows, so C++ and Rust can't promise this. The Rust versions of the repository's benchmarks use integer indices instead.</p>
+        <dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++</dt><dd>A reference into a <code>vector</code> dangles once <code>push_back</code> reallocates, which is undefined behaviour. Keeping one safely takes <code>reserve()</code> up front or a <code>deque</code>.</dd></div><div><dt>Rust</dt><dd>The borrow checker rejects <code>&amp;v[0]</code> held across <code>v.push()</code> (error E0502), so code keeps an index instead.</dd></div></dl>
+      </div>
+      <div class="panel">
+        <h3>Safety without annotations</h3>
+        <pre class="code" aria-label="Goose code"><code><span class="tk">struct</span> <span class="tt">Node</span> { v: <span class="tt">i64</span>, left: <span class="tt">Node</span>? }
+
+<span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">var</span> root = <span class="tt">Node</span> { v: <span class="tn">1</span>, .. };
+    {
+        <span class="tk">var</span> child = <span class="tt">Node</span> { v: <span class="tn">2</span>, .. };
+        root.left .= child;          <span class="tc">// child ends at the next brace</span>
+    }
+}</code></pre>
+        <pre class="term"><span class="tloc">demo.goose:7:</span> <span class="terr">error:</span> storing a reference rooted at child, which does not outlive the destination (§9.2)</pre>
+        <p>There is no lifetime syntax, no borrow rules and no <code>unsafe</code>. The compiler infers what every reference is rooted in and rejects one that could outlive its owner. Two references to the same thing are fine.</p>
+        <dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C / C++</dt><dd>This compiles, and <code>root.left</code> dangles as soon as the scope holding <code>child</code> ends.</dd></div><div><dt>Rust</dt><dd>Rejected as well, but a struct that holds a reference needs a lifetime parameter, as in <code>struct Node&lt;'a&gt;</code>, and so does every type that contains it.</dd></div></dl>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>No null dereferences</h3>
+      <div class="two tight">
+        <div class="stack14"><pre class="code" aria-label="Goose code"><code><span class="tk">struct</span> <span class="tt">Node</span> { key: <span class="tt">i32</span>, left: <span class="tt">Node</span>? }
+
+<span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">var</span> a = <span class="tt">Node</span> { key: <span class="tn">1</span>, .. };
+    <span class="tk">let</span> n = a.left;                   <span class="tc">// a Node? may be null</span>
+    <span class="tk">if</span> n { <span class="tb">print</span>(n.key); }            <span class="tc">// inside the if, n is a Node&amp;</span>
+    <span class="tb">print</span>(n.key);                     <span class="tc">// outside it, n is unchecked</span>
+}</code></pre> <pre class="term"><span class="tloc">null.goose:7:</span> <span class="terr">error:</span> optional value must be narrowed (if/guard/assert) before use</pre></div>
+        <div class="stack14"><p>A reference is never null unless its type says so. A <code>Node?</code> must be checked by <code>if</code>, <code>guard</code> or <code>assert</code> before use, and inside the check it is a plain reference. Using one unchecked is a compile error, so there is no null pointer to dereference at run time.</p><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C / C++</dt><dd>Any pointer can be null, and dereferencing one is undefined behaviour, usually a crash.</dd></div><div><dt>Rust</dt><dd><code>Option&lt;&amp;T&gt;</code> is the same idea, opened with <code>match</code>, <code>if let</code> or <code>unwrap()</code>.</dd></div></dl></div>
+      </div>
+    </div>
+    <div class="panel">
+      <h3>Integers do what the source says</h3>
+      <div class="two tight">
+        <div class="stack14"><pre class="code" aria-label="Goose code"><code><span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">let</span> a: <span class="tt">u8</span> = <span class="tn">200</span>;
+    <span class="tk">let</span> b: <span class="tt">u8</span> = <span class="tn">100</span>;
+    <span class="tb">print</span>(a + b);                 <span class="tc">// an 8-bit add: wraps to 44</span>
+    <span class="tb">print</span>(-<span class="tn">7</span> % <span class="tn">3</span>);                <span class="tc">// % is Euclidean: 2</span>
+    <span class="tk">var</span> big: <span class="tt">i32</span> = <span class="tn">2147483647</span>;
+    big += <span class="tn">1</span>;                     <span class="tc">// signed overflow</span>
+    <span class="tb">print</span>(big);
+}</code></pre> <div class="termwrap"><span class="tlabel">release build: signed overflow wraps</span><pre class="term">44
+2
+-2147483648</pre></div> <div class="termwrap"><span class="tlabel">built with --debug: it aborts</span><pre class="term">44
+2
+goose runtime <span class="terr">error:</span> integer overflow (debug): 2147483647 + 1 at i32 (ints.goose:7)</pre></div></div>
+        <div class="stack14">
+          <p>Arithmetic happens at the operands' own width, so <code>u8 + u8</code> is an 8-bit add. Narrower types widen on their own, nothing narrows without <code>as</code>, and mixing <code>u32</code> with <code>i32</code> is a compile error until you say which you meant. Unsigned arithmetic wraps by definition. Signed overflow aborts in a debug build and wraps in release, so it is never undefined. <code>%</code> is Euclidean, so <code>x % n</code> is always a valid index into an array of length n, and dividing by zero always aborts.</p>
+          <pre class="code" aria-label="Goose code"><code><span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tk">let</span> x: <span class="tt">u32</span> = <span class="tn">1</span>;
+    <span class="tk">let</span> y: <span class="tt">i32</span> = <span class="tn">2</span>;
+    <span class="tb">print</span>(x + y);
+}</code></pre> <pre class="term"><span class="tloc">mixed.goose:4:</span> <span class="terr">error:</span> operands of + have no common type: u32 and i32 (convert one with `as`)</pre>
+          <dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C / C++</dt><dd>Signed overflow is undefined behaviour, which optimizers assume never happens. A <code>uint8_t</code> 200 + 100 is promoted to the <code>int</code> 300, mixed signed and unsigned operands convert silently, and <code>-7 % 3</code> is -1.</dd></div><div><dt>Rust</dt><dd>Overflow panics in a debug build and wraps in release. Nothing widens on its own, and <code>-7 % 3</code> is -1, with <code>rem_euclid</code> giving 2.</dd></div></dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="compact">
+    <div class="sec-head"><h2>Links and enums sized to what they hold</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md#10-linking-things-without-pointers">Tutorial §9 and §10</a></div>
+    <div class="two">
+      <div class="panel">
+        <h3>A tree node with two links is 12 bytes</h3>
+        <pre class="code" aria-label="Goose code"><code><span class="tk">struct</span> <span class="tt">Node</span> { key: <span class="tt">i32</span>, left: <span class="tt">Node</span>&amp;&lt;<span class="tt">u32</span>&gt;?, right: <span class="tt">Node</span>&amp;&lt;<span class="tt">u32</span>&gt;? }</code></pre>
+        
+<div class="nodes">
+  <div class="nrow">
+    <div class="nname">Goose</div>
+    <div class="strip-row"><div class="grp "><div class="cells"><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">key</div></div><div class="grp "><div class="cells"><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span></div><div class="lab">left</div></div><div class="grp "><div class="cells"><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span><span class="cell g sm"></span></div><div class="lab">right</div></div></div>
+    <div class="ntot">12 B</div>
+  </div>
+  <div class="nrow">
+    <div class="nname">pointers</div>
+    <div class="strip-row"><div class="grp "><div class="cells"><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">key</div></div><div class="grp "><div class="cells"><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span></div><div class="lab">pad</div></div><div class="grp "><div class="cells"><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span></div><div class="lab">left</div></div><div class="grp "><div class="cells"><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span><span class="cell q sm"></span></div><div class="lab">right</div></div></div>
+    <div class="ntot">24 B <span>+ an allocation each</span></div>
+  </div>
+</div>
+        <p class="figcap">Links are 4-byte offsets within the node's own array, and 0 means null. Nothing in the tree is an address, so saving it writes its bytes, and loading checks every link before the tree is used.</p>
+        <dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++</dt><dd>A <code>unique_ptr&lt;Node&gt;</code> node is 24 bytes, plus a heap allocation and an allocator header for each one.</dd></div><div><dt>Rust</dt><dd><code>Box&lt;Node&gt;</code> is also 24 bytes plus an allocation. An index arena gets 4-byte links, but they are untyped and go stale silently when slots are reused.</dd></div></dl>
+      </div>
+      
+<figure class="chart" id="records-mem" style="--lw:9.5rem">
+  <figcaption><h3>A log of 16 million variant records</h3><p class="sub">Peak memory in MB, lower is better. Goose also runs it 2.02× faster than the Rust version.</p></figcaption>
+  <div class="plot"><div class="grid" aria-hidden="true"><span style="left:0.000%"></span><span style="left:35.714%"></span><span style="left:71.429%"></span></div><div class="row" tabindex="0" data-v="149 MB" data-l="Goose. Each record takes its own variant&#x27;s size, text inline." aria-label="Goose · variable enum: 149 MB"><span class="rlab">Goose · variable enum</span><span class="track"><span class="bar goose pos" style="left:0;width:10.643%"></span><span class="val" style="left:calc(10.643% + 6px)">149 MB</span></span></div><div class="row" tabindex="0" data-v="593 MB" data-l="Rust. Every element sized for the largest variant; strings allocate." aria-label="Rust · enum + String: 593 MB"><span class="rlab">Rust · enum + String</span><span class="track"><span class="bar pos" style="left:0;width:42.386%"></span><span class="val" style="left:calc(42.386% + 6px)">593 MB</span></span></div><div class="row" tabindex="0" data-v="1,103 MB" data-l="C++. std::variant plus std::string." aria-label="C++ · variant + string: 1,103 MB"><span class="rlab">C++ · variant + string</span><span class="track"><span class="bar pos" style="left:0;width:78.800%"></span><span class="val in" style="right:calc(21.200% + 6px)">1,103 MB</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:0.000%">0</span><span style="left:35.714%">500</span><span style="left:71.429%">1,000</span></span></div>
+  
+  <details class="tv"><summary>Show as a table</summary><div class="tv-wrap"><table><thead><tr><th>Implementation</th><th>Peak MB</th></tr></thead><tbody><tr><td class="">Goose, variable enum</td><td class="n">149.0</td></tr><tr><td class="">Rust, enum + String</td><td class="n">593.4</td></tr><tr><td class="">C++, variant + string</td><td class="n">1,103.2</td></tr></tbody></table></div></details>
+</figure>
+    </div>
+    <div class="panel">
+      <h3>Enums cost what each value holds</h3>
+      <pre class="code" aria-label="Goose code"><code><span class="tk">enum</span> <span class="tt">Shape</span> { <span class="tt">Circle</span> { r: <span class="tt">f64</span> }, <span class="tt">Rect</span> { w: <span class="tt">f64</span>, h: <span class="tt">f64</span> }, <span class="tt">Dot</span> }</code></pre>
+      
+<div class="enums">
+  <div class="erow">
+    <div class="ehead"><b>Fixed mode</b> <code>Shape</code><span>every value takes the largest size</span><em>51 B</em></div>
+    <div class="strip-row wrap"><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span></div><div class="lab">Circle · 17</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">Rect · 17</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span><span class="cell e sm"></span></div><div class="lab">Dot · 17</div></div></div>
+  </div>
+  <div class="erow">
+    <div class="ehead"><b>Variable mode</b> <code>Shape..</code><span>each value takes its own size</span><em>27 B</em></div>
+    <div class="strip-row wrap"><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">Circle · 9</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span><span class="cell c sm"></span></div><div class="lab">Rect · 17</div></div><div class="grp "><div class="cells"><span class="cell h sm"></span></div><div class="lab">Dot · 1</div></div></div>
+  </div>
+  <div class="ekey"><span><i class="cell h sm"></i> tag byte</span><span><i class="cell c sm"></i> payload</span><span><i class="cell e sm"></i> unused</span></div>
+</div>
+      <p class="figcap">Fixed mode can be indexed and overwritten with another variant. Variable mode packs values end to end, so the array is walked instead of indexed, and you may point into a payload.</p>
+      <dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++</dt><dd><code>std::variant&lt;Circle, Rect, Dot&gt;</code> is 24 bytes per value, 72 for these three.</dd></div><div><dt>Rust</dt><dd>The same <code>enum</code> is also 24 bytes per value. Every element pays for the largest variant plus padding.</dd></div></dl>
+    </div>
+  </section>
+
+  <section class="sec" id="speed">
+    <div class="sec-head"><h2>How fast it runs</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/bench/results.md">bench/results.md</a></div>
+    <p class="sec-lead">The repository's suite has 16 programs, each written in Goose, C++ and Rust and checked to print the same results. Every time covers the whole process, from generating input to tearing it down.</p>
+    <div class="two">
+      
+<figure class="chart" id="vs-rust" style="--lw:6.5rem">
+  <figcaption><h3>Ahead of the best safe Rust on 14 of 16 benchmarks</h3>
+  <p class="sub">Speed relative to the fastest safe Rust version of each benchmark, clang build. Four results within 3% are effectively ties.</p></figcaption>
+  <div class="legend"><span><i class="sw goose"></i>Goose faster</span><span><i class="sw rust"></i>Rust faster</span></div>
+  <div class="plot"><div class="grid" aria-hidden="true"><span class="" style="left:5.882%"></span><span class="base" style="left:17.647%"></span><span class="" style="left:47.059%"></span><span class="" style="left:76.471%"></span></div><div class="row" tabindex="0" data-v="2.02×" data-l="records. Goose is faster. Build a log of N variant records, aggregate it four times." aria-label="records: 2.02× the speed of the best safe Rust"><span class="rlab mono">records</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:60.000%"></span><span class="val" style="left:calc(77.647% + 6px)">2.02×</span></span></div><div class="row" tabindex="0" data-v="1.74×" data-l="words. Goose is faster. Count word frequencies over a text of N words." aria-label="words: 1.74× the speed of the best safe Rust"><span class="rlab mono">words</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:43.529%"></span></span></div><div class="row" tabindex="0" data-v="1.35×" data-l="respond. Goose is faster. Build and render N JSON responses, each a DTO holding a name and a list of line items." aria-label="respond: 1.35× the speed of the best safe Rust"><span class="rlab mono">respond</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:20.588%"></span></span></div><div class="row" tabindex="0" data-v="1.32×" data-l="graph. Goose is faster. Build adjacency for V vertices and 8V edges, then BFS from four sources." aria-label="graph: 1.32× the speed of the best safe Rust"><span class="rlab mono">graph</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:18.824%"></span></span></div><div class="row" tabindex="0" data-v="1.29×" data-l="interp. Goose is faster. Build an expression tree of the given depth, evaluate it eight times." aria-label="interp: 1.29× the speed of the best safe Rust"><span class="rlab mono">interp</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:17.059%"></span></span></div><div class="row" tabindex="0" data-v="1.22×" data-l="strlist. Goose is faster. Split a text into N words, keep them as a list, scan it four times." aria-label="strlist: 1.22× the speed of the best safe Rust"><span class="rlab mono">strlist</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:12.941%"></span></span></div><div class="row" tabindex="0" data-v="1.16×" data-l="sexp. Goose is faster. Generate N s-expression forms, parse them into a tree, walk it four times." aria-label="sexp: 1.16× the speed of the best safe Rust"><span class="rlab mono">sexp</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:9.412%"></span></span></div><div class="row" tabindex="0" data-v="1.16×" data-l="bintrees. Goose is faster. Build, check and discard many binary trees up to the given depth." aria-label="bintrees: 1.16× the speed of the best safe Rust"><span class="rlab mono">bintrees</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:9.412%"></span></span></div><div class="row" tabindex="0" data-v="1.12×" data-l="blur. Goose is faster. 16 passes of a 3x3 blur over a WxW 8-bit image." aria-label="blur: 1.12× the speed of the best safe Rust"><span class="rlab mono">blur</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:7.059%"></span></span></div><div class="row" tabindex="0" data-v="1.09×" data-l="lru. Goose is faster. An LRU cache of capacity N/8 under N skewed lookups." aria-label="lru: 1.09× the speed of the best safe Rust"><span class="rlab mono">lru</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:5.294%"></span></span></div><div class="row" tabindex="0" data-v="1.08×" data-l="push. Goose is faster. Push N records while keeping pointers to every 64th one." aria-label="push: 1.08× the speed of the best safe Rust"><span class="rlab mono">push</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:4.706%"></span></span></div><div class="row" tabindex="0" data-v="1.03×" data-l="tree. Goose is faster. Build a complete binary tree of the given depth, sum it eight times." aria-label="tree: 1.03× the speed of the best safe Rust"><span class="rlab mono">tree</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:1.765%"></span></span></div><div class="row" tabindex="0" data-v="1.03×" data-l="particles. Goose is faster. Integrate N particles for 200 steps of f32 vector math." aria-label="particles: 1.03× the speed of the best safe Rust"><span class="rlab mono">particles</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:1.765%"></span></span></div><div class="row" tabindex="0" data-v="1.02×" data-l="scene. Goose is faster. Build a scene graph, animate it and recompute world transforms for 16 frames." aria-label="scene: 1.02× the speed of the best safe Rust"><span class="rlab mono">scene</span><span class="track"><span class="bar goose pos" style="left:17.647%;width:1.176%"></span></span></div><div class="row" tabindex="0" data-v="0.98×" data-l="sum. Rust is faster. Control: build a flat i32 array, then scan it eight times." aria-label="sum: 0.98× the speed of the best safe Rust"><span class="rlab mono">sum</span><span class="track"><span class="bar rust neg" style="left:16.471%;width:1.176%"></span><span class="val" style="left:calc(17.647% + 6px)">0.98×</span></span></div><div class="row" tabindex="0" data-v="0.89×" data-l="calc. Rust is faster. Generate, parse and evaluate N small arithmetic expressions." aria-label="calc: 0.89× the speed of the best safe Rust"><span class="rlab mono">calc</span><span class="track"><span class="bar rust neg" style="left:11.176%;width:6.471%"></span><span class="val" style="left:calc(17.647% + 6px)">0.89×</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:5.882%">0.8×</span><span style="left:17.647%">1×</span><span style="left:47.059%">1.5×</span><span style="left:76.471%">2×</span></span></div>
+  <details class="tv"><summary>Show as a table</summary><div class="tv-wrap"><table>
+  <thead><tr><th>Benchmark</th><th>Speed vs Rust, clang</th><th>Speed vs Rust, MSVC</th><th>Less memory than Rust</th><th>What it does</th></tr></thead>
+  <tbody><tr><td class="mono">records</td><td class="n">2.02×</td><td class="n">2.26×</td><td class="n">3.98×</td><td>Build a log of N variant records, aggregate it four times.</td></tr><tr><td class="mono">words</td><td class="n">1.74×</td><td class="n">1.30×</td><td class="n">1.32×</td><td>Count word frequencies over a text of N words.</td></tr><tr><td class="mono">respond</td><td class="n">1.35×</td><td class="n">1.19×</td><td class="n">1.00×</td><td>Build and render N JSON responses, each a DTO holding a name and a list of line items.</td></tr><tr><td class="mono">graph</td><td class="n">1.32×</td><td class="n">1.16×</td><td class="n">1.00×</td><td>Build adjacency for V vertices and 8V edges, then BFS from four sources.</td></tr><tr><td class="mono">interp</td><td class="n">1.29×</td><td class="n">1.41×</td><td class="n">2.04×</td><td>Build an expression tree of the given depth, evaluate it eight times.</td></tr><tr><td class="mono">strlist</td><td class="n">1.22×</td><td class="n">1.24×</td><td class="n">1.04×</td><td>Split a text into N words, keep them as a list, scan it four times.</td></tr><tr><td class="mono">sexp</td><td class="n">1.16×</td><td class="n">1.11×</td><td class="n">2.43×</td><td>Generate N s-expression forms, parse them into a tree, walk it four times.</td></tr><tr><td class="mono">bintrees</td><td class="n">1.16×</td><td class="n">1.14×</td><td class="n">0.99×</td><td>Build, check and discard many binary trees up to the given depth.</td></tr><tr><td class="mono">blur</td><td class="n">1.12×</td><td class="n">1.00×</td><td class="n">1.00×</td><td>16 passes of a 3x3 blur over a WxW 8-bit image.</td></tr><tr><td class="mono">lru</td><td class="n">1.09×</td><td class="n">0.81×</td><td class="n">1.03×</td><td>An LRU cache of capacity N/8 under N skewed lookups.</td></tr><tr><td class="mono">push</td><td class="n">1.08×</td><td class="n">1.08×</td><td class="n">1.00×</td><td>Push N records while keeping pointers to every 64th one.</td></tr><tr><td class="mono">tree</td><td class="n">1.03×</td><td class="n">1.09×</td><td class="n">1.00×</td><td>Build a complete binary tree of the given depth, sum it eight times.</td></tr><tr><td class="mono">particles</td><td class="n">1.03×</td><td class="n">1.00×</td><td class="n">1.00×</td><td>Integrate N particles for 200 steps of f32 vector math.</td></tr><tr><td class="mono">scene</td><td class="n">1.02×</td><td class="n">0.82×</td><td class="n">1.35×</td><td>Build a scene graph, animate it and recompute world transforms for 16 frames.</td></tr><tr><td class="mono">sum</td><td class="n">0.98×</td><td class="n">1.05×</td><td class="n">1.00×</td><td>Control: build a flat i32 array, then scan it eight times.</td></tr><tr><td class="mono">calc</td><td class="n">0.89×</td><td class="n">0.91×</td><td class="n">1.00×</td><td>Generate, parse and evaluate N small arithmetic expressions.</td></tr></tbody></table></div></details>
+</figure>
+      
+<figure class="chart" id="bintrees" style="--lw:9.5rem">
+  <figcaption><h3>Binary trees, built and thrown away</h3><p class="sub">Milliseconds at depth 19, lower is better. A Goose tree lives in a pool that is freed with one store. Box and new/delete free node by node.</p></figcaption>
+  <div class="plot"><div class="grid" aria-hidden="true"><span style="left:0.000%"></span><span style="left:28.571%"></span><span style="left:57.143%"></span><span style="left:85.714%"></span></div><div class="row" tabindex="0" data-v="204 ms" data-l="Goose. A local pool per tree, released by resetting the stack top." aria-label="Goose · pool per tree: 204 ms"><span class="rlab">Goose · pool per tree</span><span class="track"><span class="bar goose pos" style="left:0;width:5.823%"></span><span class="val" style="left:calc(5.823% + 6px)">204 ms</span></span></div><div class="row" tabindex="0" data-v="235 ms" data-l="Rust. An arena of nodes linked by integer indices." aria-label="Rust · Vec arena: 235 ms"><span class="rlab">Rust · Vec arena</span><span class="track"><span class="bar pos" style="left:0;width:6.726%"></span><span class="val" style="left:calc(6.726% + 6px)">235 ms</span></span></div><div class="row" tabindex="0" data-v="407 ms" data-l="C++. A reserved vector arena with indices." aria-label="C++ · vector arena: 407 ms"><span class="rlab">C++ · vector arena</span><span class="track"><span class="bar pos" style="left:0;width:11.626%"></span><span class="val" style="left:calc(11.626% + 6px)">407 ms</span></span></div><div class="row" tabindex="0" data-v="3,103 ms" data-l="Rust. One Box allocation per node." aria-label="Rust · Box per node: 3,103 ms"><span class="rlab">Rust · Box per node</span><span class="track"><span class="bar pos" style="left:0;width:88.643%"></span><span class="val in" style="right:calc(11.357% + 6px)">3,103 ms</span></span></div><div class="row" tabindex="0" data-v="3,224 ms" data-l="C++. One new and one delete per node." aria-label="C++ · new/delete: 3,224 ms"><span class="rlab">C++ · new/delete</span><span class="track"><span class="bar pos" style="left:0;width:92.106%"></span><span class="val in" style="right:calc(7.894% + 6px)">3,224 ms</span></span></div></div>
+  <div class="axis" aria-hidden="true"><span></span><span class="ticks"><span style="left:0.000%">0</span><span style="left:28.571%">1,000</span><span style="left:57.143%">2,000</span><span style="left:85.714%">3,000</span></span></div>
+  <p class="cnote">Against arenas, the fair control, Goose is 1.16× faster than Rust and 2.0× faster than C++.</p>
+  <details class="tv"><summary>Show as a table</summary><div class="tv-wrap"><table><thead><tr><th>Implementation</th><th>ms (clang build)</th></tr></thead><tbody><tr><td class="">Goose, local pool per tree</td><td class="n">203.8</td></tr><tr><td class="">Rust, Vec arena</td><td class="n">235.4</td></tr><tr><td class="">C++, vector arena</td><td class="n">406.9</td></tr><tr><td class="">Rust, Box</td><td class="n">3,102.5</td></tr><tr><td class="">C++, new/delete</td><td class="n">3,223.7</td></tr></tbody></table></div></details>
+</figure>
+    </div>
+  </section>
+
+  <section class="sec" id="why-fast">
+    <div class="sec-head"><h2>Where the speed comes from</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md#17-about-the-speed">Tutorial §17</a></div>
+    <p class="sec-lead">Goose compiles to C, so a C programmer could write any of this by hand. The difference is that Goose makes these layouts the default and checks them for safety. Against C++ that already uses arenas and flat offsets, the lead narrows to 1.26×.</p>
+    <div class="mechs"><article class="mech"><h3>Growing is a pointer bump</h3><p>There is no malloc, no capacity check and no copy on growth, so a reference into a growing array stays valid.</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">push</span> · 64 million records, keeping a reference to every 64th. ms, lower is better.</figcaption><div class="plot"><div class="row" tabindex="0" data-v="162 ms" data-l="Goose, typed references. push: 64 million records, keeping a reference to every 64th." aria-label="Goose · typed references: 162 ms"><span class="rlab">Goose · typed references</span><span class="track"><span class="bar goose pos" style="left:0;width:8.693%"></span><span class="val" style="left:calc(8.693% + 6px)">162 ms</span></span></div><div class="row" tabindex="0" data-v="174 ms" data-l="Rust, Vec, reserved, indices. push: 64 million records, keeping a reference to every 64th." aria-label="Rust · Vec, reserved, indices: 174 ms"><span class="rlab">Rust · Vec, reserved, indices</span><span class="track"><span class="bar pos" style="left:0;width:9.353%"></span><span class="val" style="left:calc(9.353% + 6px)">174 ms</span></span></div><div class="row" tabindex="0" data-v="499 ms" data-l="C++, vector, indices. push: 64 million records, keeping a reference to every 64th." aria-label="C++ · vector, indices: 499 ms"><span class="rlab">C++ · vector, indices</span><span class="track"><span class="bar pos" style="left:0;width:26.783%"></span><span class="val" style="left:calc(26.783% + 6px)">499 ms</span></span></div><div class="row" tabindex="0" data-v="1,864 ms" data-l="C++, deque, pointers. push: 64 million records, keeping a reference to every 64th." aria-label="C++ · deque, pointers: 1,864 ms"><span class="rlab">C++ · deque, pointers</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">1,864 ms</span></span></div></div></figure></article><article class="mech"><h3>Freeing is one store</h3><p>No destructor runs when a scope ends. The stack top moves back, however many nodes the structure holds.</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">tree</span> · a complete binary tree of depth 24, summed eight times. ms, lower is better.</figcaption><div class="plot"><div class="row" tabindex="0" data-v="658 ms" data-l="Goose, pool, 4-byte links. tree: a complete binary tree of depth 24, summed eight times." aria-label="Goose · pool, 4-byte links: 658 ms"><span class="rlab">Goose · pool, 4-byte links</span><span class="track"><span class="bar goose pos" style="left:0;width:22.853%"></span><span class="val" style="left:calc(22.853% + 6px)">658 ms</span></span></div><div class="row" tabindex="0" data-v="676 ms" data-l="Rust, arena, indices. tree: a complete binary tree of depth 24, summed eight times." aria-label="Rust · arena, indices: 676 ms"><span class="rlab">Rust · arena, indices</span><span class="track"><span class="bar pos" style="left:0;width:23.460%"></span><span class="val" style="left:calc(23.460% + 6px)">676 ms</span></span></div><div class="row" tabindex="0" data-v="2,778 ms" data-l="Rust, Box per node. tree: a complete binary tree of depth 24, summed eight times." aria-label="Rust · Box per node: 2,778 ms"><span class="rlab">Rust · Box per node</span><span class="track"><span class="bar pos" style="left:0;width:96.431%"></span><span class="val in" style="right:calc(3.569% + 6px)">2,778 ms</span></span></div><div class="row" tabindex="0" data-v="2,881 ms" data-l="C++, unique_ptr. tree: a complete binary tree of depth 24, summed eight times." aria-label="C++ · unique_ptr: 2,881 ms"><span class="rlab">C++ · unique_ptr</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">2,881 ms</span></span></div></div></figure></article><article class="mech"><h3>Records are one contiguous block</h3><p>Strings, lists and records nest inline with no pointers between them, so a scan streams straight through memory.</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">strlist</span> · 8 million words kept as owned strings, scanned four times. ms, lower is better.</figcaption><div class="plot"><div class="row" tabindex="0" data-v="266 ms" data-l="Goose, inline strings. strlist: 8 million words kept as owned strings, scanned four times." aria-label="Goose · inline strings: 266 ms"><span class="rlab">Goose · inline strings</span><span class="track"><span class="bar goose pos" style="left:0;width:30.626%"></span><span class="val" style="left:calc(30.626% + 6px)">266 ms</span></span></div><div class="row" tabindex="0" data-v="778 ms" data-l="Rust, Vec&lt;String&gt;. strlist: 8 million words kept as owned strings, scanned four times." aria-label="Rust · Vec&lt;String&gt;: 778 ms"><span class="rlab">Rust · Vec&lt;String&gt;</span><span class="track"><span class="bar pos" style="left:0;width:89.630%"></span><span class="val in" style="right:calc(10.370% + 6px)">778 ms</span></span></div><div class="row" tabindex="0" data-v="868 ms" data-l="C++, vector&lt;string&gt;. strlist: 8 million words kept as owned strings, scanned four times." aria-label="C++ · vector&lt;string&gt;: 868 ms"><span class="rlab">C++ · vector&lt;string&gt;</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">868 ms</span></span></div></div></figure></article><article class="mech"><h3>Values are built where they land</h3><p>A value is constructed at its final destination through any depth of calls, so returning a growable array by value costs nothing.</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">respond</span> · 1.6 million JSON responses, built and rendered. ms, lower is better.</figcaption><div class="plot"><div class="row" tabindex="0" data-v="491 ms" data-l="Goose, inline DTO. respond: 1.6 million JSON responses, built and rendered." aria-label="Goose · inline DTO: 491 ms"><span class="rlab">Goose · inline DTO</span><span class="track"><span class="bar goose pos" style="left:0;width:36.694%"></span><span class="val" style="left:calc(36.694% + 6px)">491 ms</span></span></div><div class="row" tabindex="0" data-v="540 ms" data-l="Rust, streaming, no DTO. respond: 1.6 million JSON responses, built and rendered." aria-label="Rust · streaming, no DTO: 540 ms"><span class="rlab">Rust · streaming, no DTO</span><span class="track"><span class="bar pos" style="left:0;width:40.386%"></span><span class="val" style="left:calc(40.386% + 6px)">540 ms</span></span></div><div class="row" tabindex="0" data-v="833 ms" data-l="C++, DTO + string. respond: 1.6 million JSON responses, built and rendered." aria-label="C++ · DTO + string: 833 ms"><span class="rlab">C++ · DTO + string</span><span class="track"><span class="bar pos" style="left:0;width:62.230%"></span><span class="val" style="left:calc(62.230% + 6px)">833 ms</span></span></div><div class="row" tabindex="0" data-v="1,338 ms" data-l="Rust, DTO + String. respond: 1.6 million JSON responses, built and rendered." aria-label="Rust · DTO + String: 1,338 ms"><span class="rlab">Rust · DTO + String</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">1,338 ms</span></span></div></div></figure></article><article class="mech"><h3>Enums cost what each value holds</h3><p>A leaf and a branch each take their own size, and case functions dispatch through a jump table on the tag.</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">interp</span> · an expression tree of depth 24, evaluated eight times. ms, lower is better.</figcaption><div class="plot"><div class="row" tabindex="0" data-v="68 ms" data-l="Goose, case functions. interp: an expression tree of depth 24, evaluated eight times." aria-label="Goose · case functions: 68 ms"><span class="rlab">Goose · case functions</span><span class="track"><span class="bar goose pos" style="left:0;width:14.927%"></span><span class="val" style="left:calc(14.927% + 6px)">68 ms</span></span></div><div class="row" tabindex="0" data-v="88 ms" data-l="Rust, enum + arena. interp: an expression tree of depth 24, evaluated eight times." aria-label="Rust · enum + arena: 88 ms"><span class="rlab">Rust · enum + arena</span><span class="track"><span class="bar pos" style="left:0;width:19.265%"></span><span class="val" style="left:calc(19.265% + 6px)">88 ms</span></span></div><div class="row" tabindex="0" data-v="96 ms" data-l="C++, variant + arena. interp: an expression tree of depth 24, evaluated eight times." aria-label="C++ · variant + arena: 96 ms"><span class="rlab">C++ · variant + arena</span><span class="track"><span class="bar pos" style="left:0;width:21.202%"></span><span class="val" style="left:calc(21.202% + 6px)">96 ms</span></span></div><div class="row" tabindex="0" data-v="454 ms" data-l="Rust, enum + Box. interp: an expression tree of depth 24, evaluated eight times." aria-label="Rust · enum + Box: 454 ms"><span class="rlab">Rust · enum + Box</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">454 ms</span></span></div></div></figure></article><article class="mech"><h3>Links of 1, 2 or 4 bytes</h3><p>A relative reference stores a typed link as a small offset instead of an 8-byte pointer, so more of a structure fits in cache.</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">sexp</span> · 300,000 s-expressions parsed into a tree, peak memory. MB, lower is better.</figcaption><div class="plot"><div class="row" tabindex="0" data-v="376 MB" data-l="Goose, 4-byte links. sexp: 300,000 s-expressions parsed into a tree, peak memory." aria-label="Goose · 4-byte links: 376 MB"><span class="rlab">Goose · 4-byte links</span><span class="track"><span class="bar goose pos" style="left:0;width:19.846%"></span><span class="val" style="left:calc(19.846% + 6px)">376 MB</span></span></div><div class="row" tabindex="0" data-v="914 MB" data-l="Rust, arena + &amp;str. sexp: 300,000 s-expressions parsed into a tree, peak memory." aria-label="Rust · arena + &amp;str: 914 MB"><span class="rlab">Rust · arena + &amp;str</span><span class="track"><span class="bar pos" style="left:0;width:48.196%"></span><span class="val" style="left:calc(48.196% + 6px)">914 MB</span></span></div><div class="row" tabindex="0" data-v="968 MB" data-l="C++, arena + string_view. sexp: 300,000 s-expressions parsed into a tree, peak memory." aria-label="C++ · arena + string_view: 968 MB"><span class="rlab">C++ · arena + string_view</span><span class="track"><span class="bar pos" style="left:0;width:51.092%"></span><span class="val" style="left:calc(51.092% + 6px)">968 MB</span></span></div><div class="row" tabindex="0" data-v="1,896 MB" data-l="C++, unique_ptr + string. sexp: 300,000 s-expressions parsed into a tree, peak memory." aria-label="C++ · unique_ptr + string: 1,896 MB"><span class="rlab">C++ · unique_ptr + string</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">1,896 MB</span></span></div></div></figure></article><article class="mech"><h3>Bounds checks proven away</h3><p>Every index is checked unless the compiler proves it safe. An index type such as <code>u32 in dist</code> is validated once, when it is stored, and <code>checkfree</code> rejects a loop that still has a check.</p><figure class="chart mini" style="--lw:10.5rem"><figcaption><span class="mono">graph</span> · breadth-first search over 2 million vertices, CSR layout. ms, lower is better.</figcaption><div class="plot"><div class="row" tabindex="0" data-v="616 ms" data-l="Goose, checkfree. graph: breadth-first search over 2 million vertices, CSR layout." aria-label="Goose · checkfree: 616 ms"><span class="rlab">Goose · checkfree</span><span class="track"><span class="bar goose pos" style="left:0;width:76.027%"></span><span class="val in" style="right:calc(23.973% + 6px)">616 ms</span></span></div><div class="row" tabindex="0" data-v="761 ms" data-l="C++, CSR. graph: breadth-first search over 2 million vertices, CSR layout." aria-label="C++ · CSR: 761 ms"><span class="rlab">C++ · CSR</span><span class="track"><span class="bar pos" style="left:0;width:93.859%"></span><span class="val in" style="right:calc(6.141% + 6px)">761 ms</span></span></div><div class="row" tabindex="0" data-v="811 ms" data-l="Rust, CSR. graph: breadth-first search over 2 million vertices, CSR layout." aria-label="Rust · CSR: 811 ms"><span class="rlab">Rust · CSR</span><span class="track"><span class="bar pos" style="left:0;width:100.000%"></span><span class="val in" style="right:calc(0.000% + 6px)">811 ms</span></span></div></div></figure></article><article class="mech"><h3>Direct calls, inlined on request</h3><p>Function values exist only at compile time, so every call is direct and higher-order code compiles to the loop it looks like. <code>inline fn</code> inlines a function at every call, whatever its size, and asks the C compiler to when Goose cannot do it itself. <code>simd fn</code> adds AVX2 and AVX-512 versions and runs the widest one the CPU has.</p><pre class="code" aria-label="Goose code"><code><span class="tk">let</span> evens = xs.filter() { it % <span class="tn">2</span> == <span class="tn">0</span> };     <span class="tc">// one loop, writing into evens</span>
+<span class="tk">inline</span> <span class="tk">fn</span> <span class="td">lerp</span>(a: <span class="tt">f64</span>, b: <span class="tt">f64</span>, t: <span class="tt">f64</span>) -&gt; <span class="tt">f64</span> { a + (b - a) * t }
+<span class="tk">simd</span> <span class="tk">fn</span> <span class="td">encode</span>(out: <span class="tt">u8</span>[&gt;..]&amp;, src: <span class="tt">u8</span>[:]) { ... }</code></pre><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C / C++</dt><dd><code>inline</code> is mostly about linkage. Forcing it takes <code>__forceinline</code> or <code>always_inline</code>, which differ by compiler, and <code>std::function</code> and virtual calls stay indirect.</dd></div><div><dt>Rust</dt><dd><code>#[inline(always)]</code> is the closest match. Closures passed as generics inline the same way, while <code>Box&lt;dyn Fn&gt;</code> stays indirect.</dd></div></dl></article></div>
+    <details class="tv"><summary>Show every figure in this section as a table</summary><div class="tv-wrap"><table><thead><tr><th>Mechanism</th><th>Benchmark</th><th>Implementation</th><th>Result</th></tr></thead><tbody><tr><td>Growing is a pointer bump</td><td class="mono">push</td><td>Goose · typed references</td><td class="n">162.0 ms</td></tr><tr><td>Growing is a pointer bump</td><td class="mono">push</td><td>Rust · Vec, reserved, indices</td><td class="n">174.3 ms</td></tr><tr><td>Growing is a pointer bump</td><td class="mono">push</td><td>C++ · vector, indices</td><td class="n">499.1 ms</td></tr><tr><td>Growing is a pointer bump</td><td class="mono">push</td><td>C++ · deque, pointers</td><td class="n">1,863.5 ms</td></tr><tr><td>Freeing is one store</td><td class="mono">tree</td><td>Goose · pool, 4-byte links</td><td class="n">658.3 ms</td></tr><tr><td>Freeing is one store</td><td class="mono">tree</td><td>Rust · arena, indices</td><td class="n">675.8 ms</td></tr><tr><td>Freeing is one store</td><td class="mono">tree</td><td>Rust · Box per node</td><td class="n">2,777.8 ms</td></tr><tr><td>Freeing is one store</td><td class="mono">tree</td><td>C++ · unique_ptr</td><td class="n">2,880.6 ms</td></tr><tr><td>Records are one contiguous block</td><td class="mono">strlist</td><td>Goose · inline strings</td><td class="n">265.8 ms</td></tr><tr><td>Records are one contiguous block</td><td class="mono">strlist</td><td>Rust · Vec&lt;String&gt;</td><td class="n">777.9 ms</td></tr><tr><td>Records are one contiguous block</td><td class="mono">strlist</td><td>C++ · vector&lt;string&gt;</td><td class="n">867.9 ms</td></tr><tr><td>Values are built where they land</td><td class="mono">respond</td><td>Goose · inline DTO</td><td class="n">491.0 ms</td></tr><tr><td>Values are built where they land</td><td class="mono">respond</td><td>Rust · streaming, no DTO</td><td class="n">540.4 ms</td></tr><tr><td>Values are built where they land</td><td class="mono">respond</td><td>C++ · DTO + string</td><td class="n">832.7 ms</td></tr><tr><td>Values are built where they land</td><td class="mono">respond</td><td>Rust · DTO + String</td><td class="n">1,338.1 ms</td></tr><tr><td>Enums cost what each value holds</td><td class="mono">interp</td><td>Goose · case functions</td><td class="n">67.8 ms</td></tr><tr><td>Enums cost what each value holds</td><td class="mono">interp</td><td>Rust · enum + arena</td><td class="n">87.5 ms</td></tr><tr><td>Enums cost what each value holds</td><td class="mono">interp</td><td>C++ · variant + arena</td><td class="n">96.3 ms</td></tr><tr><td>Enums cost what each value holds</td><td class="mono">interp</td><td>Rust · enum + Box</td><td class="n">454.2 ms</td></tr><tr><td>Links of 1, 2 or 4 bytes</td><td class="mono">sexp</td><td>Goose · 4-byte links</td><td class="n">376.2 MB</td></tr><tr><td>Links of 1, 2 or 4 bytes</td><td class="mono">sexp</td><td>Rust · arena + &amp;str</td><td class="n">913.6 MB</td></tr><tr><td>Links of 1, 2 or 4 bytes</td><td class="mono">sexp</td><td>C++ · arena + string_view</td><td class="n">968.5 MB</td></tr><tr><td>Links of 1, 2 or 4 bytes</td><td class="mono">sexp</td><td>C++ · unique_ptr + string</td><td class="n">1,895.6 MB</td></tr><tr><td>Bounds checks proven away</td><td class="mono">graph</td><td>Goose · checkfree</td><td class="n">616.5 ms</td></tr><tr><td>Bounds checks proven away</td><td class="mono">graph</td><td>C++ · CSR</td><td class="n">761.1 ms</td></tr><tr><td>Bounds checks proven away</td><td class="mono">graph</td><td>Rust · CSR</td><td class="n">810.9 ms</td></tr></tbody></table></div></details>
+  </section>
+
+  <section class="sec" id="extras">
+    <div class="sec-head"><h2>Also in the box</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md">Tutorial §12 to §16</a></div>
+    <div class="extras"><article class="extra"><h3>Errors that return from a distance</h3><pre class="code" aria-label="Goose code"><code><span class="tk">guard</span> ok <span class="tk">else</span> { <span class="tk">return</span> [], <span class="tb">str</span>(<span class="ts">"bad age: "</span>, line) <span class="tk">from</span> load; }</code></pre><p>Returns straight out of <code>load</code>, however many calls deep. The compiler checks every use, so there is no unwinder, no exception and no <code>Result</code> type.</p><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++</dt><dd>Exceptions need an unwinder and unwind tables, and any call might throw.</dd></div><div><dt>Rust</dt><dd>A <code>Result</code> travels up through <code>?</code> at every call in between.</dd></div></dl></article><article class="extra"><h3>Threads that share nothing</h3><pre class="code" aria-label="Goose code"><code><span class="tk">thread_fn</span> worker() {
+    <span class="tk">let</span> job = <span class="tb">qget</span>&lt;<span class="tt">Job</span>&gt;();      <span class="tc">// blocks on the Job queue</span>
+}</code></pre><p>Each worker is compiled as its own program with its own memory. Values cross typed queues as a memcpy, so data races, locks and atomics do not exist. A contained worker that aborts ends alone, and the program carries on.</p><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++</dt><dd>Threads share memory, so correctness rests on locks, atomics and memory orderings.</dd></div><div><dt>Rust</dt><dd>Sharing is checked through <code>Send</code>, <code>Sync</code> and <code>Mutex</code>, but it is still shared memory.</dd></div></dl></article><article class="extra"><h3>Pools for lifetimes that don&#x27;t nest</h3><pre class="code" aria-label="Goose code"><code><span class="tk">reusable</span> <span class="tk">var</span> pool: <span class="tt">Item</span>[&gt;..] = [];
+<span class="tk">let</span> s0 = pool.alloc_index(<span class="tt">Item</span> { <span class="tn">10</span>, <span class="tn">1.0</span> });
+pool.free(s0);                                  <span class="tc">// the slot goes on a freelist</span>
+<span class="tk">let</span> s1 = pool.alloc_index(<span class="tt">Item</span> { <span class="tn">11</span>, <span class="tn">2.0</span> });    <span class="tc">// and is handed out again</span></code></pre><p>Caches, graphs and anything deleted in any order live in a reusable pool, which hands out slots and takes them back. A stale slot reads another valid value of the right type, never freed memory.</p><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C / C++</dt><dd>A stale pointer into a recycled slot is undefined behaviour, and may see another type or freed memory.</dd></div><div><dt>Rust</dt><dd>The <code>slotmap</code> crate catches stale keys with a generation counter, which Goose leaves to you.</dd></div></dl></article><article class="extra"><h3>Saving is writing bytes</h3><pre class="code" aria-label="Goose code"><code><span class="tk">var</span> image: <span class="tt">u8</span>[&gt;..] = tree.to_bytes();
+<span class="tk">var</span> loaded, ok = from_bytes&lt;<span class="tt">Node</span>[&gt;..]&gt;(image);   <span class="tc">// every link checked first</span></code></pre><p>A structure linked by relative references means the same thing at any address. Saving it writes its bytes, and loading verifies every tag, length and link, so a corrupt file is a <code>false</code>, never a wild reference.</p><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++ · Rust</dt><dd>Pointers mean nothing on disk, so data goes through a serializer such as protobuf or serde, or through unsafe casts.</dd></div></dl></article><article class="extra"><h3>Code generated per field or variant</h3><pre class="code" aria-label="Goose code"><code><span class="tk">fn</span> <span class="td">visit_fields</span>&lt;<span class="tt">T</span>, <span class="tt">F</span>&gt;(value: <span class="tt">T</span>&amp;) {
+    <span class="tk">const</span> <span class="tk">for</span> &lt;<span class="tt">N</span>, <span class="tt">A</span>&gt; <span class="tk">in</span> fields&lt;<span class="tt">T</span>&gt; { <span class="tt">F</span>(<span class="tt">N</span>, &amp;value.<span class="tt">A</span>); }
+}</code></pre><p><code>const for</code> repeats code once for each field of a struct, variant of an enum or listed type, at compile time. Serializers and visitors need no reflection at run time.</p><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>Rust</dt><dd>Derive macros do the same, written as separate procedural-macro crates.</dd></div><div><dt>C++</dt><dd>Usually macros or hand-written visitors.</dd></div></dl></article><article class="extra"><h3>Plain C in, plain C out</h3><pre class="code" aria-label="Goose code"><code><span class="tc">// C, called from Goose</span>
+<span class="tk">extern</span> <span class="tk">fn</span> <span class="td">hypot</span>(x: <span class="tt">f64</span>, y: <span class="tt">f64</span>) -&gt; <span class="tt">f64</span>;
+<span class="tc">// Goose, called from C</span>
+<span class="tk">export</span> <span class="ts">"c_add"</span> <span class="tk">fn</span> <span class="td">add</span>(a: <span class="tt">i32</span>, b: <span class="tt">i32</span>) -&gt; <span class="tt">i32</span> { a + b }</code></pre><p>A whole program compiles to one C file and calls C directly. <code>export fn</code> goes the other way, so Goose can be a library inside a C or C++ program. The bundled TinyCC runs a program in-process with no build step.</p><dl class="vs" aria-label="Compared with C, C++ and Rust"><div><dt>C++</dt><dd><code>extern "C"</code> works in both directions.</dd></div><div><dt>Rust</dt><dd>Calling C needs an <code>unsafe extern</code> block, and exporting needs <code>no_mangle</code> with <code>extern "C"</code>.</dd></div></dl></article></div>
+  </section>
+
+  <section class="sec" id="around">
+    <div class="sec-head"><h2>Around the language</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/packages.md">docs/packages.md</a></div>
+    <div class="around">
+      <div class="blk">
+        <h3>A standard library of fifteen modules</h3>
+        <p>From <code>std</code>, <code>dictionary</code> and <code>math</code> to <code>json</code>, <code>csv</code>, <code>regex</code> and <code>base64</code>. Graphics on SDL3's GPU API, audio, Box3D physics and Nuklear UI come as packages the compiler fetches the first time a program imports them.</p>
+      </div>
+      <div class="blk">
+        <h3>31 sample programs</h3>
+        <p>From a sieve, a sudoku solver and Huffman coding to a raytracer, a JSON parser, a threaded Mandelbrot, a spinning GPU cube, boxes falling under physics, a to-do app, mini Minecraft and mini Doom.</p>
+      </div>
+      <div class="blk">
+        <h3>Tools</h3>
+        <p><code>goose build</code> makes an executable with whatever C compiler it finds. Packages come from git at a pinned tag or commit. <code>goose lsp</code> is a language server for VS Code, Neovim, Helix and Emacs, with hover, go to definition, rename and inlay hints, and <code>--debug</code> adds overflow and range checks.</p>
+        <pre class="code" aria-label="Goose code"><code><span class="tk">import</span> mylib <span class="tk">from</span> <span class="ts">"joe/mylib@v2"</span>;      <span class="tc">// fetched from GitHub at tag v2</span></code></pre>
+      </div>
+      <div class="blk">
+        <h3>The project</h3>
+        <p>Apache 2.0 licensed. Designed by Wouter van Oortmerssen, who also created the Lobster language. The README says the compiler, about 30,000 lines of C++, was written almost entirely by Claude Fable from his design. CI runs the test suite on Windows, macOS and Linux, plus a sanitizer job.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="sec" id="costs">
+    <div class="sec-head"><h2>What it asks of you</h2><a class="ref" href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md#18-limitations">Tutorial §18</a></div>
+    <div class="costs"><div class="cost"><h3>You decide where data lives</h3><p>Usually the function that builds a value owns it. When lifetimes don&#x27;t nest, you use a reusable pool.</p></div><div class="cost"><h3>Recursion takes its storage as a parameter</h3><p>A recursive function can&#x27;t keep growable data across its recursive call, so it is passed a pool or a builder.</p></div><div class="cost"><h3>Variable-size elements are walked, not indexed</h3><p>An array of variable-size records is sequential, unless you keep an index of references beside it.</p></div><div class="cost"><h3>No escaping closures or function pointers</h3><p>Function values exist only at compile time, dispatch is by enum tag, and the whole program compiles at once.</p></div><div class="cost"><h3>Freed pool slots can go stale</h3><p>A slot you gave back and still name reads whatever reuses it. That is a logic bug to avoid, never memory corruption.</p></div><div class="cost"><h3>It is new</h3><p>The specification is a draft and changes most weeks. Prebuilt releases started in October 2026.</p></div></div>
+  </section>
+
+  <section class="sec" id="try">
+    <div class="sec-head"><h2>Try it</h2><a class="ref" href="https://github.com/aardappel/goose/releases">Releases</a></div>
+    <div class="two">
+      <ol class="steps">
+        <li><span><b>Download</b> <code>goose-v2026.3</code> for Linux, macOS or Windows from the <a href="https://github.com/aardappel/goose/releases">Releases page</a>.</span></li>
+        <li><span><b>Save</b> this as <code>hello.goose</code>.</span><pre class="code" aria-label="Goose code"><code><span class="tk">fn</span> <span class="td">main</span>() {
+    <span class="tb">print</span>(<span class="ts">"hello, goose"</span>);
+}</code></pre></li>
+        <li><span><b>Run</b> it in-process, or build a native executable.</span><pre class="code"><code>goose run hello.goose
+goose build hello.goose</code></pre></li>
+      </ol>
+      <nav class="links" aria-label="Where to read next">
+        <a href="https://github.com/aardappel/goose/blob/master/docs/tutorial.md"><b>Tutorial</b><span>The friendly introduction, by example.</span></a>
+        <a href="https://github.com/aardappel/goose/blob/master/docs/reference.md"><b>Language reference</b><span>Every rule, each with an example.</span></a>
+        <a href="https://github.com/aardappel/goose/tree/master/samples"><b>31 sample programs</b><span>From a tour of the language to a JSON parser and a mini Doom.</span></a>
+        <a href="https://github.com/aardappel/goose/blob/master/docs/goose_spec.md"><b>Specification</b><span>The exact rules, for when something won't compile.</span></a>
+      </nav>
+    </div>
+  </section>
+
+  <footer>
+    <p>An unofficial explainer, not affiliated with the Goose project. Figures come from the Goose repository at v2026.3: the README, the tutorial, the specification, and <code>bench/results.md</code> from the run of 16 October 2026 on a Ryzen 9 9950X3D under Windows 11.</p>
+    <p>Every byte layout on this page was printed by the Goose compiler.</p>
+  </footer>
+</div>
+
+<div id="tip" class="tip" role="tooltip" hidden></div>
+<script>
+(() => {
+  const root = document.documentElement;
+  const buttons = document.querySelectorAll(".themes button");
+  let host = root.getAttribute("data-theme");
+  let choice = "auto";
+  try { choice = localStorage.getItem("goose-poster-theme") || "auto"; } catch (e) {}
+  function apply() {
+    if (choice === "auto") {
+      if (host) root.setAttribute("data-theme", host); else root.removeAttribute("data-theme");
+    } else if (root.getAttribute("data-theme") !== choice) {
+      root.setAttribute("data-theme", choice);
+    }
+    buttons.forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.choice === choice)));
+  }
+  new MutationObserver(() => {
+    const cur = root.getAttribute("data-theme");
+    if (choice === "auto") { host = cur; return; }
+    if (cur !== choice) { host = cur; root.setAttribute("data-theme", choice); }
+  }).observe(root, { attributes: true, attributeFilter: ["data-theme"] });
+  buttons.forEach((b) => b.addEventListener("click", () => {
+    choice = b.dataset.choice;
+    try { localStorage.setItem("goose-poster-theme", choice); } catch (e) {}
+    apply();
+  }));
+  apply();
+})();
+(() => {
+  const tip = document.getElementById("tip");
+  function place(x, y) {
+    const r = tip.getBoundingClientRect();
+    let left = x + 14, top = y + 16;
+    if (left + r.width > window.innerWidth - 8) left = x - r.width - 14;
+    if (top + r.height > window.innerHeight - 8) top = y - r.height - 12;
+    tip.style.left = Math.max(8, left) + "px";
+    tip.style.top = Math.max(8, top) + "px";
+  }
+  function show(el) {
+    const v = document.createElement("strong");
+    v.textContent = el.dataset.v;
+    const l = document.createElement("span");
+    l.textContent = el.dataset.l;
+    tip.replaceChildren(v, l);
+    tip.hidden = false;
+  }
+  document.querySelectorAll(".row[data-v]").forEach((el) => {
+    el.addEventListener("pointerenter", (e) => { show(el); place(e.clientX, e.clientY); });
+    el.addEventListener("pointermove", (e) => place(e.clientX, e.clientY));
+    el.addEventListener("pointerleave", () => { tip.hidden = true; });
+    el.addEventListener("focus", () => {
+      show(el);
+      const r = el.getBoundingClientRect();
+      place(r.left + r.width * 0.6, r.top + r.height);
+    });
+    el.addEventListener("blur", () => { tip.hidden = true; });
+  });
+})();
+</script>
+
+</body></html>

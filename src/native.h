@@ -400,13 +400,19 @@ inline bool BuildCMakePart(const Ast &ast, int pkg, const Builder &b, bool wantj
         return false;
     if (b.opts.dryrun) return true;
     string rsp;
-    for (auto i : CMakeLinkClosure(builddir, "goose_linkprobe")) {
-        // A cc-style driver reads its response file with Unix quoting, where a
-        // backslash escapes the next character: clang on Windows took the
-        // Ninja build's pkg\cmk.lib for pkgcmk.lib. Forward slashes do on
-        // Windows too.
-        if (b.tc.style != "msvc") for (auto &c : i) if (c == '\\') c = '/';
-        Append(rsp, i.find(' ') != string::npos ? cat("\"", i, "\"") : i, "\n");
+    for (auto &i : CMakeLinkClosure(builddir, "goose_linkprobe")) {
+        if (b.tc.style == "msvc") {
+            Append(rsp, i.find(' ') != string::npos ? cat("\"", i, "\"") : i, "\n");
+        } else {
+            // cc-style response files consume backslashes as escapes even
+            // without spaces. Preserve CMake's Windows archive paths too.
+            rsp += '"';
+            for (auto c : i) {
+                if (c == '\\' || c == '"') rsp += '\\';
+                rsp += c;
+            }
+            rsp += "\"\n";
+        }
     }
     if (!WriteFileIfChanged(out.rsp, rsp)) throw CompileError { cat("cannot write ", out.rsp) };
     return true;

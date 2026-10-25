@@ -188,3 +188,10 @@ GS_API int64_t gs_os_time_ns(void);
 GS_API int64_t gs_os_clock_ns(void);
 GS_API void gs_os_sleep_ms(int64_t ms);
 GS_API uint64_t gs_os_random_u64(void);
+/* os.trim_memory: discards unused complete pages of this thread program's
+   data stacks. Defined with the region registry it walks (runtime_impl.h),
+   but declared here like the other os primitives, so that no prototype is
+   emitted for it. For generated code only, whose callers write back their
+   cached tops first; C called from Goose must not call it. 0 means an OS
+   request failed; a top outside its region panics. */
+GS_API uint8_t gs_trim_memory(void);

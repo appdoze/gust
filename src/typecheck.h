@@ -151,11 +151,9 @@ struct TypeCheck {
 
     // What a nested function's body can name outside its own scopes (§7.5),
     // as its declaration sees it: the variables in scope there, innermost
-    // first, each with the index it holds in `vars` while it is in scope;
-    // and every function declared in the blocks around the declaration,
-    // before or after it, then those the declaring body sees from outside,
-    // each with the environment it is declared in. Kept after the declaring
-    // scope ends, for a function whose value leaves it.
+    // first, and every function declared in the blocks around the
+    // declaration, before or after it, then those the declaring body sees
+    // from outside, each with the environment it is declared in.
     // A nested function a body can call, with the environment it is
     // declared in, the scope declaring it (its Scope::serial) and its place
     // among that scope's declarations: those of one name in one scope are
@@ -167,10 +165,8 @@ struct TypeCheck {
         int order = 0;
     };
     struct DeclSite {
-        vector<pair<VarDef *, int>> vars;
+        vector<VarDef *> vars;
         vector<OuterFn> fns;
-        int scope = 0;               // The declaring scope, and its Scope::serial.
-        int serial = 0;
     };
 
     // A function body's exits as its caller's flow sees them (§4.4): the
@@ -1384,21 +1380,19 @@ struct TypeCheck {
     // scopes, innermost first: a nested function's are those in scope where
     // it is declared, a function value's those of the frame it is written
     // in as they are at the call it is written at, then those that frame
-    // names outside its own. f gets each with its index in `vars` while in
-    // scope, and the frame whose declaration site lists it (-1 for a frame's
-    // current scopes); the walk stops when f returns true, and returns
-    // whether it did.
+    // names outside its own. The walk stops when f returns true, and
+    // returns whether it did.
     template <typename F> bool ForOuterVars(int fi, F f) {
         for (;;) {
             auto &fr = frames[fi];
             if (fr.decl) {
-                for (auto [v, i] : fr.decl->vars) if (f(v, i, fi)) return true;
+                for (auto v : fr.decl->vars) if (f(v)) return true;
                 return false;
             }
             auto p = fr.lexframe;
             if (p < 0) return false;
             for (auto i = frames[p + 1].varbase - 1; i >= frames[p].varbase; i--)
-                if (f(vars[i], i, -1)) return true;
+                if (f(vars[i])) return true;
             fi = p;
         }
     }
@@ -1426,7 +1420,6 @@ struct TypeCheck {
     }
 
     bool InScope(VarDef *v, int idx) { return idx < (int)vars.size() && vars[idx] == v; }
-    bool ScopeEnded(const DeclSite &d);
     void DeclareLocalFn(FnDecl *fd);
     int FrameOfSpec(FnSpec *sp);
     int LexFrame(FnSpec *env);

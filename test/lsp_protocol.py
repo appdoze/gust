@@ -1,12 +1,20 @@
 """The language server, `goose lsp` (docs/design/language_server.md), driven
 over its own protocol: a client of this runner's starts it on a pipe,
-initializes, opens the fixtures in test/lsp/, waits for their diagnostics,
-and asks what each fixture's `// lsp:` lines say to ask, comparing the
-answers. Then it edits a document into an error and back, checking the
+initializes with test/lsp/basics.goose as its entry file, opens it, waits
+for its diagnostics, and asks what its `// lsp:` lines say to ask, comparing
+the answers. Then it edits the document into an error and back, checking the
 diagnostics follow, with the edits arriving in a burst so that one analysis
-is cancelled by the next, and sees the server out."""
+is cancelled by the next, and asks a hover right behind a change, which must
+answer from the changed text. It opens the other fixtures of test/lsp/, and
+errors_tc/recovery/inside_braces.goose and exemplar_unchecked.goose, waiting
+for their diagnostics and asking their queries; opens and closes
+roots_lib.goose and the roots_app fixtures importing it as roots come and
+go; and closes the entry file while helper.goose, which only it reached,
+stays open. A second client, with two_a.goose and two_b.goose as its entry
+files, renames a function both import and finds its references and callers
+in both programs. Each server is seen out. The row of docs/testing.md on
+this file has the details."""
 import json
-import os
 import re
 import subprocess
 import time
