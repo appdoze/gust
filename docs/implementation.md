@@ -1,3 +1,4 @@
+<!-- Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. -->
 # The Goose compiler: implementation notes
 
 <details>
@@ -6040,8 +6041,12 @@ committed on fault by a vectored handler that tells a commit from an
 overrun. When the system refuses a commit (because its commit limit is
 reached), the handler reports it as out of memory. macOS also commits on
 fault, through the runtime's signal handler: the whole region is mapped
-`PROT_NONE`, and the handler opens the usable part 1 MB at a time, starting
-from the page that faulted. Linux reserves with overcommit and protects only
+`PROT_NONE`, and the handler opens the usable part a chunk at a time,
+starting from the page that faulted. On both, a chunk is as large as what
+the region has committed already, from 16 KB up to 1 MB (Gust; Goose
+commits 1 MB at a time), so a stack that stays small commits little: a
+server with a thread per connection holds several stacks per connection,
+most of them a few bytes deep. Linux reserves with overcommit and protects only
 the gap. Runtime C therefore writes to a stack only in user mode (`memcpy`,
 `gs_bld_append`) and never through a system call, because a system call
 would fail on an unopened page instead of faulting. A debugger sees each

@@ -1823,6 +1823,7 @@ def main():
                     r.ok(f"runtime {name}")
         r.show_task(runtime_lifecycle, "runtime_threads_lifecycle", "threads")
         r.show_task(runtime_lifecycle, "runtime_trim_memory", "runtime")
+        r.show_task(runtime_lifecycle, "runtime_commit_chunks", "runtime")
 
         # The same coverage test through clang, release and debug. A compiler
         # that accepts more C than the standard does is not what checks the
@@ -2391,6 +2392,16 @@ def main():
             r.fail("native builder", str(e))
     if cc:
         r.show_task(native_builder)
+
+    def ffi_stack_writes():
+        from ffi_stack_writes import check_ffi_stack_writes
+        try:
+            check_ffi_stack_writes(exe, gendir)
+            r.ok("ffi stack writes: a system call in C writes into Gust memory, on main and in a worker")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("ffi stack writes", str(e))
+    if cc:
+        r.show_task(ffi_stack_writes)
 
     show_goose_in_goose()
 

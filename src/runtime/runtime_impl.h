@@ -1,3 +1,4 @@
+/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. */
 /* Goose runtime — what runtime.h declares and leaves to the runtime: aborts,
    the data stack regions and the faults that reach them, slice pool
    freelists, byte search, text forms and printing. Follows runtime.h, in a
@@ -206,6 +207,21 @@ typedef struct {
        reused (MADV_FREE_REUSE) as it reopens them. */
     uint8_t *reuse_lo, *reuse_hi;
 } gs_region;
+/* Windows and macOS commit a region from the fault handler as it grows: as
+   much at a time as the region has committed already, from GS_COMMIT_MIN up
+   to GS_COMMIT_CHUNK, starting at the page that faulted. A stack that stays
+   small, as most of a many-threaded server's do, commits 16 KB (the
+   largest page size, macOS's on arm64) rather than a megabyte of charge it
+   never touches; one that grows large reaches 1 MB chunks after six more
+   faults. (Gust: a fixed 1 MB chunk in Goose.) */
+#define GS_COMMIT_MIN (16u << 10)
+#define GS_COMMIT_CHUNK (1u << 20)
+static inline size_t gs_commit_size(const gs_region *r, const uint8_t *page) {
+    size_t have = (size_t)(r->committed - r->base);
+    size_t n = have < GS_COMMIT_MIN ? GS_COMMIT_MIN : have > GS_COMMIT_CHUNK ? GS_COMMIT_CHUNK : have;
+    if (page + n > r->base + r->usable) n = (size_t)(r->base + r->usable - page);
+    return n;
+}
 static GS_TLS gs_region *gs_regions;
 static GS_TLS volatile long gs_nregions;
 /* The registry's size: the thread program's region count, as the compiler
@@ -301,7 +317,6 @@ GS_API void gs_release_regions(void) {
 #include <fcntl.h>
 
 static size_t gs_page_size = 0;
-#define GS_COMMIT_CHUNK (1u << 20)
 /* What each thread program keeps of its native stack for reporting that
    stack's overflow (gs_native_stack_init). */
 #define GS_STACK_GUARANTEE (64u << 10)
@@ -327,9 +342,7 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
                commit, say so. Within the gap: a data stack overran. */
             if (hit < r->base + r->usable) {
                 uint8_t *page = (uint8_t *)((size_t)hit & ~(gs_page_size - 1));
-                size_t n = GS_COMMIT_CHUNK;
-                if (page + n > r->base + r->usable)
-                    n = (size_t)(r->base + r->usable - page);
+                size_t n = gs_commit_size(r, page);
                 if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
                     if (page + n > r->committed) r->committed = page + n;
                     return EXCEPTION_CONTINUE_EXECUTION;
@@ -435,14 +448,12 @@ static size_t gs_page_size = 0;
    already requires, so a system call never meets an unopened page. */
 #if defined(__APPLE__) && defined(MADV_FREE_REUSABLE) && defined(MADV_FREE_REUSE)
 #define GS_POSIX_COMMIT_ON_FAULT 1
-#define GS_COMMIT_CHUNK (1u << 20)
 
 /* Opens the chunk at hit (clamped to the region), declaring any of it
    gs_trim_memory left reusable reused; whether it could. */
 static int gs_commit_chunk(gs_region *r, uint8_t *hit) {
     uint8_t *page = (uint8_t *)((uintptr_t)hit & ~(uintptr_t)(gs_page_size - 1));
-    size_t n = GS_COMMIT_CHUNK;
-    if (page + n > r->base + r->usable) n = (size_t)(r->base + r->usable - page);
+    size_t n = gs_commit_size(r, page);
     /* Writable first: XNU refuses reuse advice on a page that is not. */
     if (mprotect(page, n, PROT_READ | PROT_WRITE)) return 0;
     if (page < r->reuse_hi && page + n > r->reuse_lo) {
