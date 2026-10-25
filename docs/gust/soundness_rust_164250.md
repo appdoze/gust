@@ -1,19 +1,29 @@
 # rust-lang/rust#164250 and Gust
 
 Checked on 2026-10-25. The issue: [struct's lifetime requirements can be
-bypassed via covariant field assignment](https://github.com/rust-lang/rust/issues/164250).
+bypassed via covariant field assignment](https://github.com/rust-lang/rust/issues/164250),
+opened 2026-10-13.
 
 ## Summary
 
 - **The Rust bug is open and unfixed.** It is labelled `I-unsound` and
-  `P-high`; no pull request fixes it yet. The reports in the issue show it
-  in every Rust from 1.4.0 (2015) to stable 1.99.0 and nightly 1.101.0. On
-  this machine it reproduces on stable 1.96.0 and nightly 1.94.0 (below). No
-  Rust version is safe from it, so updating Rust would not help.
+  `P-high` (also `A-borrow-checker`, `A-destructors`, `A-lifetimes`,
+  `A-variance`, `T-types`). A fix is proposed in
+  [rust-lang/rust#164277](https://github.com/rust-lang/rust/pull/164277),
+  open and not merged. The issue reports it on the current nightly and on
+  stable "at least down to 1.85.0"; a commenter's variant has compiled
+  "ever since 1.18.0 (2017)". On this machine it reproduces on stable 1.96.0
+  and nightly 1.94.0 (below). No released Rust is known to be free of it, so
+  updating Rust would not help until that fix ships.
 - **It does not touch Gust's build.** The compiler, runtime, tests and CI are
-  C++, C and Python; Rust appears only in `bench/rust/`, the comparison
-  programs `bench/run_bench.py` times against Gust, and none of them has a
-  `Drop` implementation or a lifetime bound.
+  C++, C and Python, and no step of a Gust build or test run invokes rustc
+  or cargo. Rust appears only in `bench/rust/` (31 files, from Goose), the
+  comparison programs `bench/run_bench.py` and the `bench/*/compare.py`
+  scripts time against Gust. None of them implements `Drop` or bounds a
+  lifetime parameter; four declare lifetime parameters
+  (`calc_box.rs`, `calc_arena.rs`, `sexp_arena.rs`, `words_open.rs`), with no
+  code that runs later and relies on them, so the bug has nothing to exploit
+  there either.
 - **Gust's language has no equivalent.** The bug needs three things Gust's
   design leaves out, and the check that guards its references is applied to
   every store rather than to a type. Twenty-eight programs that try to
@@ -24,6 +34,18 @@ bypassed via covariant field assignment](https://github.com/rust-lang/rust/issue
   `docs/design/scope_exit_cleanup.md` studies them), destruction order
   within a scope becomes part of the store rule. That is the gap Rust's
   drop check exists for.
+
+## What is guaranteed, and by what
+
+| claim | what makes it true | how it is checked |
+|---|---|---|
+| a Gust program cannot store a reference where it would outlive its target, through any channel the issue uses | the store rule, a rule of the language (spec §9.2), enforced by Gust's type checker (`src/typecheck_exprs.h:1113`, the "which does not outlive the destination" check) | 16 rejection fixtures `test/errors_tc/covariant_store_*.goose` and the valid-stores program `test/lifetimes/holder_stores_valid.goose`, run by `test/run_tests.py` on every platform |
+| the Rust bug cannot affect the Gust compiler or the programs it builds | the compiler is C++ built by MSVC, clang or gcc; generated programs are C built by the same; no build or test step runs rustc | the repository's build files (`CMakeLists.txt`, `.github/workflows/`) and `test/run_tests.py` call no Rust tool |
+| the Rust comparison programs are not exposed to it | none has `Drop` or a lifetime bound | searched: no `impl Drop`, no `T: 'a` or `'a: 'b` in `bench/rust/` |
+
+What this does not cover: bugs in the C and C++ compilers that build Gust,
+which no Gust rule can see; and Gust language features that do not exist
+yet (destructors, below).
 
 ## The Rust bug
 
