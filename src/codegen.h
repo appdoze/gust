@@ -1088,6 +1088,7 @@ struct CodeGen {
     bool HasSelfRelRef(TypeExpr *t);
     void NoSelfRelCopy(Node *val);
     bool HasUninitSlots(TypeExpr *t);
+    void ZeroVariantTail(const string &base, EnumInst *ei, int vi, TypeExpr *et);
 
     // Byte span of the largest fixed value that can be a relative
     // reference's root array (§3.9). Roots are variables, so this is the

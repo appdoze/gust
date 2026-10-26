@@ -864,7 +864,10 @@ array/pool* as the location storing it.
   would be the one place where a reference could enter the program
   unproven (§9.4). Verification is also why a `bytes_of` view is never
   writable: bytes written through it would be links the checker never
-  proved.
+  proved. *Gust:* an image holds no byte the program did not write: the
+  bytes of a fixed-mode ADT value that its variant does not use are zero
+  however the value was built, as are a limited array's slots past its
+  length, so that an image never carries what the stack held before.
 
 **Pool-relative (`in pool`).** `pool` names a *global* `var` (or `reusable
 var`) of a grow-only resizable type (`[>..]`) whose storage can hold a `T`

@@ -98,6 +98,14 @@ git log upstream/master..main
   is used after its slot was freed. `docs/goose_spec.md` 5.4 and
   `docs/reference.md` 14 say so; `test/runtime/pool_ref_*.goose` (new);
   `compare/safety/expected.json` holds probe 9 to it.
+- `src/codegen.h`, `src/codegen_construct.h`, `src/codegen_values.h`,
+  `src/codegen_nodes.h`: a fixed-mode ADT value built in a C local had the
+  bytes its variant does not use (all of the payload, for a variant without
+  fields) uninitialized, which `to_bytes` then wrote out: stack contents in
+  a file or on a socket, and different images from `-O0` and `-O2`. They
+  are zeroed now. Found by `test/storage/fuzz_from_bytes.goose`;
+  `test/storage/serialize_variant_tails.goose` (new); `docs/goose_spec.md`
+  §3.9 says so.
 
 ## Standard library
 

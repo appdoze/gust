@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — codegen's construction (definitions of CodeGen members,
 // codegen.h): values written front-to-back at a data stack's top (§4.2,
 // §4.3), relative-reference stores (§3.9), and the literals.
@@ -247,6 +248,17 @@ inline void CodeGen::EmitRelSelfStore(const string &stk, TypeExpr *rt, int64_t f
 // indeterminate bytes is what MSVC 19.51 exploits to miscompile the reads of
 // the bytes that were written, and copying one nothing wrote at all is
 // undefined.
+// Gust: the bytes of a fixed-mode ADT value past its variant vi's payload
+// (all of the payload, for a variant without fields), zeroed where a C
+// local is built: otherwise they are what the stack held, which copying the
+// value reads and `to_bytes` writes out, a leak of the stack into a file or
+// a socket. Building in place on a stack zeroes them already (Gap).
+inline void CodeGen::ZeroVariantTail(const string &base, EnumInst *ei, int vi, TypeExpr *et) {
+    auto from = TagSize(ei->en) + VariantLayout(ei, vi).size;
+    auto size = FixedSize(et);
+    if (from < size) L("GS_MEMZERO((uint8_t *)&", base, " + ", from, ", ", size - from, ");");
+}
+
 inline bool CodeGen::HasUninitSlots(TypeExpr *t) {
     switch (t->kind) {
         case TY_STRUCT: case TY_ENUM: case TY_VARIANT:
@@ -695,6 +707,7 @@ inline void CodeGen::GenAdtAdapted(TypeExpr *from, TypeExpr *to, const Dst &d, L
         auto ei = EIOf(to);
         auto vi = ei->en->VariantIndex(from->var->variant);
         L(base, ".tag = ", TagConst(ei, vi), ";");
+        ZeroVariantTail(base, ei, vi, to);
         gen(Dst { DK_LVALUE, cat(base, ".u.v_", Sanitize(from->var->variant->name)), from });
         return;
     }
@@ -1161,6 +1174,7 @@ inline void CodeGen::StructLitAt(StructLit *sl, const string &base, bool inroot)
     auto ei = EIOf(et);
     auto vi = ei->en->VariantIndex(sl->variant);
     L(base, ".tag = ", TagConst(ei, vi), ";");
+    ZeroVariantTail(base, ei, vi, et);
     if (!EmptyLayout(ei->en->variants[vi].fields))
         fieldset(cat(base, ".u.v_", Sanitize(ei->en->variants[vi].name)),
                  ei->en->variants[vi].fields, ei->vftypes[vi], VariantLayout(ei, vi),

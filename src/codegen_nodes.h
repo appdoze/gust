@@ -271,6 +271,7 @@ inline string Dot::CgX(CodeGen &cg) {
             auto t = cg.T();
             cg.FixedLocal(et, t);
             cg.L(t, ".tag = ", cg.TagConst(ei, vi), ";");
+            cg.ZeroVariantTail(t, ei, vi, et);
             return t;
         }
         cg.Fail(line, "variant constant in a non-fixed context reached GenX");

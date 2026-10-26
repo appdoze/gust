@@ -1055,6 +1055,7 @@ inline string CodeGen::AdaptToFixed(Loc lv, TypeExpr *et, Line ln) {
         auto tv = T();
         FixedLocal(et, tv, HasUninitSlots(et) ? "{0}" : "");
         L(tv, ".tag = ", TagConst(ei, vi), ";");
+        ZeroVariantTail(tv, ei, vi, et);
         if (!EmptyLayout(ei->en->variants[vi].fields))
             L(tv, ".u.v_", Sanitize(ei->en->variants[vi].name), " = ", lv.s, ";");
         return tv;
@@ -1073,6 +1074,7 @@ inline string CodeGen::AdaptToFixed(Loc lv, TypeExpr *et, Line ln) {
             if (psz)
                 L("GS_MEMCPY(&", tv, ".u.v_", Sanitize(ei->en->variants[vi].name), ", ",
                   lv.s, " + ", ts, ", ", psz, ");");
+            ZeroVariantTail(tv, ei, (int)vi, et);
             L("break;");
             ind--;
         }
