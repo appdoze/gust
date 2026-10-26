@@ -4667,7 +4667,11 @@ typedef WSAPOLLFD gs_pollfd;
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
-#if defined(__linux__)
+#if defined(__linux__) && !defined(__TINYC__)
+/* Not under TinyCC, the in-process backend: on CI's Ubuntu 24.04 runner its
+   programs saw an epoll wait come back empty in the middle of a transfer
+   (run 40385045807), which no local run reproduced (WSL2, a newer glibc).
+   poll, which every platform keeps, serves it until that is understood. */
 #include <sys/epoll.h>
 #define GS_NET_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || \
@@ -4748,7 +4752,8 @@ static int gs_net_start(void) {
     WSADATA wsa;
     if (ok && gs_ws.WSAStartup(MAKEWORD(2, 2), &wsa) != 0) ok = 0;
     InterlockedExchange(&gs_net_state, ok ? 1 : 2);
-    return ok;
+)GSRT"
+R"GSRT(    return ok;
 }
 static int gs_net_wouldblock(void) {
     int e = gs_ws.WSAGetLastError();
@@ -4757,8 +4762,7 @@ static int gs_net_wouldblock(void) {
 }
 static void gs_net_noteerr(void) { gs_net_oserr = gs_ws.WSAGetLastError(); }
 static void gs_net_closesock(gs_sock s) { gs_ws.closesocket(s); }
-)GSRT"
-R"GSRT(static int gs_net_nonblock(gs_sock s) { u_long on = 1; return gs_ws.ioctlsocket(s, FIONBIO, &on) == 0; }
+static int gs_net_nonblock(gs_sock s) { u_long on = 1; return gs_ws.ioctlsocket(s, FIONBIO, &on) == 0; }
 static int gs_net_poll(gs_pollfd *fds, int64_t n, int64_t ms) {
     if (n == 0) { Sleep((DWORD)ms); return 0; }
     int r = gs_ws.WSAPoll(fds, (ULONG)n, (INT)ms);
@@ -4948,14 +4952,14 @@ static gs_net_lst *gs_net_lst_of(int64_t h) {
     int64_t i = gs_net_index_of(h);
     if (i >= gs_net_nlsts) return NULL;
     gs_net_lst *l = &gs_net_lsts[i];
-    return l->live && !l->closing && l->gen == gs_net_gen_of(h) ? l : NULL;
+)GSRT"
+R"GSRT(    return l->live && !l->closing && l->gen == gs_net_gen_of(h) ? l : NULL;
 }
 /* Advanced whenever a listener is closed, so that a poller looks for closed
    listeners it watches only when one has closed since it last did. Written
    under the lock, read without it. */
 #ifdef _WIN32
-)GSRT"
-R"GSRT(static volatile LONG gs_net_lst_epoch;   /* wraps; only equality is asked of it */
+static volatile LONG gs_net_lst_epoch;   /* wraps; only equality is asked of it */
 static int64_t gs_net_epoch_now(void) { return InterlockedCompareExchange(&gs_net_lst_epoch, 0, 0); }
 static void gs_net_epoch_bump(void) { InterlockedExchange(&gs_net_lst_epoch, gs_net_lst_epoch + 1); }
 #else
@@ -5126,7 +5130,8 @@ static int gs_afd_start(void) {
     GS_AFD_LOAD(k32, CreateIoCompletionPort); GS_AFD_LOAD(k32, GetQueuedCompletionStatusEx);
     GS_AFD_LOAD(k32, SetFileCompletionNotificationModes);
 #undef GS_AFD_LOAD
-    InterlockedExchange(&gs_afd_state, ok ? 1 : 2);
+)GSRT"
+R"GSRT(    InterlockedExchange(&gs_afd_state, ok ? 1 : 2);
     return ok;
 }
 
@@ -5135,8 +5140,7 @@ static int gs_afd_start(void) {
 struct gs_net_ks {
     gs_iosb iosb;
     gs_afd_poll info;
-)GSRT"
-R"GSRT(    HANDLE base;           /* the socket the AFD driver knows (SIO_BASE_HANDLE) */
+    HANDLE base;           /* the socket the AFD driver knows (SIO_BASE_HANDLE) */
     uint64_t payload;
     short want;            /* what is waited for */
     short pending;         /* what the outstanding request waits for; 0: none */
@@ -5343,11 +5347,11 @@ static int64_t gs_net_addcn(gs_net_pl *p, gs_sock sock) {
     else {
         if (p->ncns > GS_NET_MAX_INDEX) { gs_net_closesock(sock); return GS_NET_LIMIT; }
         if (p->ncns == p->capcns) {
-            int64_t cap = p->capcns ? p->capcns * 2 : 64;
+)GSRT"
+R"GSRT(            int64_t cap = p->capcns ? p->capcns * 2 : 64;
             gs_net_cn *cns = (gs_net_cn *)realloc(p->cns, (size_t)cap * sizeof *cns);
             if (!cns) { gs_net_closesock(sock); return GS_NET_LIMIT; }
-)GSRT"
-R"GSRT(            memset(cns + p->capcns, 0, (size_t)(cap - p->capcns) * sizeof *cns);
+            memset(cns + p->capcns, 0, (size_t)(cap - p->capcns) * sizeof *cns);
             p->cns = cns;
             int64_t *fr = (int64_t *)realloc(p->freecns, (size_t)cap * sizeof *fr);
             if (!fr) { gs_net_closesock(sock); return GS_NET_LIMIT; }
@@ -5571,7 +5575,8 @@ static void gs_net_free_pl(gs_net_pl *p) {
 #ifndef _WIN32
     if (p->kfd >= 0) close(p->kfd);
 #else
-    if (p->kfd >= 0) gs_afd_close(p);
+)GSRT"
+R"GSRT(    if (p->kfd >= 0) gs_afd_close(p);
     free(p->kst);
 #endif
     free(p->fds);
@@ -5580,8 +5585,7 @@ static void gs_net_free_pl(gs_net_pl *p) {
     free(p->freecns);
     uint32_t gen = gs_net_nextgen(p->gen);
     memset(p, 0, sizeof *p);
-)GSRT"
-R"GSRT(    p->gen = gen;
+    p->gen = gen;
 }
 
 GS_API int64_t gs_net_close_poller(int64_t ph) {
@@ -5787,13 +5791,13 @@ GS_API int64_t gs_net_want(int64_t ph, int64_t ch, int64_t events) {
 
 /* Ends what the connection sends: the peer reads 0 once it has the rest,
    and the connection can still read. */
-GS_API int64_t gs_net_shutdown(int64_t ph, int64_t ch) {
+)GSRT"
+R"GSRT(GS_API int64_t gs_net_shutdown(int64_t ph, int64_t ch) {
     gs_net_pl *p = gs_net_pl_of(ph);
     gs_net_cn *c = p ? gs_net_cn_of(p, ch) : NULL;
     if (!c) return GS_NET_BAD_HANDLE;
 #ifdef _WIN32
-)GSRT"
-R"GSRT(    if (gs_ws.shutdown(c->sock, SD_SEND) != 0) { gs_net_noteerr(); return GS_NET_ERROR; }
+    if (gs_ws.shutdown(c->sock, SD_SEND) != 0) { gs_net_noteerr(); return GS_NET_ERROR; }
 #else
     if (shutdown(c->sock, SHUT_WR) != 0) { gs_net_noteerr(); return GS_NET_ERROR; }
 #endif
@@ -5988,13 +5992,13 @@ GS_API int64_t gs_net_detach(int64_t ph, int64_t ch) {
     GS_NET_TAKE(gs_net_dets, gs_net_ndets, gs_net_det, i);
     int64_t h = GS_NET_LIMIT;
     if (i >= 0) {
-        gs_net_det *d = &gs_net_dets[i];
+)GSRT"
+R"GSRT(        gs_net_det *d = &gs_net_dets[i];
         d->sock = s;
         d->gen = gs_net_nextgen(d->gen);
         d->live = 1;
         d->owner = gs_net_self();
-)GSRT"
-R"GSRT(        d->tally = c->tally;   /* it goes with the connection */
+        d->tally = c->tally;   /* it goes with the connection */
         c->tally = NULL;
         h = gs_net_handle(GS_NET_K_DETACHED, 0, d->gen, i);
     }

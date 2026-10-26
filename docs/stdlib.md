@@ -787,7 +787,8 @@ poller, over the C in `src/runtime/runtime_net.h`: epoll on Linux, kqueue
 on macOS and the BSDs, and on Windows the AFD poll its own sockets are
 built on, through an I/O completion port, so that a wait costs what is
 ready rather than what is open (`GUST_NET_POLL=1` makes it `poll` or
-`WSAPoll` instead, which scan every socket); and `serve`, an event loop for a server,
+`WSAPoll` instead, which scan every socket, and a program the in-process
+TinyCC backend runs on Linux uses `poll`); and `serve`, an event loop for a server,
 which knows bytes and connections and nothing of any protocol.
 `examples/echo/` is a TCP echo server on it and `examples/api/` an
 HTTP/1.1 JSON API, whose `http.gust` is a protocol over `serve`.

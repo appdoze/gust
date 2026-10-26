@@ -63,7 +63,10 @@ GUST_MAIN = os.path.join(HERE, "gust", "main.goose")
 def find_gust():
     env = os.environ.get("GUST")
     if env:
-        return env
+        # A path is made absolute here: the builds run in other directories,
+        # where a relative one would name nothing (POSIX resolves a program's
+        # path against the directory it starts in).
+        return os.path.abspath(env) if "/" in env or os.sep in env else env
     for d in ("build/Release", "build/RelWithDebInfo", "build", "build/Debug"):
         p = os.path.join(ROOT, d, "gust" + EXE)
         if os.path.exists(p):
