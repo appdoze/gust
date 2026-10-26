@@ -999,7 +999,8 @@ value or by reference, is called to render a `T` wherever a `T` occurs in
 an argument of any of the three builtins, so a type defines its text form
 in one place. The overload is looked up in the namespace `T` is declared
 in, then globally, so the type decides how it is printed, not the code
-that prints it.
+that prints it. A `T` that is not fixed-size is never copied implicitly,
+so its overload takes it by reference.
 
 ```goose
 struct Person { name: u8[..16], age: i32 }
@@ -2830,9 +2831,10 @@ fn scaled(a: i32, b: i32 = 0, c: f32 = 1.0) -> f32 { … }   // scaled(2) is sca
 ```
 
 Functions are free functions. There are no methods and no `impl` blocks,
-but **`x.f(a)` is exactly `f(x, a)`** for any function, so method-call
-syntax is available wherever it reads better. Resolution tries fields and
-built-in members first, then functions. Top-level declarations are
+but **`x.f(a)` calls `f(x, a)`** for any function, so method-call syntax
+is available wherever it reads better. Resolution tries fields and
+built-in members first, then functions, starting in the namespace of
+`x`'s type ([Namespaces](#namespaces)). Top-level declarations are
 order-independent. Spec §7.1.
 
 ### Parameters
@@ -3020,6 +3022,9 @@ vectorize: byte transforms, codecs, kernels over arrays. Every version
 computes exactly what the baseline does, so nothing about a program's
 output depends on it. A backend may ignore it, as the C backend does under
 compilers other than clang and under the in-process TinyCC backend.
+The exception is `math`'s `mul_add(x, y, z)`: `x * y + z` rounded once
+where the code is built for FMA and twice where it is not. The AVX2 and
+AVX-512 versions round once, and the baseline rounds as its target does.
 Spec §7.12, §7.13.
 
 ```goose
@@ -3442,12 +3447,12 @@ fn format(out: u8[>..]&, p: Pt) { format(out, "(", p.x, ",", p.y, ")"); }
 
 fn ::main() {                                       // declared in the global namespace
     let p = geo::Pt { -3, 4 };
-    print(p, " ", geo::norm1(p));                   // the format hook follows the type
+    print(p, " ", geo::norm1(p), " ", p.norm1());   // the format hook and UFCS follow the type
 }
 ```
 
 ```
-(-3,4) 7
+(-3,4) 7 7
 ```
 
 An unqualified name resolves lexically first (locals, type parameters,
@@ -3455,10 +3460,13 @@ nested functions), then in the current declaration's namespace, then in
 the global namespace and the builtins. A function name's overload set is
 that of the first namespace in this order that declares the name at all.
 Sets never merge across namespaces, so a namespaced `hash` overload reaches
-the global ones as `::hash(x)`. UFCS follows the same rule for the calling
-code's namespace, so `p.norm1()` inside the global `main` above would not
-find `geo::norm1`. The `format` hook is the only type-directed exception:
-`print(p)` finds `geo::format` for a `geo::Pt` from anywhere. A global
+the global ones as `::hash(x)`. A UFCS call looks in the namespace of its
+receiver's struct or enum type first, past the lexical scopes, where that
+namespace declares the name. So `p.norm1()` finds `geo::norm1` for a
+`geo::Pt` from any namespace, even one with a `norm1` of its own, and so
+does a generic body's `x.norm1()`; a plain call `norm1(p)` does not. The
+`format` hook follows the type too: `print(p)` finds `geo::format` for a
+`geo::Pt` from anywhere. A global
 variable and functions may share a name, since a call resolves past
 variables to functions. Namespaces affect only name resolution, type
 identity and generated C names. There is no privacy, no re-export and no

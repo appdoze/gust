@@ -598,7 +598,8 @@ rendering: its thread runs out of native stack, which is a safe abort
 A user overload `fn format(out: u8[>..]&, v: T)` (taking `T` by value or by
 reference) is used instead to render a `T`, wherever a `T` occurs in an
 argument, so a type can choose its own text once for all three builtins.
-An overload that takes the `T` by reference is given the storage the `T`
+A `T` that is not fixed-size is never copied implicitly (§4.1), so its
+overload takes it by reference. An overload that takes the `T` by reference is given the storage the `T`
 lies in, as a reference parameter is (§4.1): the variable, field or element
 holding it, or what a reference argument names, and it is as writable as
 that storage is (§9.5). A `T` that is not storage lies in a read-only
@@ -2368,8 +2369,9 @@ fn scaled(a: i32, b: i32 = 0, c: f32 = 1.0) -> f32 { ... }   // scaled(2) is sca
 ```
 
 * There are only free functions: no methods and no impl blocks. UFCS:
-  `x.f(a)` is exactly `f(x, a)`. Resolution tries fields and built-in
-  members first, then functions.
+  `x.f(a)` passes `x` as `f(x, a)` does. Resolution tries fields and
+  built-in members first, then functions, which it looks for in the
+  namespace of `x`'s type first (§11.1).
 * Parameters are `let` bindings by default: they are not reassigned, and
   their contents are as writable as their type says (§4.4). `var` makes the
   (by-value) parameter a reassignable local.
@@ -3294,6 +3296,18 @@ the baseline would not. An implementation may ignore `simd` entirely, as
 the C backend does under compilers other than clang on x86-64 and under
 the JIT.
 
+The one exception is the standard library's `mul_add(x, y, z)` (`math`),
+which asks for `x * y + z` rounded once where the hardware can do so and
+accepts it rounded twice where it cannot. Which one a call gets is up to
+the implementation. It may differ between targets, between builds for one
+target, and between a function's versions. Because the product is not
+rounded on its own, the two can differ by much more than the last bit:
+where `x * y` and `z` nearly cancel, including a zero against a nonzero,
+and where `x * y` overflows but the sum does not. The C backend rounds once
+on arm64, in x86-64 code built for AVX2 or later, and in a `simd`
+function's AVX2 and AVX-512 versions. It rounds twice everywhere else and
+under the JIT. A `*` followed by a `+` is never fused, `mul_add` or not.
+
 Versions are per function: each version contains everything the function
 contains, including the callees inlined into it. The function itself stays
 out of line, since a caller it was inlined into would run the baseline's
@@ -4160,12 +4174,17 @@ it leaves the caller's own facts about `src` intact.
   overload set is the set of the first namespace in this order that
   declares the name at all; sets never merge across namespaces (a
   namespaced `hash` overload reaches the global integer overloads as
-  `::hash(x)`). UFCS follows the same rule for the calling code's
-  namespace, and a generic body resolves names where it is defined. The
-  `format` hook is the only type-directed exception (§3.7). Namespaces
-  affect only name resolution, type identity and generated C names (§7.10);
-  they have no runtime representation, and they provide no privacy and no
-  re-exports.
+  `::hash(x)`). A generic body resolves names where it is defined. A UFCS
+  call `x.f(...)` resolves `f` by the same rule, except that when `x`'s
+  struct or enum type is declared in a named namespace that declares
+  `f`, that namespace's set is the one used, ahead of the calling code's
+  namespace and the global one (a nested function in scope still hides
+  it). So a type's functions are its methods wherever it is used, in a
+  generic body too, while a plain call `f(x)` looks only where the calling
+  code does. The `format` hook is likewise looked up by type (§3.7).
+  Namespaces affect only name resolution, type identity and generated C
+  names (§7.10); they have no runtime representation, and they provide no
+  privacy and no re-exports.
 * Globals are declared like locals (`let`/`var`, any type including
   resizable). Semantically, the program runs inside an implicit outermost
   scope that owns the globals. They take part in the depth check (§9.2) as

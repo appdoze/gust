@@ -117,8 +117,16 @@ which nothing in the executable sets.
   (`toolchain.h`: `--cc`, `GOOSE_CC`, `cc` in `GOOSE_HOME/config`, else
   discovery; `--json` for scripts, which also lists the modules whose
   packages are compiled in).
-* `goose version` prints the runtime hash.
+* `goose version` (or `goose --version`) prints the compiler's version and
+  the runtime hash. The version comes from `version.cpp`, which includes the
+  header that `cmake/version.cmake` writes at each build: `git describe`, or
+  the `GOOSE_VERSION` that a release configures with.
 * `goose lsp` serves an editor over the Language Server Protocol (§12).
+* `goose completion` prints a shell's completion script, made from the
+  help's text.
+* `goose help --man` prints the help as a man page, made from the help's
+  text.
+* `goose format` rewrites files in the standard layout (below).
 
 `run` and `build` both build the native part that a program's sidecar
 `foo.build` names (`packages.h`: `LoadSidecar`; `native.h`: the C compiled
@@ -146,6 +154,35 @@ are started through `process.h`, a translation unit of its own over
 `third_party/subprocess/subprocess.h`. `progress.h`, another translation
 unit, reports the slow steps (a line each, and on a terminal a live line
 below them).
+
+**Formatter** (`format.h`). `Format` takes a file's text and returns it
+formatted, or the file's parse errors, or, for a result that failed its
+own check, an internal error; it writes nothing, and both `RunFormat` and
+the language server's `textDocument/formatting` (`FormatDocument`, which
+turns the result into edits to the lines that change with `LineChanges`,
+a line diff) call it. It parses the file alone (no imports
+resolved) with `Parser::roles` set, which records what a token's kind
+alone does not say: a `<` or `>` of a generic list (`R_ANGLE_OPEN`,
+`R_ANGLE_CLOSE`, twice for a `>>`), a unary operator, a type's suffix, the
+`>..<` of an array type, the `!` of `as!`, a trailing block's `{`, and a
+bracket whose list may end in a comma (`R_LIST`; not a match whose last arm
+ends in a `return` without `from` or a bare `break`, which a comma would
+continue). A backtrack drops the roles of what it backtracks over; with
+`roles` null, as in every compile, nothing is recorded. The formatter then
+lexes the file again, keeping the gap between each two tokens (from
+`Lexer::prevend` to the token), whose comments and line breaks it keeps,
+and prints the tokens line by line as the input breaks them: each line
+indented from the brackets open at its start (a level inside a bracket that
+ends its line or a block's `{`, or its offset from a bracket it is aligned
+in), or, continuing a statement, kept at its offset from the statement's
+first line but no further left than it, so that a chain broken after its
+operators can line up under its first operand; and the tokens on a line
+spaced by `format::Space`, with a space wherever two tokens written
+together would lex as something else. Trailing comments keep their column,
+moved with their line; a run of them that shared a column shares one still.
+Before the result is used, `CheckSame` lexes both texts (the same tokens,
+but for a comma before a closing bracket, and the same comments but for
+their whitespace) and parses both (the same `Ast::Dump` and `DumpDocs`).
 
 **Driver flags** (`Main` in `main.cpp`):
 
@@ -3028,8 +3065,10 @@ activation would treat that container as its own.
 
 **Resolution** (`CheckCall`, `typecheck_calls.h`): a UFCS call tries the
 member builtins first when the receiver is an array, then the functions the
-name reaches (a nested function in scope, else the namespace overload set),
-then the remaining builtins. A plain call tries functions, then builtins; a
+name reaches (a nested function in scope, else the set of the namespace the
+receiver's struct or enum type is declared in where that declares the name,
+else the namespace overload set: `Ast::LookupMethods`, §11.1), then the
+remaining builtins. A plain call tries functions, then builtins; a
 user overload set that shares a builtin's name (`format`) takes the calls
 it matches. `ResolveCall`:
 
@@ -5935,8 +5974,8 @@ everywhere else, where the C compiler sees one ordinary function, so MSVC,
 TinyCC and other targets get no overhead from it. A build can lower it with
 `-DGS_SIMD=1` (no AVX-512 version) or `0`.
 
-* **Levels.** 1 is AVX2 with BMI1, BMI2, LZCNT and POPCNT; 2 adds AVX-512
-  F, BW, CD, DQ and VL (x86-64-v4). Neither includes FMA. Clang inlines a
+* **Levels.** 1 is AVX2 with FMA, BMI1, BMI2, LZCNT and POPCNT; 2 adds
+  AVX-512 F, BW, CD, DQ and VL (x86-64-v4). Clang inlines a
   baseline callee into a version (a callee whose target features are a
   subset of the caller's), so a small helper the loop calls is vectorized
   with it; it never inlines a version into the baseline.
@@ -5963,6 +6002,42 @@ TinyCC and other targets get no overhead from it. A build can lower it with
   and MSVC's `fp_contract(off)`. The same contraction measured 2x slower
   on a matrix multiply under AVX-512, because an FMA's latency lengthens
   the dot product's dependency chain.
+* **`mul_add`.** `math`'s `mul_add` is the program saying where to fuse,
+  and the one result a version may give differently from its baseline
+  (spec §7.12). It is an extern bound to `gs_mul_add` (`gs_mul_addf`).
+  `runtime_ext.h` defines that name twice: as a function, and then as a
+  macro of the same name, which every call in the generated code names. The
+  macro pastes `GS_MUL_ADD_MODE` into `gs_mul_add_fused` (`__builtin_fma`,
+  always inlined so that it is built with its caller's FMA) or
+  `gs_mul_add_separate` (`x * y + z`, two roundings under the contraction
+  pragma), so a call gets the mode in force where it is emitted.
+  `runtime.h` sets the mode to `GS_MUL_ADD_BASE`: fused where the whole
+  translation unit has FMA (`__FMA__`, arm64, MSVC's `/arch:AVX2`), and
+  separate elsewhere and under TinyCC. `EmitSimdVersions` sets it to fused
+  before each version past the baseline, whose target attribute includes
+  FMA, and back to the base after, so the baseline's copy of the body keeps
+  the target's mode.
+  * **Function values** are resolved at compile time (spec §7.6): a call through
+    one names the macro like a direct call, so a `simd fn` given `mul_add`
+    as a function value fuses in its versions, at `-O0` too. The function
+    definition, in the base mode, is only for C that names it without the
+    macro; the generated code never does.
+  * **Helpers.** A callee stays in the mode it was emitted in, even where
+    clang inlines it into a version later. Only the version's own body
+    fuses, together with the functions Goose inlined into it. So a
+    `mul_add` moved into a plain helper fuses in a `simd` caller at `-O2`,
+    where Goose inlines a small helper, and not at `-O0`. An `inline fn`
+    helper fuses at every level except `-O0`, where Goose inlines nothing
+    (spec §7.13). The stdlib documentation says so.
+  * **Tests.** `test/codegen/simd_mul_add.goose` checks each kind of call
+    (plain, and in a `simd fn` direct, through an `inline fn` helper,
+    through a plain helper and through a function value), generated at Goose
+    `-O2` and `-O0` and built by clang at each level (`clang_mul_add` in the
+    runner). `stdlib_math.goose` checks a cancellation and an overflow case
+    accept either rounding and nothing else.
+  * **Effect.** Making `gemm_block`'s multiply-add in goose-linalg a
+    `mul_add` made its matrix multiply 1.3x faster on an i5-12600K, at 68
+    GFLOP/s at n = 400.
 * **Annotated, not automatic.** Building a suite of 50 benchmark programs,
   as written, for AVX2 or for AVX-512 without contraction measured 1-4%
   faster in total. That is inside the run-to-run noise, and no program
@@ -7207,7 +7282,10 @@ in `SEMANTIC_TYPES`). Signature help finds the innermost call whose
 parentheses hold the position (`FileIndex::CallAt`), and counts the commas
 before the position to find the active parameter, leaving out commas in
 string and character literals and in comments. It lists the overloads of the
-callee's name, with the resolved one active. Completion (`Completion`) looks
+callee's name, with the resolved one active; for a UFCS call these are the
+ones the receiver's type selects (`MethodsOf`, from its clone's type), which
+is also where hover and definition look for a call the check left
+unresolved. Completion (`Completion`) looks
 at what precedes the name being typed:
 
 * After a `.`, it offers the members of the value before the `.`

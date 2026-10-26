@@ -203,8 +203,9 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
                 Error(c, cat("field ", d->name, " is not callable"));
     }
     // Past the variables, which a member call passes over, the name resolves
-    // as a call's does (§11.1): a type parameter of the name hides the
-    // functions of the name.
+    // as a call's does, with the receiver type's namespace ahead of the
+    // call's own (§11.1). A type parameter of the name hides the functions
+    // of the name.
     const FnValBind *fb;
     if (auto t = LookupTypeParam(d->name, fb))
         Error(c, cat("type parameter ", d->name, " is bound to the type ", TypeStr(t),
@@ -216,7 +217,7 @@ inline Val TypeCheck::CheckUfcsCall(Call *c, Dot *d, TypeExpr *expected) {
     auto cands = LookupLocalFns(d->name, env);
     if (cands.empty()) {
         DefaultScopeName(d->name, c, true);
-        cands = ast.LookupFunctions(d->name, d->ns);
+        cands = ast.LookupMethods(d->name, d->ns, rt);
     }
     if (!cands.empty())
         return ResolveCall(c, cands, env, d->name, &ov, d->obj, entryreach, nullptr, expected);

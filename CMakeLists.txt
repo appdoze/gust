@@ -14,6 +14,7 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded")
 add_executable(goose
     src/main.cpp
     src/process.cpp
+    src/version.cpp
     src/process.h
     src/progress.cpp
     src/progress.h
@@ -28,6 +29,7 @@ add_executable(goose
     src/lsp_workspace.h
     src/lsp_features.h
     src/lsp.h
+    src/format.h
     src/builtin.h
     src/includes.h
     src/utils.h
@@ -94,6 +96,17 @@ elseif(WIN32)
     set_property(SOURCE src/goose.rc APPEND PROPERTY OBJECT_DEPENDS
                  "${CMAKE_CURRENT_SOURCE_DIR}/src/goose.manifest")
 endif()
+
+# The compiler's version (src/version.cpp): GOOSE_VERSION where given, as a
+# release gives its tag, else `git describe` of this tree at each build.
+set(GOOSE_VERSION "" CACHE STRING "The compiler's version; empty for git describe")
+set(goose_version_h "${CMAKE_CURRENT_BINARY_DIR}/version/goose_version.h")
+add_custom_target(goose_version
+    COMMAND "${CMAKE_COMMAND}" "-DSRC=${CMAKE_CURRENT_SOURCE_DIR}" "-DOUT=${goose_version_h}"
+            "-DVERSION=${GOOSE_VERSION}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.cmake"
+    BYPRODUCTS "${goose_version_h}")
+add_dependencies(goose goose_version)
+target_include_directories(goose PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/version")
 
 # The compile runs on a thread of its own, with a larger stack (main.cpp).
 find_package(Threads REQUIRED)

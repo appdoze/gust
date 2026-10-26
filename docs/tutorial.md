@@ -158,7 +158,7 @@ var log: u8[][>..];                         // empty
 ```
 
 Functions are free functions. There are no methods and no `impl` blocks, but
-`x.f(a)` is *exactly* `f(x, a)`, so you can write method-call syntax
+`x.f(a)` calls `f(x, a)`, so you can write method-call syntax
 wherever it reads better:
 
 ```goose

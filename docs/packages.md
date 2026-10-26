@@ -54,6 +54,24 @@ command), there is no live line, only those one-line notes.
 `GOOSE_PROGRESS=plain` or `GOOSE_PROGRESS=live` overrides the choice; `-v`
 and `--dry-run` always use plain output.
 
+`goose version` (or `goose --version`) prints the compiler's version and
+the runtime's hash.
+
+Errors and warnings are in color on a terminal. `--color never` or a set
+`NO_COLOR` turns that off, and `--color always` or `CLICOLOR_FORCE=1` turns
+it on wherever the output goes.
+
+A run, build or check that succeeds prints a line or two about what it did
+(`parsed ok`, `typechecked ok`, `wrote`). `-q` leaves them out, so that only
+what the program prints is printed.
+
+`goose completion bash` (or `zsh`, `fish`, `powershell`) prints a script
+that completes the commands, their options and `.goose` files. `goose help
+completion` says where to put it.
+
+`goose help --man` prints the whole help as a man page, which a release
+has as `man/goose.1`.
+
 ## 2. Using a package
 
 A *package* is a library in a directory of its own: a module named after it,

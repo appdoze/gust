@@ -58,24 +58,32 @@ fn main() {
   namespace of its definition, not in that of the caller that instantiates
   it. A field or parameter default does the same, whatever the namespace of
   the construction or call that uses it.
-* UFCS lookup follows those same function-name rules for the namespace the
-  call is written in. A caller in another namespace uses
-  `image::brightness(p)` explicitly; associated-namespace lookup and
-  extension imports can be considered separately. Builtin array members
-  retain their existing priority over user UFCS candidates.
-* Custom `format` hooks are the only exception that uses implicit lookup. A
-  matching overload is searched for in the namespace that defines the
-  formatted nominal type, then in the global namespace, with the existing
-  signature rules. Thus `print(p)` finds `image::format` for an
-  `image::Pixel` anywhere, without opening that namespace. This preserves
-  type-directed formatting instead of making rendering depend on the
-  caller's namespace. Ordinary generic customization still uses
-  definition-site lookup: for the global `dictionary` module to use a
-  namespaced key's `hash` overload, a global bridge is needed (for example
-  `fn hash(k: image::Key) -> u64 { image::hash(k) }`, or the same function
-  written as `fn ::hash(...)` inside the namespaced file). General
-  associated-type lookup could remove that bridge later, but is not part of
-  this feature.
+* A UFCS call `x.f(...)` looks in the namespace of `x`'s type first. When
+  `x` (past a reference) is a struct or enum declared in a named namespace
+  that declares `f`, that namespace's overload set is used. Otherwise the
+  function-name rules above apply for the namespace the call is written
+  in. Nested functions in scope still come first, and builtin array
+  members keep their priority over user UFCS candidates. So
+  `p.brightness()` calls `image::brightness` for an `image::Pixel` from
+  any namespace, even past a global `brightness` or one in the calling
+  namespace, as it would inside `image` itself. Otherwise a namespaced
+  library's functions would need global bridges to be called as methods,
+  and any global function sharing a name (`length`, `find`, `get`) would
+  hide them. A generic body's UFCS call follows the type it is
+  instantiated with, so the global `dictionary` module, which calls
+  `key.hash()`, finds a namespaced key's `hash` with no bridge. A plain
+  call `f(x)` stays with the namespace it is written in (there is no
+  C++-style argument-dependent lookup), and the type's namespace never
+  merges with another set: a function of the same name for that type in
+  another namespace is called as `f(x)`. A type in the global namespace
+  has no namespace of its own here, so the rules above apply to it
+  unchanged.
+* Custom `format` hooks are found by type as well. A matching overload is
+  searched for in the namespace that defines the formatted nominal type,
+  then in the global namespace, with the existing signature rules. Thus
+  `print(p)` finds `image::format` for an `image::Pixel` anywhere, without
+  opening that namespace. Rendering depends on the type, not on the
+  caller's namespace.
 * `return ... from parse` resolves the target in the returning function's
   definition context: a nested function in scope if there is one, otherwise
   the name's overload set by the rules above. `return ... from image::parse`
@@ -123,11 +131,15 @@ fn main() {
   `test/syntax/namespaces_lib.goose` cover duplicate leaf names across
   namespaces, same-namespace overloads, generic definition-site lookup,
   qualified types/variants/pools, global fallback and shadowing, imported
-  main handling, custom formatting across namespaces, a dictionary with a
-  namespaced key and global hash bridge, same-leaf `return from` targets, and
-  collision-free generated C symbols. `test/syntax/match_constants.goose`
-  names another namespace's constants in match patterns, and
-  `test/errors*/ns_*.goose` cover the diagnostics.
+  main handling, custom formatting across namespaces, UFCS calls resolving
+  in the receiver type's namespace (from the global namespace, from another
+  namespace declaring the name, in a generic body, behind a nested
+  function, on variants), a dictionary with a namespaced key and no hash
+  bridge, same-leaf `return from` targets, and collision-free generated C
+  symbols. `test/syntax/match_constants.goose` names another namespace's
+  constants in match patterns, `test/errors*/ns_*.goose` cover the
+  diagnostics, and `test/lsp/ufcs_ns.goose` the language server's answers
+  on UFCS calls into a type's namespace.
 
 This extension changes name resolution. It does not add separate compilation,
 package resolution, privacy, re-exports, or first-class module values.

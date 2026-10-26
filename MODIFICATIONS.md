@@ -30,6 +30,14 @@ git log upstream/master..main
   resolves to `.gust` where that file exists, else `.goose`.
 - `src/builtin.h`, `src/packages.h`, `src/native.h`: package entries and
   native-part sources are found with either extension.
+- `src/main.cpp`, `src/format.h`, `test/run_tests.py`, `test/format.py`
+  (after Goose's command-line work): `gust version` prints
+  `gust <version> (runtime <hash>)`, the version from `git describe`, which
+  names Goose's nearest tag until Gust has tags of its own; the completion
+  scripts (`gust completion`) complete `gust` and both `.gust` and `.goose`
+  files; the man page is `GUST(1)`; `gust format` on a directory formats its
+  `.gust` files as well as its `.goose` ones; the help and messages name
+  `gust`.
 - `README.md` is Gust's; Goose's is kept as `GOOSE.md`. `ROADMAP.md` and this
   file are new.
 
