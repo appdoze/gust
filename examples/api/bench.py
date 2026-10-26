@@ -5,18 +5,27 @@ as the Gust server's (go/rawserver), so that what the language costs and
 what net/http costs can be told apart.
 
     python examples/api/bench.py [--reps 3] [--seconds 10] [--quick] [--out results.json]
+                                 [--kinds gust,go] [--before old_api.exe] [--only name]
 
 Builds the Gust server (clang, -O2), the Go server and the load generator
 into build/api-bench/, then runs each scenario --reps times, alternating
 the servers. The server runs on CPUs 0-7 and the load generator on 8-15
 (GOMAXPROCS=8 for both Go programs), so neither takes the other's cores.
+--before adds a Gust pool server built from an earlier tree, as the kind
+`gustbefore`, for a before-and-after comparison on the same load.
 
 Measured per run: requests per second and latency percentiles (from the
 load generator); the server's peak working set and private bytes, sampled
-every 50 ms, and its peak thread count; page faults during the run; and,
-for Go, heap allocations and collections from runtime.MemStats
-(/debug/vars). The Gust runtime has no allocation counter: see
-docs/gust/backend_api.md for how its allocations were established.
+every 50 ms, and its peak thread count; page faults during the run; for
+Go, heap allocations and collections from runtime.MemStats (/debug/vars);
+and the machine's CPU use over the second before the run, the load of
+other programs that this script does not control. The Gust runtime has
+no allocation counter: see docs/gust/backend_api.md for how its
+allocations were established.
+
+Scenarios with `kinds` run only those servers: large responses, which
+only the current Gust server has (the others ignore the query), and slow
+readers, which every Gust pool serves.
 """
 import argparse, json, os, signal, socket, statistics, subprocess, sys, threading, time, urllib.request
 import psutil
@@ -47,7 +56,7 @@ class Server:
     def __init__(self, kind, extra=()):
         self.kind = kind
         self.port = free_port()
-        exe = os.path.join(OUT, EXES[kind] + EXE)
+        exe = EXES[kind] if os.path.isabs(EXES[kind]) else os.path.join(OUT, EXES[kind] + EXE)
         env = dict(os.environ, GOMAXPROCS="8")
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         self.proc = subprocess.Popen([exe, str(self.port), *SERVER_ARGS.get(kind, ()), *extra],
@@ -132,17 +141,58 @@ def loadgen(port, args, server_ps):
     res["client_cpu_share"] = client / wall / len(CLIENT_CPUS)
     return res
 
+class SlowReader(threading.Thread):
+    """A client that pipelines small requests and reads their responses 4 KB
+    every 50 ms: the server has to hold its output back without holding up
+    anyone else."""
+    def __init__(self, port):
+        super().__init__(daemon=True)
+        self.sock = socket.create_connection(("127.0.0.1", port))
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 8192)
+        self.stop, self.got = False, 0
+    def run(self):
+        reqs = b"GET /v1/items/1 HTTP/1.1\r\nHost: x\r\n\r\n" * 4000
+        threading.Thread(target=self._send, args=(reqs,), daemon=True).start()
+        while not self.stop:
+            try:
+                d = self.sock.recv(4096)
+            except OSError:
+                return
+            if not d:
+                return
+            self.got += len(d)
+            time.sleep(0.05)
+    def _send(self, data):
+        try:
+            self.sock.sendall(data)
+        except OSError:
+            pass
+    def close(self):
+        self.stop = True
+        self.sock.close()
+
 def run_one(kind, scenario, seconds):
+    # What other programs keep the machine busy with, just before the run.
+    background = psutil.cpu_percent(interval=1.0)
     srv = Server(kind)
+    slow = []
     try:
         before_mem = srv.memory()
         go0 = srv.go_stats()
         faults0 = before_mem.num_page_faults if hasattr(before_mem, "num_page_faults") else 0
         s = Sampler(srv.ps)
         s.start()
+        slow = [SlowReader(srv.port) for _ in range(scenario.get("slow", 0))]
+        for r in slow:
+            r.start()
         res = loadgen(srv.port, scenario["args"] + ["-d", f"{seconds}s"], srv.ps)
         s.stop = True
         s.join()
+        res["background_cpu_pct"] = background
+        if slow:
+            res["slow_reader_kb"] = sum(r.got for r in slow) / 1024
+        for r in slow:
+            r.close()
         after = srv.memory()
         go1 = srv.go_stats()
         res["start_rss_mb"] = before_mem.rss / 2**20
@@ -213,6 +263,12 @@ SCENARIOS = [
     {"name": "order, 64 connections", "args": ["-mix", "order", "-c", "64"]},
     {"name": "mixed, 64 connections, 20k req/s fixed rate", "args": ["-mix", "mixed", "-c", "64", "-rate", "20000"]},
     {"name": "mixed, new connection per request, 16 clients", "args": ["-mix", "mixed", "-c", "16", "-churn"]},
+    {"name": "mixed, 64 connections, 32 slow readers", "args": ["-mix", "mixed", "-c", "64"], "slow": 32,
+     "kinds": ["gust", "gustbefore"]},
+    {"name": "large (63 KB built whole), 64 connections", "args": ["-mix", "large", "-c", "64"],
+     "kinds": ["gust"]},
+    {"name": "stream (640 KB chunked), 16 connections", "args": ["-mix", "stream", "-c", "16"],
+     "kinds": ["gust"]},
 ]
 
 KINDS = ["gust", "gustthreads", "go", "goraw"]
@@ -220,13 +276,14 @@ KINDS = ["gust", "gustthreads", "go", "goraw"]
 # port: the Gust pool gets as many workers as the server has CPUs, as Go's
 # servers get GOMAXPROCS=8.
 EXES = {"gust": "api_gust", "gustthreads": "api_gust", "go": "server_go", "goraw": "rawserver_go"}
-SERVER_ARGS = {"gust": ["--workers", "8"], "gustthreads": ["--thread-per-connection"]}
+SERVER_ARGS = {"gust": ["--workers", "8"], "gustthreads": ["--thread-per-connection"], "gustbefore": ["--workers", "8"]}
 
 KEYS = ["rps", "p50_us", "p90_us", "p95_us", "p99_us", "p999_us", "max_us", "due_p50_us", "due_p95_us",
         "due_p99_us", "due_p999_us",
         "server_cpu_share", "client_cpu_share", "loadgen_gcs", "loadgen_gc_pause_ms",
         "peak_rss_mb", "peak_private_mb", "peak_threads",
-        "page_faults_per_1k_requests", "go_mallocs_per_request", "go_bytes_per_request", "go_gcs", "go_gc_pause_ms"]
+        "page_faults_per_1k_requests", "go_mallocs_per_request", "go_bytes_per_request", "go_gcs", "go_gc_pause_ms",
+        "background_cpu_pct", "slow_reader_kb"]
 
 def main():
     ap = argparse.ArgumentParser()
@@ -235,10 +292,20 @@ def main():
     ap.add_argument("--quick", action="store_true", help="one rep of 3 s, for a smoke test")
     ap.add_argument("--only", help="run the scenarios whose name contains this")
     ap.add_argument("--out", default=os.path.join(OUT, "results.json"))
+    ap.add_argument("--kinds", help="the servers, comma-separated (default: " + ",".join(KINDS) + ")")
+    ap.add_argument("--before", help="a Gust server from an earlier tree, run as kind gustbefore")
+    ap.add_argument("--no-idle", action="store_true", help="skip the idle-connection memory runs")
     args = ap.parse_args()
     if args.quick:
         args.reps, args.seconds = 1, 3
     build()
+    kinds = args.kinds.split(",") if args.kinds else list(KINDS)
+    if args.before:
+        EXES["gustbefore"] = os.path.abspath(args.before)
+        if "gustbefore" not in kinds:
+            kinds.append("gustbefore")
+    elif "gustbefore" in kinds:
+        ap.error("gustbefore needs --before")
     scenarios = [s for s in SCENARIOS if not args.only or args.only in s["name"]]
     report = {"machine": {"cpu": "see docs", "logical_cpus": psutil.cpu_count(), "server_cpus": SERVER_CPUS,
                           "client_cpus": CLIENT_CPUS},
@@ -247,15 +314,18 @@ def main():
     # First: right after the churn scenario, the system is still tearing
     # down thousands of reset connections, and new ones open slowly.
     report["idle"] = {}
-    for kind in KINDS:
+    for kind in ([] if args.no_idle else kinds):
         report["idle"][kind] = idle_memory(kind, 500)
         print(f"idle 500 connections {kind}: {report['idle'][kind]}", flush=True)
     for sc in scenarios:
-        runs = {kind: [] for kind in KINDS}
+        these = [k for k in kinds if k in sc.get("kinds", kinds)]
+        if not these:
+            continue
+        runs = {kind: [] for kind in these}
         for rep in range(args.reps):
             # Each rep starts with a different server, so no server always
             # runs first or last.
-            for kind in KINDS[rep % len(KINDS):] + KINDS[:rep % len(KINDS)]:
+            for kind in these[rep % len(these):] + these[:rep % len(these)]:
                 r = run_one(kind, sc, args.seconds)
                 runs[kind].append(r)
                 print(f"{sc['name']:50s} {kind:5s} rep {rep + 1}: {r['rps']:9.0f} req/s  p50 {r['p50_us']:7.0f} us  "

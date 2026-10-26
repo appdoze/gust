@@ -1,3 +1,0 @@
-c_sources = ["net.c"];
-c_headers = ["net.h"];
-c_libs_windows = ["ws2_32"];

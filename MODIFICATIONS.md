@@ -120,19 +120,25 @@ git log upstream/master..main
 ## Examples
 
 - `examples/api/` (new): a JSON API over HTTP/1.1 (`api.gust`, `http.gust`,
-  `jsonx.gust`, sockets and a poller in `net.c` behind `net.gust`), served
-  by a pool of event-loop workers or a thread per connection; its Go twins
+  `jsonx.gust`), served on the standard library's `net` by a pool of
+  event-loop workers or a thread per connection, with responses built
+  whole up to 1 MB and streamed (chunked) past that; its Go twins
   (`go/server` on net/http, `go/rawserver` with the same minimal HTTP), a
   load generator (`go/loadgen`), behaviour tests (`test_api.py`), the
   benchmark and its measurement scripts, and raw results; see
-  `docs/gust/backend_api.md`.
+  `docs/gust/backend_api.md`. Its first version had its own sockets in C
+  (`net.c`, `net.h`, `net.gust`, `api.build`), now removed.
+- `examples/echo/` (new): a TCP echo server on `net::serve`, with no HTTP,
+  and a `--check` mode that serves itself and checks the echoes.
 
 ## Scripts and tests
 
-- `test/api_example.py` (new), `test/run_tests.py`, `docs/testing.md`: the
-  suite builds the API example normally and with `--checked` and runs its
-  behaviour tests over sockets, against the pool and a thread per
-  connection (baseline profile).
+- `test/api_example.py` (new), `test/echo_example.py` (new),
+  `test/run_tests.py`, `docs/testing.md`: the suite builds the API and echo
+  examples normally and with `--checked` and runs their behaviour tests over
+  sockets, the API's against the pool and a thread per connection; in the
+  sanitize profile with the suite's sanitizer flags, as the fixtures are
+  built.
 - `scripts/toolchain.py`, `scripts/check_doc_examples.py`: find a `gust`
   binary under `build/`, and a `goose` one from before the rename.
 - `scripts/package_release.py`, `test/lsp_sweep.py`,

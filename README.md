@@ -39,8 +39,9 @@ Early fork. The language today is Goose's, with these changes
   servers with bounded output, streaming and backpressure. `slots` gives
   `reusable` pools generation-checked handles.
 - [examples/api/](examples/api/README.md) is a JSON API over HTTP/1.1 with
-  FastAPI-style validation errors, served by a pool of event-loop workers
-  and measured against Go.
+  FastAPI-style validation errors, served on `net` by a pool of event-loop
+  workers and measured against Go; [examples/echo/](examples/echo/echo.gust)
+  is a TCP echo server on the same loop.
 - Its cache lives in `~/.gust`, apart from any Goose install.
 
 Design notes for these are in [docs/gust/](docs/gust/): the

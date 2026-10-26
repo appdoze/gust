@@ -65,6 +65,12 @@ func mix(name string) []req {
 		return rs
 	case "order":
 		return []req{post("/v1/orders", `{"item_id":2,"quantity":3,"note":"oat milk, extra hot"}`, 201)}
+	// Gust's server only (its Go twins ignore the query): about 63 KB built
+	// whole, and about 640 KB streamed in chunks.
+	case "large":
+		return []req{get("/v1/items?repeat=100", 200)}
+	case "stream":
+		return []req{get("/v1/items/export?repeat=1000", 200)}
 	case "mixed":
 		return []req{
 			get("/v1/items/1", 200),
@@ -84,7 +90,8 @@ func mix(name string) []req {
 	return nil
 }
 
-// Reads one response: its status; the body is read and dropped.
+// Reads one response: its status; the body, of a Content-Length or in
+// chunks, is read and dropped.
 func readResponse(r *bufio.Reader) (int, error) {
 	line, err := r.ReadSlice('\n')
 	if err != nil {
@@ -98,6 +105,7 @@ func readResponse(r *bufio.Reader) (int, error) {
 		return 0, err
 	}
 	length := -1
+	chunked := false
 	for {
 		h, err := r.ReadSlice('\n')
 		if err != nil {
@@ -110,6 +118,27 @@ func readResponse(r *bufio.Reader) (int, error) {
 			length, err = strconv.Atoi(string(bytes.TrimSpace(h[15:])))
 			if err != nil {
 				return 0, err
+			}
+		}
+		if len(h) > 18 && bytes.EqualFold(h[:18], []byte("transfer-encoding:")) {
+			chunked = bytes.Contains(bytes.ToLower(h[18:]), []byte("chunked"))
+		}
+	}
+	if chunked {
+		for {
+			line, err := r.ReadSlice('\n')
+			if err != nil {
+				return 0, err
+			}
+			size, err := strconv.ParseInt(string(bytes.TrimSpace(line)), 16, 64)
+			if err != nil {
+				return 0, err
+			}
+			if _, err := r.Discard(int(size) + 2); err != nil {
+				return 0, err
+			}
+			if size == 0 {
+				return status, nil
 			}
 		}
 	}
@@ -158,7 +187,7 @@ func main() {
 	dur := flag.Duration("d", 10*time.Second, "measured duration")
 	warm := flag.Duration("warmup", 2*time.Second, "unmeasured warm-up before it")
 	rate := flag.Int("rate", 0, "requests per second in all (0: closed loop)")
-	mixName := flag.String("mix", "mixed", "health, item, order or mixed")
+	mixName := flag.String("mix", "mixed", "health, item, order, mixed, large or stream")
 	churn := flag.Bool("churn", false, "a new connection for every request")
 	flag.Parse()
 	rot := mix(*mixName)

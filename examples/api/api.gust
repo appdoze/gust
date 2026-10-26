@@ -7,37 +7,43 @@
 //   api.exe [port] [--workers N] [--thread-per-connection] [--crash-route]
 //                                    (port 8080 by default; Ctrl-C stops it gracefully)
 //
-//   GET  /health              {"status":"ok"}
-//   GET  /v1/items            {"items":[...]}
-//   GET  /v1/items/{id}       an item, or 404
-//   POST /v1/orders           {"item_id":1,"quantity":2,"note":"..."} -> 201, or 422
+//   GET  /health                     {"status":"ok"}
+//   GET  /v1/items[?repeat=N]        {"items":[...]}, the catalog N times (1-1000), built whole
+//   GET  /v1/items/export?repeat=N   the same, N up to 1,000,000, streamed as the client reads
+//   GET  /v1/items/{id}              an item, or 404
+//   POST /v1/orders                  {"item_id":1,"quantity":2,"note":"..."} -> 201, or 422
 //
 // How the parts fit Gust's model:
+// - Networking. The standard library's net (stdlib/net.goose) holds the
+//   sockets, the poller and the event loop; http.gust is a protocol over
+//   it, and this file the routes.
 // - Concurrency. By default a pool of workers, one per hardware thread
-//   (--workers), each an event loop over the connections it accepts
-//   (http.gust's serve_loop); --thread-per-connection gives each
-//   connection a thread instead, whose handler may block. Gust threads
-//   share no memory, so a handler cannot race another. What they all read
-//   is the catalog, a `const` that is static data: shared as it is, never
-//   copied.
+//   (--workers), each an event loop over the connections it accepts;
+//   --thread-per-connection gives each connection a thread instead, whose
+//   handler may block. Gust threads share no memory, so a handler cannot
+//   race another. What they all read is the catalog, a `const` that is
+//   static data: shared as it is, never copied.
 // - Memory. Buffers and responses live on data stacks, released when their
-//   scope ends: no heap allocation per request, and no collector. In the
-//   pool a connection holds a buffer only while a request of it is partly
-//   read or a response partly sent.
+//   scope ends, and in the loop's buffers while a request is partly read or
+//   a response partly sent: no heap allocation per request, and no
+//   collector. A response past what is built whole (http.gust's
+//   MAX_RESPONSE) is streamed, so its size costs no memory.
 // - Identity without shared state. An order's id is its connection's
 //   number and its count on that connection, unique with no counter shared
 //   between threads.
 // - Failure. Workers are contained (§11.2): an abort in a handler (an
-//   index out of range, say) ends that worker and no more. Its supervisor
-//   closes the sockets it held and starts another. In the pool that ends
-//   every connection of the aborting worker, about 1/N of them; with a
-//   thread per connection it ends that connection only. Neither contains
-//   what the runtime does not: a data stack overrunning its reservation,
-//   native stack exhaustion, exit(), or a fault in C code end the process.
+//   index out of range, say) ends that worker and no more, the runtime
+//   closes the sockets it held, and its supervisor starts another. In the
+//   pool that ends every connection of the aborting worker, about 1/N of
+//   them; with a thread per connection it ends that connection only.
+//   Neither contains what the runtime does not: a data stack overrunning
+//   its reservation, native stack exhaustion, exit(), or a fault in C code
+//   end the process.
 // - Shutdown. Ctrl-C (or SIGTERM) sets a flag; the server stops accepting,
 //   every connection finishes the request it is serving and closes, and
 //   the server reports what it served once they are done, or after
-//   SHUTDOWN_GRACE_S seconds.import std;
+//   SHUTDOWN_GRACE_S seconds.
+import std;
 import os;
 import json;
 import net;
@@ -50,10 +56,12 @@ import jsonx;
 // a connection is answered 503 rather than given a thread the runtime may
 // not have. `--stack-reserve 256M` makes room for eight times as many.
 const MAX_CONNECTIONS = 1024;
-// The pool's limit over all its workers: a connection there costs a Conn and,
-// while it has a request under way, a slot.
+// The pool's limit over all its workers: a connection there costs a record
+// of the loop's and, while it has a request under way, a buffer.
 const MAX_LOOP_CONNECTIONS = 65536;
 const SHUTDOWN_GRACE_S = 10.0;
+// The longest the acceptor waits, so it looks at the stop flag.
+const POLL_MS = 100;
 
 struct Item { id: i64, name: Str64, price_cents: i64, rating: f64, in_stock: bool }
 fn encode_value(out: u8[>..]&, v: Item) { encode_fields(out, v); }
@@ -73,9 +81,15 @@ const CATALOG = [
     Item { 7, "Oat milk latte", 450, 4.3, true },
     Item { 8, "Matcha", 470, 4.0, false },
 ];
+const MAX_REPEAT = 1000;
+const MAX_EXPORT_REPEAT = 1000000;
+// More than any item's JSON takes: a name is at most 64 bytes, each
+// escaped to at most 6.
+const ITEM_JSON_MAX = 512;
 
-// One connection's state, which only its thread sees.
-struct Session { conn: i64, orders: i64 = 0, crash_route: bool = false }
+// One connection's state, which only its thread sees: what it has ordered,
+// and the export it is streaming, as items from export_at to export_end.
+struct Session { conn: i64, orders: i64 = 0, crash_route: bool = false, export_at: i64 = 0, export_end: i64 = 0 }
 
 fn not_found(res: Response&, out: u8[>..]&) {
     res.status = 404;
@@ -86,6 +100,41 @@ fn not_allowed(res: Response&, out: u8[>..]&, allow: const u8[:]) {
     res.status = 405;
     res.allow = allow;
     out.append("{\"detail\":\"Method Not Allowed\"}");
+}
+
+// The value of name=<integer> in a query, or def where it has none; false
+// when it has one that is not an integer.
+fn query_int(query: const u8[:], name: const u8[:], def: i64) -> i64, bool {
+    var start = 0;
+    for i in query.len + 1 {
+        if i == query.len || query[i] == '&' {
+            let part = query[start..i];
+            if part.len > name.len && starts_with(part, name) && part[name.len] == '=' {
+                let v, ok = parse_int(part[name.len + 1..]);
+                return v, ok;
+            }
+            start = i + 1;
+        }
+    }
+    return def, true;
+}
+
+// ?repeat=N within 1..most, or a 422 naming it.
+fn repeat_of(req: Request&, res: Response&, out: u8[>..]&, most: i64) -> i64 {
+    let n, ok = query_int(req.query, "repeat", 1);
+    if ok && n >= 1 && n <= most { return n; }
+    var p = Problems { .. };
+    problem_in(p, out, "query", "repeat", str("Input should be an integer from 1 to ", most), "value_error");
+    finish_problems(p, out);
+    res.status = 422;
+    return 0;
+}
+
+// The catalog's item k (from 0), numbered k + 1: the catalog over and over.
+fn item_at(k: i64) -> Item {
+    var it = CATALOG[k % CATALOG.len];
+    it.id = k + 1;
+    return it;
 }
 
 // The routes. A path that names a resource but not this method is a 405
@@ -99,12 +148,24 @@ fn handle(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
     }
     if path == "/v1/items" {
         if req.method != "GET" { not_allowed(res, out, "GET"); return; }
+        let n = repeat_of(req, res, out, MAX_REPEAT);
+        if n == 0 { return; }
         out.append("{\"items\":[");
-        for i in CATALOG.len {
-            if i > 0 { out.push(','); }
-            encode_value(out, CATALOG[i]);
+        for k in n * CATALOG.len {
+            if k > 0 { out.push(','); }
+            encode_value(out, item_at(k));
         }
         out.append("]}");
+        return;
+    }
+    if path == "/v1/items/export" {
+        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
+        let n = repeat_of(req, res, out, MAX_EXPORT_REPEAT);
+        if n == 0 { return; }
+        out.append("{\"items\":[");
+        s.export_at = 0;
+        s.export_end = n * CATALOG.len;
+        res.stream = true;
         return;
     }
     if starts_with(path, "/v1/items/") {
@@ -127,6 +188,19 @@ fn handle(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
         return;
     }
     not_found(res, out);
+}
+
+// The export's next items, within limit: true once its last byte is out.
+fn export_more(s: Session&, out: u8[>..]&, limit: i64) -> bool {
+    let start = out.len;
+    while s.export_at < s.export_end && out.len - start + ITEM_JSON_MAX <= limit {
+        if s.export_at > 0 { out.push(','); }
+        encode_value(out, item_at(s.export_at));
+        s.export_at += 1;
+    }
+    if s.export_at < s.export_end { return false; }
+    out.append("]}");
+    return true;
 }
 
 fn create_order(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
@@ -167,26 +241,25 @@ fn create_order(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
 
 // --- one thread per connection (--thread-per-connection) ----------------------
 
-// A connection, served on a thread of its own; what it served goes back to
-// main as one Counts.
-thread_fn connection(sock: i64, conn: i64, crash_route: bool) {
-    var s = Session { conn: conn, crash_route: crash_route, .. };
-    let counts = serve(sock, s, handle);
-    net_close(sock);
-    qput(counts);
+// A connection, adopted by a thread of its own and served there; what it
+// served goes back to main as one Counts.
+thread_fn connection(d: net::Detached, conn: i64, crash_route: bool) {
+    let p, ps = net::poller();
+    let c, status = net::adopt(p, d);
+    if ps != 0 || status != 0 { return; }
+    qput(serve(net::Listener { .. }, p, c, Session { conn: conn, crash_route: crash_route, .. }, 1, conn, 1,
+               handle, export_more));
 }
 
 // How a connection ended, from its supervisor.
 struct Ended { conn: i64, aborted: bool, message: u8[] }
 
-// Runs one connection contained and waits for it: an abort in it leaves the
-// socket open (a contained worker's extern resources stay open), so this
-// closes it.
-thread_fn supervise(sock: i64, conn: i64, crash_route: bool) {
-    let id = thread_spawn_contained(connection, sock, conn, crash_route);
+// Runs one connection contained and waits for it. When it ends, by
+// returning or by an abort, the runtime closes its socket.
+thread_fn supervise(d: net::Detached, conn: i64, crash_route: bool) {
+    let id = thread_spawn_contained(connection, d, conn, crash_route);
     var message: u8[>..] = [];
     let ok = thread_wait(id, message);
-    if !ok { net_close(sock); }
     qput(Ended { conn: conn, aborted: !ok, message: copy(message) });
 }
 
@@ -207,27 +280,35 @@ fn add(sum: Counts&, c: Counts) {
     sum.server_errors += c.server_errors;
     sum.refused += c.refused;
     sum.connections += c.connections;
+    sum.busy += c.busy;
+    sum.dropped += c.dropped;
 }
 
-fn serve_threads(listener: i64, crash_route: bool, t: Totals&) {
-    while net_stop_requested() == 0 {
-        let ready = net_wait_accept(listener, POLL_MS);
-        if ready < 0 { break; }
-        if ready > 0 {
-            let sock = net_accept(listener);
-            if sock >= 0 {
-                t.connections += 1;
-                if t.live >= MAX_CONNECTIONS {
-                    // Over the limit: refused here, without a thread.
-                    var res = Response { status: 503, .. };
-                    send_response(sock, res, "{\"detail\":\"Service Unavailable\"}", false);
-                    net_close(sock);
-                    t.busy += 1;
-                } else {
-                    thread_spawn(supervise, sock, t.connections, crash_route);
-                    t.live += 1;
-                }
+// Accepts on this thread, and hands each connection to a thread of its own.
+fn serve_threads(listener: net::Listener, crash_route: bool, t: Totals&) {
+    let p, ps = net::poller();
+    if ps != 0 || net::watch(p, listener) != 0 { abort("cannot wait on the listener"); }
+    var busy: u8[>..] = [];
+    format_refusal(busy, 503);
+    var hs: i64[..1] = [0];
+    var evs: i64[..1] = [0];
+    while !net::stop_requested() {
+        if net::wait(p, POLL_MS, hs, evs) < 0 { break; }
+        loop {
+            let c, status = net::accept(p, listener);
+            if status != 0 { break; }
+            t.connections += 1;
+            if t.live >= MAX_CONNECTIONS {
+                // Over the limit: refused here, without a thread.
+                net::send(p, c, busy);
+                net::close(p, c);
+                t.busy += 1;
+                continue;
             }
+            let d, ds = net::detach(p, c);
+            if ds != 0 { net::close(p, c); continue; }
+            thread_spawn(supervise, d, t.connections, crash_route);
+            t.live += 1;
         }
         loop {
             let e, got = qpoll<Ended>();
@@ -235,6 +316,7 @@ fn serve_threads(listener: i64, crash_route: bool, t: Totals&) {
             ended(t, e);
         }
     }
+    net::close(p);
 
     // Graceful shutdown: no new connections; each open one finishes the
     // request it is on, answers it with Connection: close, and ends.
@@ -252,40 +334,35 @@ fn serve_threads(listener: i64, crash_route: bool, t: Totals&) {
 // One worker: an event loop over the connections it accepts. Connection
 // numbers are slot + workers * (round << 24) + workers * k, so no two
 // workers, nor two rounds of one, give out the same.
-thread_fn pool_worker(listener: i64, poller: i64, slot: i64, workers: i64, round: i64, crash_route: bool) {
+thread_fn pool_worker(listener: net::Listener, slot: i64, workers: i64, round: i64, crash_route: bool) {
+    let p, ps = net::poller();
+    if ps != 0 { abort("cannot make a poller"); }
     let proto = Session { conn: 0, crash_route: crash_route, .. };
     let first = slot + workers * (round << 24);
-    let counts = serve_loop(listener, poller, proto, first, workers, max(1, MAX_LOOP_CONNECTIONS / workers),
-                            handle);
-    qput(counts);
+    qput(serve(listener, p, net::Conn { .. }, proto, max(1, MAX_LOOP_CONNECTIONS / workers), first, workers,
+               handle, export_more));
 }
 
 // A worker that aborted, and its message.
 struct Restarted { slot: i64, message: u8[] }
 struct PoolDone { slot: i64 }
 
-// Runs one worker contained, over a poller it owns, and starts another when
-// one aborts. A worker's abort leaves its sockets open (a contained
-// worker's extern resources stay open); freeing the poller, which owns
-// them, closes them all.
-thread_fn pool_supervisor(listener: i64, slot: i64, workers: i64, crash_route: bool) {
+// Runs one worker contained, and starts another when one aborts: the
+// runtime has closed the poller and every connection the aborted one held.
+thread_fn pool_supervisor(listener: net::Listener, slot: i64, workers: i64, crash_route: bool) {
     var round = 0;
     loop {
-        let poller = net_poller_new();
-        if poller == 0 { abort("out of memory for a poller"); }
-        let id = thread_spawn_contained(pool_worker, listener, poller, slot, workers, round, crash_route);
+        let id = thread_spawn_contained(pool_worker, listener, slot, workers, round, crash_route);
         var message: u8[>..] = [];
         let ok = thread_wait(id, message);
-        net_poller_free(poller);
-        if ok || net_stop_requested() != 0 { break; }
+        if ok || net::stop_requested() { break; }
         qput(Restarted { slot: slot, message: copy(message) });
         round += 1;
     }
     qput(PoolDone { slot: slot });
 }
 
-fn serve_pool(listener: i64, workers: i64, crash_route: bool, t: Totals&) {
-    if net_set_nonblocking(listener) != 0 { abort("cannot make the listener non-blocking"); }
+fn serve_pool(listener: net::Listener, workers: i64, crash_route: bool, t: Totals&) {
     for w in workers { thread_spawn(pool_supervisor, listener, w, workers, crash_route); }
     var running = workers;
     var stopping = false;
@@ -302,7 +379,7 @@ fn serve_pool(listener: i64, workers: i64, crash_route: bool, t: Totals&) {
             if !done { break; }
             running -= 1;
         }
-        if !stopping && net_stop_requested() != 0 {
+        if !stopping && net::stop_requested() {
             stopping = true;
             deadline = clock() + SHUTDOWN_GRACE_S + 2.0;
             print("stopping: waiting for ", running, " worker(s)");
@@ -341,17 +418,16 @@ fn main() {
         }
         i++;
     }
-    if net_init() != 0 { abort("net_init failed"); }
-    net_catch_signals();
-    let listener = net_listen(port, 1024);
-    if listener < 0 { abort(str("cannot listen on port ", port)); }
+    net::catch_signals();
+    let listener, status = net::listen(port, 1024);
+    if status != 0 { abort(str("cannot listen on port ", port, ": ", net::error_text(status))); }
     if threads_mode { print("listening on :", port, ", a thread per connection"); }
     else { print("listening on :", port, ", ", workers, " worker(s)"); }
 
     var t = Totals { .. };
     if threads_mode { serve_threads(listener, crash_route, t); }
     else { serve_pool(listener, workers, crash_route, t); }
-    net_close(listener);
+    net::close(listener);
 
     var sum = Counts { .. };
     loop {
@@ -362,5 +438,6 @@ fn main() {
     let connections = if threads_mode { t.connections } else { sum.connections };
     print("served ", sum.requests, " request(s) on ", connections, " connection(s): ",
           sum.ok, " ok, ", sum.client_errors, " client errors, ", sum.server_errors, " server errors, ",
-          sum.refused, " refused, ", t.busy, " turned away busy, ", t.aborted, " aborted");
+          sum.refused, " refused, ", t.busy + sum.busy, " turned away busy, ", sum.dropped, " dropped, ",
+          t.aborted, " aborted");
 }

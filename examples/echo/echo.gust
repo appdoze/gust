@@ -1,0 +1,203 @@
+// A TCP echo server over the standard library's net (stdlib/net.goose),
+// with no HTTP in it: every byte a client sends comes back, in order, as
+// fast as the client reads. A client that sends without reading is held
+// back, not buffered without bound: the loop stops reading it while its
+// echo waits, so its own sends block once the socket buffers are full.
+//
+//   gust build examples/echo/echo.gust -o echo.exe
+//   echo.exe [port] [--workers N]     (port 7007 by default; Ctrl-C stops it)
+//   echo.exe --check                  serves itself on a free port, checks
+//                                     the echoes, and says so
+//
+// Each worker is a thread running net::serve over the same listener, with
+// its own poller and connections; a worker's protocol is the two functions
+// below.
+import std;
+import os;
+import net;
+
+// A connection's state: what it has echoed.
+struct Echo { bytes: i64 = 0 }
+
+// All of the input comes back. What the socket does not take at once waits
+// in the loop's queue, and until it has gone the loop reads no more.
+fn echo_input(st: Echo&, ctl: net::Ctl&, input: const u8[:], out: u8[>..]&) -> i64 {
+    out.append(input);
+    st.bytes += input.len;
+    return input.len;
+}
+
+// An echo produces nothing on its own.
+fn no_stream(st: Echo&, ctl: net::Ctl&, out: u8[>..]&, room: i64) { ctl.produce = false; }
+
+thread_fn worker(listener: net::Listener, slot: i64, workers: i64) {
+    let p, status = net::poller();
+    if status != 0 { abort("cannot make a poller"); }
+    qput(net::serve(listener, p, net::Conn { .. }, Echo { .. }, net::Limits { idle_ms: 60000, .. },
+                    net::Replies { .. }, slot, workers, echo_input, no_stream));
+}
+
+fn serve(listener: net::Listener, workers: i64) -> net::Stats {
+    var ids: i64[>..] = [];
+    for w in workers { ids.push(thread_spawn(worker, listener, w, workers)); }
+    var sum = net::Stats { .. };
+    for id in ids {
+        if !thread_wait(id) { continue; }
+        let s = qget<net::Stats>();
+        sum.accepted += s.accepted;
+        sum.closed += s.closed;
+        sum.bytes_in += s.bytes_in;
+        sum.bytes_out += s.bytes_out;
+        sum.overflows += s.overflows;
+        sum.errors += s.errors;
+        sum.idle_timeouts += s.idle_timeouts;
+        sum.peak_out = max(sum.peak_out, s.peak_out);
+    }
+    return sum;
+}
+
+// --- --check: this process as its own client ---------------------------------
+
+fn pattern(i: i64, seed: i64) -> u8 { ((i * 31 + seed * 7 + i / 977) & 255) as! u8 }
+
+// A client connection sending `total` bytes and reading them back.
+struct Client { conn: net::Conn, seed: i64, total: i64, sent: i64 = 0, got: i64 = 0, bad: i64 = 0 }
+
+// Runs the clients until each has its bytes back or `seconds` pass;
+// reading none of them for the first `hold` seconds. False on a failure.
+fn exchange(p: net::Poller, clients: Client[>..]&, seconds: f64, hold: f64) -> bool {
+    var out: u8[>..] = [];
+    out.resize(65536, 0);
+    var buf: u8[>..] = [];
+    buf.resize(65536, 0);
+    var hs: i64[>..] = [];
+    hs.resize(256, 0);
+    var evs: i64[>..] = [];
+    evs.resize(256, 0);
+    let start = clock();
+    for c in clients { net::want(p, c.conn, net::READ | net::WRITE); }
+    loop {
+        var done = true;
+        for c in clients { done = done && c.got == c.total; }
+        if done { return true; }
+        if clock() - start > seconds { return false; }
+        let reading = clock() - start >= hold;
+        net::wait(p, 10, hs, evs);
+        for &c in clients {
+            if c.sent < c.total {
+                let n = min(out.len, c.total - c.sent);
+                for k in n { out[k] = pattern(c.sent + k, c.seed); }
+                let w = net::send(p, c.conn, out[0..n]);
+                if w > 0 { c.sent += w; }
+                else if w != net::AGAIN { return false; }
+                if c.sent == c.total { net::want(p, c.conn, net::READ); }
+            }
+            if reading && c.got < c.total {
+                let r = net::recv(p, c.conn, buf);
+                if r == 0 || (r < 0 && r != net::AGAIN) { return false; }
+                if r > 0 {
+                    for k in r {
+                        if buf[k] != pattern(c.got + k, c.seed) { c.bad++; }
+                    }
+                    c.got += r;
+                }
+            }
+        }
+    }
+}
+
+fn open_clients(p: net::Poller, port: i64, n: i64, total: i64, seed: i64) -> Client[>..] {
+    var clients: Client[>..] = [];
+    for k in n {
+        let c, status = net::connect(p, "127.0.0.1", port, 2000);
+        if status != 0 { abort(str("connect: ", net::error_text(status))); }
+        clients.push(Client { conn: c, seed: seed + k, total: total, .. });
+    }
+    return clients;
+}
+
+fn close_clients(p: net::Poller, clients: Client[>..]&) -> i64 {
+    var bad = 0;
+    for c in clients {
+        bad += c.bad;
+        net::close(p, c.conn);
+    }
+    return bad;
+}
+
+thread_fn checked_server(listener: net::Listener) { qput(serve(listener, 2)); }
+
+fn check() {
+    let l, status = net::listen(0, 128, true);
+    if status != 0 { abort(str("listen: ", net::error_text(status))); }
+    let port = net::port(l);
+    let server = thread_spawn(checked_server, l);
+    let p, ps = net::poller();
+    var failures = 0;
+
+    // Eight clients at once, a megabyte each, sending while they read.
+    var many = open_clients(p, port, 8, 1048576, 1);
+    let ok1 = exchange(p, many, 30.0, 0.0);
+    let bad1 = close_clients(p, many);
+    print("8 clients x 1 MB, interleaved: ", if ok1 && bad1 == 0 { "ok" } else { "FAILED" });
+    if !ok1 || bad1 != 0 { failures++; }
+
+    // One client sending 8 MB and reading nothing for half a second: the
+    // server holds it back, and it gets every byte once it reads.
+    var held = open_clients(p, port, 1, 8388608, 20);
+    let ok2 = exchange(p, held, 30.0, 0.5);
+    let sent_held = held[0].sent;
+    let bad2 = close_clients(p, held);
+    print("1 client x 8 MB, unread at first: ", if ok2 && bad2 == 0 && sent_held == 8388608 { "ok" } else { "FAILED" });
+    if !ok2 || bad2 != 0 { failures++; }
+
+    // Churn: connections opened, echoed once, closed.
+    var churned = 0;
+    for k in 200 {
+        var one = open_clients(p, port, 1, 100, 100 + k);
+        if exchange(p, one, 5.0, 0.0) && close_clients(p, one) == 0 { churned++; }
+    }
+    print("200 connections one after another: ", if churned == 200 { "ok" } else { "FAILED" });
+    if churned != 200 { failures++; }
+
+    net::request_stop();
+    thread_wait(server);
+    let s = qget<net::Stats>();
+    let expected = 8 * 1048576 + 8388608 + 200 * 100;
+    print("server: ", s.accepted, " connections, ", s.closed, " closed, ", s.bytes_in, " bytes in, ",
+          s.bytes_out, " out, at most ", s.peak_out, " bytes of output held");
+    if s.accepted != s.closed || s.bytes_in != expected || s.bytes_out != expected { failures++; }
+    net::close(p);
+    net::close(l);
+    if failures > 0 { abort(str(failures, " check(s) failed")); }
+    print("all checks passed");
+}
+
+fn main() {
+    let a = args();
+    var port = 7007;
+    var workers = max(1, min(hardware_threads(), 64));
+    var i = 1;
+    while i < a.len {
+        if a[i] == "--check" { check(); return; }
+        if a[i] == "--workers" && i + 1 < a.len {
+            i++;
+            let n, ok = parse_int(a[i]);
+            if !ok || n < 1 || n > 256 { abort(str("bad worker count ", a[i])); }
+            workers = n;
+        } else {
+            let n, ok = parse_int(a[i]);
+            if !ok || n < 1 || n > 65535 { abort(str("usage: echo [port] [--workers N] | --check; got ", a[i])); }
+            port = n;
+        }
+        i++;
+    }
+    net::catch_signals();
+    let l, status = net::listen(port, 1024);
+    if status != 0 { abort(str("cannot listen on port ", port, ": ", net::error_text(status))); }
+    print("echoing on :", port, ", ", workers, " worker(s)");
+    let s = serve(l, workers);
+    net::close(l);
+    print("echoed ", s.bytes_out, " of ", s.bytes_in, " bytes on ", s.accepted, " connection(s), ",
+          s.closed, " closed, ", s.overflows + s.errors, " dropped");
+}

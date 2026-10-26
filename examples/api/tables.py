@@ -9,7 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "..", "build", "api-bench", "results.json")
 rep = json.load(open(path))
 NAMES = {"gust": "Gust, worker pool", "gustthreads": "Gust, thread per connection", "go": "Go net/http",
-         "goraw": "Go, same HTTP as Gust"}
+         "goraw": "Go, same HTTP as Gust", "gustbefore": "Gust, worker pool, before (bench.py --before)"}
 
 def f(v, fmt="{:,.0f}"):
     return "–" if v is None else fmt.format(v)
@@ -50,10 +50,31 @@ def latency_table(title, kinds):
                       f"{spread(m, 'due_p999_us')} |")
     print()
 
-# The two comparisons apart: the same minimal HTTP in each language, then
-# Gust's server against Go's standard library server.
-latency_table("Equivalent minimal HTTP", ("gust", "gustthreads", "goraw"))
-latency_table("Gust against Go's net/http", ("gust", "go"))
+def before_after_table():
+    """The pool before and after a change (bench.py --before), with the
+    machine's CPU use just before each run, which neither controls."""
+    print("**Before and after**")
+    print()
+    print("| scenario | server | req/s (range) | p50 µs | p99 µs (range) | p99.9 µs (range) | peak RSS MB | server CPU | other CPU before | errors |")
+    print("|---|---|---:|---:|---:|---:|---:|---:|---:|---:|")
+    for sc in rep["scenarios"]:
+        for kind in ("gustbefore", "gust"):
+            m = sc["median"].get(kind)
+            if m is None:
+                continue
+            print(f"| {sc['name']} | {NAMES[kind]} | {spread(m, 'rps')} | {f(m.get('p50_us'))} | "
+                  f"{spread(m, 'p99_us')} | {spread(m, 'p999_us')} | {f(m['peak_rss_mb'], '{:.1f}')} | "
+                  f"{f(m['server_cpu_share'], '{:.0%}')} | {f(m.get('background_cpu_pct'), '{:.0f}%')} | "
+                  f"{m['errors'] + m['status_mismatches']} |")
+    print()
+
+if any("gustbefore" in sc["median"] for sc in rep["scenarios"]):
+    before_after_table()
+else:
+    # The two comparisons apart: the same minimal HTTP in each language, then
+    # Gust's server against Go's standard library server.
+    latency_table("Equivalent minimal HTTP", ("gust", "gustthreads", "goraw"))
+    latency_table("Gust against Go's net/http", ("gust", "go"))
 
 print()
 print("| scenario | server | page faults per 1k requests | heap allocations per request | heap bytes per request | collections | collector pause, total ms |")

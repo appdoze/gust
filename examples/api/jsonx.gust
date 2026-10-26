@@ -116,8 +116,15 @@ fn gave<T>(d: Decoded, v: const T&, name: const u8[:]) -> bool {
 struct Problems { count: i64 = 0 }
 
 fn problem(p: Problems&, out: u8[>..]&, field: const u8[:], msg: const u8[:], kind: const u8[:]) {
+    problem_in(p, out, "body", field, msg, kind);
+}
+
+// A problem in another part of the request: "query", "path".
+fn problem_in(p: Problems&, out: u8[>..]&, part: const u8[:], field: const u8[:], msg: const u8[:],
+              kind: const u8[:]) {
     out.append(if p.count == 0 { "{\"detail\":[" } else { "," });
-    out.append("{\"loc\":[\"body\"");
+    out.append("{\"loc\":[");
+    json::format_string(out, part);
     if field.len > 0 {
         out.push(',');
         json::format_string(out, field);

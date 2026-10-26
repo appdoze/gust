@@ -6,7 +6,7 @@ Starts the server on a free port, sends each case, compares the status and
 the JSON body (and a few headers), then stops it with Ctrl-C's signal and
 checks the graceful shutdown. Exits 1 on any mismatch.
 """
-import argparse, json, os, signal, socket, struct, subprocess, sys, threading, time
+import argparse, io, json, os, signal, socket, struct, subprocess, sys, threading, time
 
 def free_port():
     with socket.socket() as s:
@@ -14,7 +14,9 @@ def free_port():
         return s.getsockname()[1]
 
 def read_response(f):
-    """One HTTP/1.1 response from a socket file: status, headers, body."""
+    """One HTTP/1.1 response from a socket file: status, headers, body. A
+    chunked body is put back together; one with neither a length nor
+    chunks runs to the end of the connection."""
     line = f.readline()
     if not line:
         return None
@@ -27,7 +29,20 @@ def read_response(f):
             break
         k, v = h.decode().split(":", 1)
         headers[k.strip().lower()] = v.strip()
-    body = f.read(int(headers.get("content-length", "0")))
+    if headers.get("transfer-encoding") == "chunked":
+        pieces = []
+        while True:
+            size = int(f.readline().strip(), 16)
+            if size == 0:
+                f.readline()
+                break
+            pieces.append(f.read(size))
+            f.readline()
+        body = b"".join(pieces)
+    elif "content-length" in headers:
+        body = f.read(int(headers["content-length"]))
+    else:
+        body = f.read()
     return status, headers, body
 
 def request(port, raw, keep=None):
@@ -206,6 +221,121 @@ def disconnect_mid_response(port, fails):
     r = request(port, http("GET", "/health"))
     report(fails, "a client resetting mid-response does not disturb the server", r is not None and r[0] == 200)
 
+def items_in_order(body, n):
+    items = json.loads(body)["items"]
+    return len(items) == n and all(it["id"] == k + 1 for k, it in enumerate(items))
+
+def large_responses(port, fails):
+    """A response far past what one write sends, built whole (about 630 KB),
+    and one streamed (about 13 MB, chunked), each followed on the same
+    connection by a request answered after it; HTTP/1.0 streamed to the end
+    of the connection; and the query's limits."""
+    with connect(port) as s:
+        f = s.makefile("rb")
+        s.sendall(b"GET /v1/items?repeat=1000 HTTP/1.1\r\nHost: x\r\n\r\nGET /health HTTP/1.1\r\nHost: x\r\n\r\n")
+        r1, r2 = read_response(f), read_response(f)
+        report(fails, "a response built whole past 16 KB, then the next on its connection",
+               r1 and r1[0] == 200 and items_in_order(r1[2], 8000) and r2 and r2[0] == 200,
+               f"{len(r1[2]) if r1 else 0} bytes")
+        s.sendall(b"GET /v1/items/export?repeat=20000 HTTP/1.1\r\nHost: x\r\n\r\n"
+                  b"GET /v1/items/3 HTTP/1.1\r\nHost: x\r\n\r\n")
+        r3, r4 = read_response(f), read_response(f)
+        report(fails, "a streamed response (chunked), then the next on its connection",
+               r3 and r3[0] == 200 and r3[1].get("transfer-encoding") == "chunked" and
+               items_in_order(r3[2], 160000) and r4 and r4[0] == 200 and json.loads(r4[2])["id"] == 3,
+               f"{len(r3[2]) if r3 else 0} bytes")
+    with connect(port) as s:
+        s.sendall(b"GET /v1/items/export?repeat=100 HTTP/1.0\r\n\r\n")
+        r = read_response(s.makefile("rb"))
+        report(fails, "a streamed response to HTTP/1.0 ends with its connection",
+               r and r[0] == 200 and "transfer-encoding" not in r[1] and r[1].get("connection") == "close"
+               and items_in_order(r[2], 800))
+    ok = True
+    for path in ("/v1/items?repeat=0", "/v1/items?repeat=1001", "/v1/items?repeat=x",
+                 "/v1/items/export?repeat=1000001"):
+        r = request(port, http("GET", path))
+        ok = ok and r[0] == 422 and json.loads(r[2])["detail"][0]["loc"] == ["query", "repeat"]
+    report(fails, "repeat out of range is a 422 on the query", ok)
+
+def slow_stream_reader(port, fails):
+    """A client that takes a 13 MB stream slowly: it gets every byte, and
+    other clients are served promptly meanwhile."""
+    a = connect(port)
+    a.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 65536)
+    a.sendall(b"GET /v1/items/export?repeat=20000 HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+    raw = []
+    def take():
+        while True:
+            d = a.recv(65536)
+            if not d:
+                return
+            raw.append(d)
+            time.sleep(0.004)
+    reader = threading.Thread(target=take, daemon=True)
+    reader.start()
+    time.sleep(0.2)
+    worst, others = 0.0, True
+    for _ in range(20):
+        t0 = time.perf_counter()
+        with connect(port) as b:
+            b.sendall(http("GET", "/health"))
+            r = read_response(b.makefile("rb"))
+        worst = max(worst, time.perf_counter() - t0)
+        others = others and r is not None and r[0] == 200
+    reader.join(60)
+    a.close()
+    r = read_response(io.BytesIO(b"".join(raw)))
+    report(fails, "a slow reader of a stream gets all of it, holding back no one else",
+           others and worst < 1.0 and r is not None and items_in_order(r[2], 160000),
+           f"others served {others}, slowest {worst * 1000:.0f} ms; {sum(map(len, raw))} bytes")
+
+def disconnect_mid_stream(port, fails):
+    """A client that resets the connection 300 KB into a 64 MB stream: the
+    server drops it and goes on serving."""
+    s = connect(port)
+    s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+    s.sendall(b"GET /v1/items/export?repeat=100000 HTTP/1.1\r\nHost: x\r\n\r\n")
+    got = 0
+    while got < 300000:
+        d = s.recv(65536)
+        if not d:
+            break
+        got += len(d)
+    s.close()
+    time.sleep(0.3)
+    r = request(port, http("GET", "/health"))
+    report(fails, "a client resetting mid-stream does not disturb the server", r is not None and r[0] == 200)
+
+def fragmented_requests(port, fails):
+    """A request sent three bytes at a time, and two pipelined requests split
+    inside a header: each answered whole, in order."""
+    with connect(port) as s:
+        s.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        f = s.makefile("rb")
+        body = b'{"item_id":2,"quantity":1}'
+        msg = b"POST /v1/orders HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n%s" % (len(body), body)
+        for i in range(0, len(msg), 3):
+            s.sendall(msg[i:i + 3])
+            time.sleep(0.001)
+        r1 = read_response(f)
+        two = b"GET /v1/items/5 HTTP/1.1\r\nHost: x\r\n\r\nGET /v1/items/6 HTTP/1.1\r\nHo"
+        s.sendall(two)
+        time.sleep(0.05)
+        s.sendall(b"st: x\r\n\r\n")
+        r2, r3 = read_response(f), read_response(f)
+    report(fails, "fragmented and split pipelined requests",
+           r1 and r1[0] == 201 and r2 and json.loads(r2[2])["id"] == 5 and r3 and json.loads(r3[2])["id"] == 6)
+
+def open_handles(pid):
+    """The server's open handles (Windows) or file descriptors: sockets
+    among them. None without psutil."""
+    try:
+        import psutil
+    except ImportError:
+        return None
+    p = psutil.Process(pid)
+    return p.num_handles() if os.name == "nt" else p.num_fds()
+
 def churn(port, fails):
     """Connections opened, used once and closed, one after another."""
     good, t0 = 0, time.perf_counter()
@@ -255,12 +385,24 @@ def main():
         print(("ok   " if good else "FAIL ") + f"{name}: {status} {body[:160]!r}")
         if not good:
             fails.append(name)
+    # The server's handles once it has served (Winsock, say, has started):
+    # what it has again once the connections below are gone.
+    handles = open_handles(proc.pid) if not args.go else None
     keep_alive_and_pipelining(port, fails)
     slow_reader(port, fails)
     disconnect_mid_response(port, fails)
     churn(port, fails)
     if not args.go:
+        large_responses(port, fails)
+        slow_stream_reader(port, fails)
+        disconnect_mid_stream(port, fails)
+        fragmented_requests(port, fails)
         slow_request(port, fails)
+    if handles is not None:
+        time.sleep(0.5)
+        after = open_handles(proc.pid)
+        report(fails, "every connection's socket is closed once it ends", after <= handles + 16,
+               f"{handles} handles before the connections above, {after} after")
 
     if args.crash_route:
         try:
@@ -279,6 +421,12 @@ def main():
     partial = connect(port)
     body = b'{"item_id":1,"quantity":2}'
     partial.sendall(b"POST /v1/orders HTTP/1.1\r\nHost: x\r\nContent-Length: %d\r\n\r\n" % len(body))
+    # And, for Gust, a stream half read: it is finished, then closed.
+    streaming = None
+    if not args.go:
+        streaming = connect(port)
+        streaming.sendall(b"GET /v1/items/export?repeat=5000 HTTP/1.1\r\nHost: x\r\n\r\n")
+        first = streaming.recv(65536)
     time.sleep(0.2)
     if os.name == "nt":
         proc.send_signal(signal.CTRL_BREAK_EVENT)
@@ -296,6 +444,22 @@ def main():
     except OSError:
         idle_closed = True
     report(fails, "an idle connection is closed at shutdown", idle_closed)
+    if streaming is not None:
+        streaming.settimeout(10)
+        rest = [first]
+        try:
+            while True:
+                d = streaming.recv(65536)
+                if not d:
+                    break
+                rest.append(d)
+            closed = True
+        except OSError:
+            closed = False
+        r = read_response(io.BytesIO(b"".join(rest)))
+        report(fails, "a stream under way at shutdown is finished, then its connection closed",
+               closed and r is not None and items_in_order(r[2], 40000))
+        streaming.close()
     try:
         out, err = proc.communicate(timeout=20)
     except subprocess.TimeoutExpired:

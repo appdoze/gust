@@ -8,9 +8,8 @@ the language and the library can be compared apart.
 | file | what |
 |---|---|
 | `api.gust` | the service: routes, models, validation, the worker pool or a thread per connection, containment, graceful shutdown |
-| `http.gust` | HTTP/1.1 server side: in-place request parsing, keep-alive, pipelining, limits, timeouts, error responses; the event loop (`serve_loop`) and the blocking per-connection server (`serve`) |
+| `http.gust` | HTTP/1.1 server side as a protocol over the standard library's event loop (`net::serve`, `stdlib/net.goose`): in-place request parsing, keep-alive, pipelining, limits, timeouts, error responses, responses built whole up to 1 MB and streamed (chunked) past that |
 | `jsonx.gust` | JSON for a struct through `const for` (compile-time field iteration), and FastAPI-shaped `422` errors |
-| `net.gust`, `net.h`, `net.c` | sockets (Winsock and POSIX), blocking and non-blocking, and a poller that owns its sockets, behind `extern fn`s checked against `net.h` (`c_headers`) |
 | `go/server` | the Go twin on `net/http` |
 | `go/rawserver` | the Go twin with the same minimal HTTP as `http.gust` |
 | `go/loadgen` | the load generator all of them are measured with |
@@ -41,16 +40,22 @@ Two ways to serve, the same HTTP:
 - **A worker pool** (the default; `--workers N`, by default one per
   hardware thread): each worker an event loop over the connections it
   accepts. An idle connection costs about 2 KB. Handlers must not block.
-- **A thread per connection** (`--thread-per-connection`): handlers may
-  block; each connection costs two threads and about 130 KB resident.
+- **A thread per connection** (`--thread-per-connection`): the acceptor
+  detaches each connection and a thread of its own adopts it and runs the
+  same loop over it alone; handlers may block; each connection costs two
+  threads and about 130 KB resident.
+
+The sockets, the poller and the loop are the standard library's `net`
+(`docs/stdlib.md`); `examples/echo/` is the same loop with no HTTP.
 
 The routes:
 
 ```
-GET  /health              {"status":"ok"}
-GET  /v1/items            {"items":[...]}
-GET  /v1/items/{id}       an item, or 404
-POST /v1/orders           {"item_id":1,"quantity":2,"note":"..."} -> 201, or 422 / 409
+GET  /health                     {"status":"ok"}
+GET  /v1/items[?repeat=N]        {"items":[...]}: the catalog N times (1-1000), built whole
+GET  /v1/items/export?repeat=N   the same, N up to 1,000,000, streamed in chunks
+GET  /v1/items/{id}              an item, or 404
+POST /v1/orders                  {"item_id":1,"quantity":2,"note":"..."} -> 201, or 422 / 409
 ```
 
 A validation error reads as FastAPI's do:
@@ -62,4 +67,5 @@ A validation error reads as FastAPI's do:
 Design, measurements against Go, the gaps found and the roadmap are in
 [`docs/gust/backend_api.md`](../../docs/gust/backend_api.md). The test
 suite builds the example and runs `test_api.py` against both ways to
-serve, normally and with `--checked` (`test/api_example.py`).
+serve, normally and with `--checked`, and in its sanitizer profile under
+ASan and UBSan (`test/api_example.py`).

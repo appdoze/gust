@@ -2572,16 +2572,33 @@ def main():
     if cc:
         r.show_task(ffi_stack_writes)
 
+    # Gust: the network examples, pure Gust over the runtime's net. In the
+    # sanitize profile their C is built as the fixtures' is, so that the
+    # sanitizers watch the networking runtime under real traffic.
+    example_build = {} if args.profile == "baseline" else {"cc": cc, "extra": extra, "runtime": r.runtime}
+
     def api_example():
         from api_example import check_api_example
         try:
-            check_api_example(exe, gendir)
-            r.ok("api example: HTTP routes, validation, limits, slow and resetting clients, churn, "
-                 "containment and shutdown; pool and thread per connection, normal and --checked")
+            check_api_example(exe, gendir, **example_build)
+            r.ok("api example: HTTP routes, validation, limits, large and streamed responses, slow, "
+                 "fragmented and resetting clients, churn, sockets reclaimed, containment and "
+                 "shutdown; pool and thread per connection, normal and --checked")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("api example", str(e))
-    if cc and args.profile == "baseline":
+    if cc:
         r.show_task(api_example)
+
+    def echo_example():
+        from echo_example import check_echo_example
+        try:
+            check_echo_example(exe, gendir, **example_build)
+            r.ok("echo example: interleaved, unread and churning clients, served and stopped; "
+                 "normal and --checked")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("echo example", str(e))
+    if cc:
+        r.show_task(echo_example)
 
     show_goose_in_goose()
 
