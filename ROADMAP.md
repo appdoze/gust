@@ -194,7 +194,11 @@ the plain function.
 - **MIR JIT** for no-build runs (Lobster's MIR mode is 2.56x off the fastest build, against
   4.39x for Goose's TinyCC mode; MIR is MIT-licensed, ending the LGPL question).
 - **Python bindings generator**: turn a library into a pip-installable module, the route
-  Rust grew through with PyO3.
+  Rust grew through with PyO3. **(Done: `scripts/gust_python.py` builds a library's
+  exports into a ctypes package with checked integers, structs, slices read from
+  sequences and buffers in place and written back, which pip installs as a platform
+  wheel; tested on Windows and Linux in `test/python_bindings.py`, installed with pip and
+  imported.)**
 - Formatter, a package registry with version resolution and a lockfile, a docs site.
 - Keep error output agent-friendly (`--diagnostics json` exists) and ship a compact
   language guide AI agents can load in one go.

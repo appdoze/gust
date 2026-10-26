@@ -959,6 +959,20 @@ inline void CodeGen::EmitExports() {
         if (si.needssp) args += "gs_cb_base";
         auto ret = sp->rets.empty() ? string("void")
                    : returnslice ? string("const uint8_t *") : CT(sp->rets[0]);
+        // Gust: the Goose signature beside the C one, for a reader of the
+        // header and for what generates bindings from it
+        // (scripts/gust_python.py): a C uint8_t is a u8 or a bool there.
+        string sig;
+        for (size_t i = 0; i < sp->argtypes.size(); i++) {
+            string ts;
+            sp->argtypes[i]->Dump(ts);
+            Append(sig, i ? ", " : "",
+                   i < sf->params.size() ? sf->params[i].name : string_view("_"), ": ", ts);
+        }
+        string rs;
+        if (!sp->rets.empty()) sp->rets[0]->Dump(rs);
+        Append(exportprotos, "/* gust: ", sf->cname, "(", sig, ")", rs.empty() ? "" : " -> ", rs,
+               " */\n");
         Append(exportprotos, ret, " ", sf->cname, "(", params, ");\n");
         Append(code, ret, " ", sf->cname, "(", params, ") {\n"
                      "    if (!gs_program_initialized)\n"

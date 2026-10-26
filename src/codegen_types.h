@@ -581,6 +581,19 @@ inline string CodeGen::CT(TypeExpr *t) {
         }
         case TY_STRUCT: {
             auto si = SI(t);
+            // Gust: the Goose fields, for a binding generator reading the header
+            // (scripts/gust_python.py): the C fields follow in order, with
+            // padding between them.
+            string gs, ts;
+            for (size_t i = 0; i < si->st->fields.size(); i++) {
+                if (si->st->fields[i].ispad || !si->ftypes[i]) continue;
+                ts.clear();
+                si->ftypes[i]->Dump(ts);
+                Append(gs, gs.empty() ? "" : ", ", si->st->fields[i].name, ": ", ts);
+            }
+            ts.clear();
+            t->Dump(ts);
+            Append(d, "/* gust: struct ", ts, " { ", gs, " } */\n");
             Append(d, "struct ", name, " {\n");
             if (EmptyLayout(si->st->fields)) Append(d, "    uint8_t gs_empty;\n");
             else EmitCFields(d, si->st->fields, si->ftypes);

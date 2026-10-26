@@ -2429,6 +2429,20 @@ def main():
     if cc:
         r.show_task(extern_dylib)
 
+    # Gust: a library's exports as a Python package. Its shared library is
+    # loaded into Python itself, which the sanitizers' runtimes are not, so
+    # only a build without them.
+    def python_bindings():
+        from python_bindings import check_python_bindings
+        try:
+            check_python_bindings(exe, cc, gendir)
+            r.ok("python bindings: integers in range, floats, bools, structs, slices from sequences "
+                 "and buffers and written back, bytes returned, the import's thread, pip install")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("python bindings", str(e))
+    if cc and not extra:
+        r.show_task(python_bindings)
+
     def resource_paths():
         from resource_paths import check_resource_paths
         try:

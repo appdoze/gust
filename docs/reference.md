@@ -3899,6 +3899,40 @@ It may grow storage outside it, but not shrink it or rebind an optional
 outside it, which the caller, suspended in the extern call, may still rely
 on: those are compile errors at `c_callback`. Spec §7.11.
 
+### Python bindings (Gust)
+
+`scripts/gust_python.py lib.gust --out dist` turns a library's exports into
+a Python package: it writes the C with `--standalone --header`, builds it
+as a shared library with clang (or gcc, or MSVC with `--cc cl`), and writes
+`dist/lib/__init__.py`, which loads it with ctypes and calls `goose_init` as
+it is imported. `pip install dist/` installs it, as a wheel for this
+platform and any Python 3.
+
+```goose
+struct P { x: i64, y: i64 }
+export fn mid(a: P, b: P) -> P { P { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } }
+export fn upcase(s: u8[:]) { for b, i in s { if b >= 97 && b <= 122 { s[i] = b - 32; } } }
+```
+
+```python
+import lib
+lib.mid((0, 0), lib.P(10, 20))      # P(x=5, y=10)
+b = bytearray(b"hi"); lib.upcase(b) # b is now bytearray(b'HI')
+```
+
+Integers are checked against their type's range (an `OverflowError`, not
+C's silent truncation); a struct whose fields sit at their natural
+alignment is a class, built from one, a tuple or a dict; a `const T[:]`
+takes a sequence or a buffer of T's machine type (bytes, `array.array`, a
+NumPy array), read in place; a `T[:]` takes a list, which gets what the
+function wrote, or a writable buffer, written in place; a returned
+`const u8[:]` is `bytes`. Anything else is left out, with a comment in the
+module saying why: the header gives each export's Goose signature in a
+`/* gust: ... */` comment, and each struct's fields, for this. The
+functions run on the importing thread (another raises `RuntimeError`), and
+a runtime error in Gust code ends the process with its message, as it
+would a C host.
+
 ---
 
 ## 25. Builtins

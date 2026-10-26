@@ -239,6 +239,16 @@ git log upstream/master..main
 
 ## Scripts and tests
 
+- `scripts/gust_python.py` (new): Python bindings for a library's exports,
+  as a package pip installs (a wheel for the platform, any Python 3): the
+  C built as a shared library, and a ctypes module that starts the runtime
+  on import and checks each argument (integer ranges, struct fields,
+  writability) before the call; structs, slices from sequences and buffers
+  in place, written back to lists, and a returned `const u8[:]` as bytes.
+  The header it reads gives each export's Goose signature and each struct's
+  Goose fields in a comment (`src/codegen_emit.h`, `src/codegen_types.h`).
+  `test/python_bindings.py` (new) runs it, imports the package directly and
+  from where pip installed it; `docs/reference.md`.
 - `compare/` (new): the cross-language benchmarks (Gust, Rust, Lobster;
   Lobster's suite and code under its Apache-2.0 licence, provenance in
   `compare/README.md`) and safety probes, with portable harnesses whose

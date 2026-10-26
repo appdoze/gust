@@ -32,6 +32,10 @@ Early fork. The language today is Goose's, with these changes
   take is laid out differently in C; `--deny-externs` refuses them, as
   auditing Rust's `unsafe` would. A sidecar's `c_headers` has the C compiler
   check each `extern fn` against its header.
+- `c_callback(f)` hands C an export fn to call back (qsort's comparator,
+  libcurl's write callback), and `scripts/gust_python.py` turns a library's
+  exports into a pip-installable Python package
+  ([reference](docs/reference.md#python-bindings-gust)).
 - A thread's data stacks commit memory as they grow from 16 KB, not 1 MB at
   a time, so a server with a thread per connection stays small.
 - A standard library module for TCP, [`net`](docs/stdlib.md#net):
