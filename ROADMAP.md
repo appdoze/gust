@@ -5,6 +5,11 @@ usable with large libraries and multiple cores. The durations assume **one exper
 developer working full time with AI coding agents**; a small team can run some phases in
 parallel (3 with 2, 6 with 5). They are estimates, not measurements.
 
+The performance and safety targets here are **goals**, not results. Passing selected
+benchmarks does not establish that Gust is faster than Rust in general, nor that its checks
+make it as safe as Rust; each phase states what was measured, where and how, and an item is
+marked done only with the test or run that shows it.
+
 "The fork" below is Gust. Every phase ends with exit criteria
 checked by three suites: Goose's own tests (`python test/run_tests.py`, 3,551 files), the
 cross-language benchmark harness (`python compare/run_bench.py`: checksums must stay identical
@@ -37,18 +42,25 @@ Both move into `compare/` in Phase 0.
   notices to changed files, credit Goose in the README, rename the binary. **(done; the docs
   keep Goose's name until the hard fork)**
 - Move the cross-language benchmarks and safety probes into `compare/` (Lobster's suite is
-  Apache-2.0 too).
+  Apache-2.0 too). **(not started: there is no `compare/` in the repository yet)**
 - Commit the clang-discovery fix as the first change. **(done)**
 - CI on Windows, Linux and macOS running Goose's tests plus `compare/` and `compare/safety/`.
+  **(partly done: Goose's suite, the samples under `--checked` and a Linux ASan and UBSan
+  profile run on ubuntu-latest, macos-latest and windows-latest; green at commit `395acee8`,
+  run 40247107115; `compare/` is not part of it)**
 - Record today's numbers (`compare/results.json`) as the baseline every later phase is
-  measured against.
+  measured against. **(not done)**
 
-**Exit:** CI green on three platforms; baseline stored.
+**Exit:** CI green on three platforms **(met for the suite at `395acee8`; to be met again
+for each pushed milestone)**; baseline stored **(not met)**.
 
 ## Phase 1: Quick wins (weeks 2–4)
 
 - **clang as the default C compiler** wherever it is installed. **(done on Windows,
-  including CMake packages under clang; confirm on Linux and macOS)**
+  including CMake packages under clang. On Linux and macOS, CI requires clang to be found
+  and runs the suite's clang checks (`--require-clang`, green in run 40247107115), which
+  shows clang works there, not that it is the one chosen by default; that is still to
+  confirm)**
 - **`--checked`**: an optimized build that keeps the overflow, range and tag checks
   `--debug` has. **(done)** Measured cost on the 8 benchmarks: 0-1% on four, 6-7% on sort
   and astar, 12% on hashmap, 17% on bintrees, about 5% on average; still level with or
@@ -78,8 +90,9 @@ Both move into `compare/` in Phase 0.
   requests while the fork is still close to Goose.
 
 **Exit:** a test shows `--checked` catching overflow in an optimized build **(done)**; no
-benchmark regresses; generation checks for pools land. The `simd fn` criterion moves to
-Phase 5.
+benchmark regresses **(not measured: no `compare/` baseline yet)**; generation checks for
+pools land **(opt-in handles landed; checked plain references did not)**. The `simd fn`
+criterion moves to Phase 5.
 
 ## Phase 2: Code quality (months 2–3)
 
@@ -165,19 +178,28 @@ the plain function.
 - **Compile-time plugin registration** with `const for` (routers, event handlers resolved at
   compile time), instead of closures-as-objects.
 - **Thread-per-core async I/O**: each worker owns its connections and event loop; then an
-  HTTP server and client library on it.
+  HTTP server and client library on it. **(the first half done, without async: the
+  standard library's `net`, `stdlib/net.goose` over `src/runtime/runtime_net.h`, with
+  checked handles, thread ownership, a runtime that closes an ended thread's sockets, and
+  `net::serve`, an event loop with bounded output, streaming and backpressure; tested on
+  Windows and, through generated C, under ASan and UBSan in WSL; not yet run in hosted CI)**
 - Started early, as `examples/api/`: an HTTP/1.1 JSON API served by a pool of
   event-loop workers (one per CPU), measured against a thread per connection and
-  against Go (net/http, and Go with the same HTTP) in `docs/gust/backend_api.md`,
-  whose roadmap orders the backend work: a `net` module with the loop, epoll /
-  kqueue / IOCP, runtime-owned cancellation, M:N workers, then the items above.
+  against Go (net/http, and Go with the same HTTP) in `docs/gust/backend_api.md`; it
+  now stands on `net`, with responses of any size, and `examples/echo/` is a second,
+  HTTP-free user of the loop. The backend roadmap there orders what follows; its next
+  milestone is the network in hosted CI on three platforms and measured at tens of
+  thousands of connections, with epoll / kqueue / Windows AFD only where that shows
+  `poll` costing, then runtime-owned cancellation. M:N workers, work stealing and
+  freeze-then-share stay milestones of their own.
 
 **Exit:** an HTTP server and a callback-heavy GUI program written idiomatically; HTTP
 throughput compared against a Rust (tokio) server in `compare/`.
 
 ## Phase 8: Hardening and 1.0 (months 16–24)
 
-- Fuzz the compiler, the type checker and `from_bytes`; sanitizer jobs in CI.
+- Fuzz the compiler, the type checker and `from_bytes`; sanitizer jobs in CI **(a Linux ASan
+  and UBSan profile runs already; with this milestone it also covers the network examples)**.
 - A soundness review of the memory model and the new parallel features, ideally with
   outside reviewers. "Safer than Rust" has to be earned by people trying to break it.
 - Freeze the spec; publish a stability and edition policy.

@@ -238,7 +238,8 @@ collections counted from `runtime.MemStats`).
   with no capabilities to learn because nothing can be shared.
 - *The C side keeps C's model.* The one shared mutable value in the API
   example is the shutdown flag, set by a signal or console handler and read
-  by every connection thread. It is in C (`examples/api/net.c`), and it is
+  by every connection thread. It is in C (`src/runtime/runtime_net.h`, first
+  `examples/api/net.c`), and it is
   an atomic with release and acquire, not `volatile sig_atomic_t`: that is
   enough between a signal handler and its own thread, but between threads
   C11 makes it a data race (**implemented**). The `--externs` audit lists
@@ -281,7 +282,7 @@ collections counted from `runtime.MemStats`).
 
 **Gust's decisions.**
 - *An event loop per worker for I/O, a worker per CPU* (**implemented** in
-  the API example, `http.gust`'s `serve_loop`). Gust runs one OS thread per
+  the standard library's `net::serve`, first the API example's `serve_loop`). Gust runs one OS thread per
   `thread_fn`, and the example first gave each connection one, as
   `net/http` gives each a goroutine. Measured, that cost 2 threads, 293 KB
   of commit and 131 KB resident per idle connection, and, past the CPU
@@ -325,12 +326,13 @@ collections counted from `runtime.MemStats`).
 - *Let the C compiler check prototypes against the C headers*
   (**implemented**, Part 2): a sidecar's `c_headers` puts the header ahead
   of Gust's own prototypes, the check Zig's translate-c gives, without
-  translating C. The API example's `net.h` is checked this way.
-- *Rust's safe-wrapper idiom, as the documented pattern*: the example's
-  `recv_into` and `send_all` are the only callers of the pointer-and-length
-  externs, and derive both from one slice
-  (`examples/api/net.gust`); `--deny-externs` keeps the rest of a program
-  from calling C directly.
+  translating C. The API example's first `net.h` was checked this way.
+- *Rust's safe-wrapper idiom, as the documented pattern*: the API example's
+  first sockets had `recv_into` and `send_all` as the only callers of their
+  pointer-and-length externs, deriving both from one slice; the standard
+  library's `net` goes further and has no pointer extern at all, its runtime
+  calls taking slices whole and checked handles. `--deny-externs` keeps the
+  rest of a program from calling C directly.
 - *No hidden argument across the boundary*, unlike Odin's context: Gust's
   stacks reach C only as explicit pointers.
 

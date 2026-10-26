@@ -2,27 +2,30 @@
 
 What Gust had for writing an HTTP API, what was built and measured in
 `examples/api/`, why it serves from a pool of event loops, how it compares
-with Go under the same load, and what Gust needs next. The language
+with Go under the same load, the standard library's networking module the
+example now stands on (section 6), and what Gust needs next. The language
 research behind the design decisions is in
 [`language_research.md`](language_research.md).
 
 Every number here was measured on one machine (Windows 11, Intel i7-11700F,
-8 cores and 16 threads, 32 GB) over loopback, on 25 October 2026, with
-Gust built by clang 22.1.8 at `-O2` and Go 1.26.3. Raw results are in
+8 cores and 16 threads, 32 GB) over loopback, with Gust built by clang
+22.1.8 at `-O2` and Go 1.26.3: sections 2 to 5 on 25 October 2026, with
+the example's first networking layer (its own `net.c`), and section 6's
+before-and-after comparison on 26 October 2026. Raw results are in
 `examples/api/results/`.
 
 ## 1. The audit: what a backend needs, and what Gust had
 
 | area | Gust before this work | in `examples/api/` now | gap left |
 |---|---|---|---|
-| sockets | nothing: the standard library has files, not sockets | `net.c` (Winsock and POSIX) behind `extern fn`s checked against `net.h` by `c_headers`; blocking and non-blocking calls; a poller (WSAPoll, poll) that owns its sockets; every pointer-and-length call wrapped so a slice gives both | a `net` module in the standard library; epoll, kqueue or IOCP behind the poller for many thousands of connections per worker |
-| HTTP | none | `http.gust`: HTTP/1.1 parsed in place, keep-alive, pipelining, `Content-Length` bodies, `Host` checks (RFC 9112), `413` / `431` / `501` / `408` refusals, partial reads and writes | chunked bodies, a client, HTTP/2, TLS (terminate it in a proxy meanwhile), responses over 16 KB that a slow client does not take (closed) |
+| sockets | nothing: the standard library has files, not sockets | the standard library's `net` (section 6): TCP over IPv4, non-blocking sockets, a poller (WSAPoll, poll), checked handles, and `serve`, the event loop, over `src/runtime/runtime_net.h`; no pointer crosses into C | IPv6, DNS, UDP, TLS; epoll, kqueue or IOCP behind the poller for many thousands of connections per worker |
+| HTTP | none | `http.gust`, a protocol over `net::serve`: HTTP/1.1 parsed in place, keep-alive, pipelining, `Content-Length` bodies, `Host` checks (RFC 9112), `413` / `431` / `501` / `408` refusals, partial reads and writes, responses built whole up to 1 MB and streamed in chunks past that | chunked request bodies, a client, HTTP/2, TLS (terminate it in a proxy meanwhile) |
 | routing | none | a plain `if` chain on the path, `405` naming the methods a path has, as Go 1.22's `ServeMux` | a router with path patterns; function values cannot escape, so a table of handlers is not possible today, but an enum of routes expanded with `const for` would be |
 | JSON | `std/json`: a writer, a tree parser, and a reader that decodes straight into a program's types | `jsonx.gust`: a struct of numbers, booleans and inline strings encoded and decoded through `const for` over its fields, one line per type to opt in to encoding | the opt-in line (`const if` would remove it); optional fields; nested structs and arrays in decoding; UTF-8 validation of strings |
 | validation | none | field errors gathered into one FastAPI-shaped `422`; text fields with their limit in the type (`Str64`) | declarative constraints on fields |
-| errors | an abort ends the program; contained workers end only themselves | workers contained under supervisors that close their sockets and restart them (section 4); refusals as JSON | an aborted worker's request counts are lost; out-of-memory is not contained |
+| errors | an abort ends the program; contained workers end only themselves | workers contained under supervisors that restart them, the runtime closing the sockets an ended worker held (section 4); refusals as JSON | an aborted worker's request counts are lost; out-of-memory is not contained |
 | concurrency | `thread_fn` workers sharing nothing, typed global queues of flat values | a pool of event-loop workers, one per CPU, by default; a thread per connection as an option | handlers in the pool must not block; read-only state must be compile-time `const` or be copied; no addressed replies |
-| cancellation | none | a stop flag (an atomic in C) the loops look at every 50 ms, the thread per connection between requests and every 100 ms while waiting | a handler cannot be interrupted, and no per-request deadline reaches into it (Go's `context`) |
+| cancellation | none | a stop flag (an atomic in the runtime, `net::stop_requested`) the loops look at every 50 ms, the acceptor every 100 ms | a handler cannot be interrupted, and no per-request deadline reaches into it (Go's `context`) |
 | timeouts | none | idle (5 s between requests), request (5 s from a request's first byte, as Go's `ReadHeaderTimeout`), send (5 s for a client that stops reading) | per-route deadlines |
 | graceful shutdown | none | stop accepting, finish each request in flight, answer it `Connection: close`, close idle connections, within a 10 s grace | none for this example |
 | observability | none | per-worker counts sent to `main` when a worker ends | logging, metrics, a wall clock and dates in the standard library |
@@ -93,7 +96,7 @@ per idle connection, one thread each, but p99.9 at 256 connections of
 57 ms: the supervisors cost memory, not latency, because a blocked thread
 never runs. So it was not the prerequisite; fewer runnable threads were.
 
-**The design.** `http.gust`'s `serve_loop`: one worker per CPU
+**The design.** One worker per CPU
 (`--workers`), each a contained thread with an event loop over the
 connections it accepts from the shared non-blocking listener, waiting on
 a poller. Its tradeoffs, chosen knowingly:
@@ -105,19 +108,17 @@ a poller. Its tradeoffs, chosen knowingly:
    (roadmap).
 2. *Containment is per worker.* Gust contains aborts per thread (spec
    §11.2), so an abort in a handler ends its worker and that worker's
-   connections, about 1/N of them; its supervisor frees the worker's
-   poller, which owns their sockets and so closes them, and starts a new
-   worker on the same listener. With a thread per connection it ends one
-   connection.
+   connections, about 1/N of them; the runtime closes the worker's poller
+   and its sockets as the worker's thread program ends, and the supervisor
+   starts a new worker on the same listener. With a thread per connection
+   it ends one connection.
 3. *More networking code.* Partial reads keep a request's start in an
-   input slot; partial writes keep the rest of a response in an output
-   slot and wait for the socket; while output is pending the connection is
-   not read, so responses go out in order and a client that does not read
-   is not sent more. Slots come from per-worker slabs that only grow, with
-   free lists.
-
-No runtime change was needed: the pool is example code over the `net`
-layer.
+   input slot; partial writes keep the rest of a response queued and wait
+   for the socket; while output is pending the connection is not read, so
+   responses go out in order and a client that does not read is not sent
+   more. That loop was first the example's own (`serve_loop`); it is now
+   the standard library's `net::serve` (section 6), and `http.gust` is
+   only the protocol.
 
 ## 3. How the example fits Gust's models
 
@@ -131,7 +132,8 @@ layer.
   generated C of the request path calls no allocator.
 - **Threads share nothing, so the release needs no coordination.** The
   catalog every connection reads is a `const`, which is static data. The
-  one shared mutable value is the stop flag, an atomic in C.
+  shared mutable values are the stop flag, an atomic, and the runtime's
+  tables of listeners and detached connections, under one lock.
 - **Identity without shared state.** An order's id is its connection's
   number and its count on that connection; connection numbers are
   `worker + workers × (round << 24 + k)`, unique across workers and their
@@ -141,7 +143,7 @@ layer.
 
 | failure | pool | thread per connection | why |
 |---|---|---|---|
-| a runtime check fails in a handler: index out of range, failed `assert`, `abort`, division by zero, a limited array overflowing, and, under `--checked`, integer overflow or an `as` conversion changing a value | that worker ends; its connections (about 1/N) are closed by its supervisor; a new worker takes its place; other workers' connections go on | that connection ends; its supervisor closes the socket | contained workers (§11.2); `test/threads/thread_contained.goose`; `test_api.py --crash-route` |
+| a runtime check fails in a handler: index out of range, failed `assert`, `abort`, division by zero, a limited array overflowing, and, under `--checked`, integer overflow or an `as` conversion changing a value | that worker ends; the runtime closes its connections (about 1/N) as it ends; its supervisor starts a new worker; other workers' connections go on | that connection ends; the runtime closes its socket | contained workers (§11.2); `test/threads/thread_contained.goose`; `test/threads/net_serve.goose`; `test_api.py --crash-route` |
 | a data stack runs into its guard gap (a value grew past `--stack-reserve`) | the process ends | the process ends | not contained (§11.2); `test/threads/thread_contained_overflow.goose` |
 | the native call stack is exhausted (deep recursion) | the process ends | the process ends | not contained (§11.2) |
 | the system refuses to commit memory | the process ends ("out of memory committing a data stack") | the same | a runtime failure, not contained |
@@ -241,7 +243,7 @@ What they show:
 - **Go allocates per request; Gust does not.** net/http: 30 heap
   allocations and 3.0 KB per request, collected about 2,000 times in a
   10 s run; Go with the minimal HTTP: 7 and 465 bytes (its
-  `encoding/json`); Gust: none in the request path (section 7 says how
+  `encoding/json`); Gust: none in the request path (section 8 says how
   that was established) and, in the pool, 0.06 page faults per thousand
   requests.
 - **The runs vary.** Ranges over five reps are in the tables: the pool's
@@ -377,74 +379,300 @@ for Go with the same HTTP, whose throughput also fell (from 121k–136k to
 worker owning its connections, with no work stealing, would make the
 pool's tail more fragile than Go's did not show up here.
 
-## 6. Roadmap for backends, in order
+## 6. The networking module
 
-Ranked by measured impact against effort; each names its evidence.
+The example's sockets and its event loop moved into the standard library
+as `net` (`stdlib/net.goose`, over `src/runtime/runtime_net.h`; reference
+in [`docs/stdlib.md`](../stdlib.md#net)). The example keeps only HTTP
+(`http.gust`, a protocol over the loop) and its routes, and
+`examples/echo/` is a second user of the loop with no HTTP in it.
 
-1. **A `net` module in the standard library**, from `examples/api/net.c`
-   and the event loop in `http.gust`. Every backend needs it, and the
-   loop is the measured way to serve many connections (section 2). Effort:
-   moderate, mostly moving and documenting code that exists and is tested
-   on Windows; the POSIX half is untested here (section 7).
-2. **epoll, kqueue and IOCP behind the poller.** `poll` and `WSAPoll` scan
-   every socket on every wait, O(connections per worker); fine at the
-   thousands measured here, not at hundreds of thousands. Effort: small
-   per platform, behind the same interface.
-3. **Cancellation the runtime owns**: a stop token that `qget`,
+### The interface
+
+Listeners, pollers, connections and detached connections; `listen`,
+`accept`, `connect` with a timeout, non-blocking `recv` and `send`,
+`want` (what a poller waits for on a connection: read, write, both or
+neither), `wait` with a timeout, `shutdown` (half-close) and `close`;
+`detach` and `adopt` to hand a connection to another thread; a stop flag
+set by Ctrl-C, SIGINT or SIGTERM once `catch_signals` is called. Results
+are counts, or one of eight negative codes; `os_error()` has the OS's
+code for the last failure on the calling thread.
+
+- **Handle validity.** Every handle carries its kind, its table entry's
+  generation and, for a poller and its connections, the owning thread. A
+  handle that does not name a live object of its kind (closed, its entry
+  reused, from another thread, made up) gets `BAD_HANDLE` and reaches
+  nothing; no call takes a pointer, only slices whose lengths the runtime
+  reads. Tested in `test/stdlib/stdlib_net.goose` (closed, closed twice,
+  another generation, the wrong kind, a closed poller's connections, a
+  detached connection adopted twice, a connection of another poller) and
+  `test/threads/net_serve.goose` (another thread's poller and connection).
+  The limits of the encoding: a generation has 20 bits and a thread number
+  24 (the thread's id modulo 2^24), so a stale handle would pass again only
+  after its entry had been reused a million times, or, across threads,
+  after 16.7 million thread programs had started.
+- **Ownership and cleanup.** A poller owns its connections. Pollers and
+  connections live in their thread's own table, reachable from no other.
+  Listeners and detached connections are in shared tables under one lock;
+  an accept or a watching poller holds a reference to its listener, so
+  closing it cannot let its socket number be reused under them. When a
+  thread program ends, by returning or by a contained abort, the runtime
+  closes what it still owns (a hook `runtime_threads.h` runs as each
+  thread program ends, installed when the network is first used), so a
+  supervisor restarting an aborted worker leaks no socket. Tested in
+  `net_serve.goose` (a worker that returns and one that aborts, each
+  leaving a listener and a connection open: the client sees the
+  connection closed, and the port refuses), and in `test_api.py`, which
+  checks that the server's handle count returns to what it was once the
+  connections it made have ended (64 before and 64 after, on Windows).
+- **Errors.** `ERROR` (the OS failed; the connection is no good), `AGAIN`,
+  `BAD_HANDLE`, `LIMIT` (a table or memory ran out), `ADDRESS` (not an
+  IPv4 address or `localhost`, or the port is taken), `TIMEOUT`,
+  `UNAVAILABLE` (Winsock could not be started) and `INVALID`.
+- **The platform boundary.** On Windows, `ws2_32.dll` is loaded from the
+  system directory the first time the network is used, so a program that
+  never uses it neither links nor loads it; on clang and gcc each function
+  pointer is checked against `winsock2.h`'s prototype at compile time
+  (`_Static_assert` on `__builtin_types_compatible_p`); MSVC builds do not
+  have that check. POSIX sockets are made non-blocking and close-on-exec,
+  with `MSG_NOSIGNAL` (Linux) or `SO_NOSIGPIPE` (macOS, BSD) so a peer's
+  reset is an error, not a signal. The runtime's externs are declared in
+  `runtime_ext.h` and checked against their definitions by the C compiler.
+
+### The loop: order, backpressure, limits
+
+`net::serve(listener, poller, first, proto, limits, replies, first_id,
+id_step, D, P)` runs one worker. `D` gets each connection's unconsumed
+input and appends replies; `P` produces a response of any size in pieces,
+called whenever none of the connection's output is waiting. `D` is not
+called while output is waiting or `P` is producing, so responses go out in
+request order, and a connection whose client does not read is not read
+either, which blocks the client's own sends once the socket buffers fill:
+what a slow or hostile client costs the server is bounded.
+
+| limit (`net::Limits`, HTTP's setting) | when it is reached |
+|---|---|
+| `max_conns` (65536 / workers) | a new connection gets `replies.busy` (HTTP: a 503) and is closed |
+| `in_size` (8 KB head + 8 KB body) | input not consumed fills it: closed (HTTP refuses earlier with 431 or 413) |
+| `out_queue` (1 MB + 64 KB) | a connection's unsent output past it: closed; HTTP answers a body past 1 MB with 500 (stream it instead) |
+| `out_total` (16 MB per worker, in 16 KB chunks) | a producer waits, out of the poll set, until another connection frees some; HTTP answers a body larger than what is left with 503 |
+| `idle_ms` (5 s) | closed |
+| `read_ms` (5 s from a request's first byte) | `replies.timeout` (HTTP: a 408), closed |
+| `write_ms` (5 s with nothing taken) | closed |
+| `grace_ms` (10 s after a stop) | still busy: closed |
+
+A stream holds at most one of `P`'s pieces beyond what the socket's
+buffers do (HTTP's pieces are 64 KB). Output memory comes from a chunk
+slab and input from a slot slab, both grow-only with free lists, and both
+stay the worker's until `serve` returns: bounded by `out_total` and by the
+most connections that had partial input at once times `in_size`. The
+poller's own tables are C heap, doubling as connections are added and
+freed when the poller closes. `serve` returns `Stats`: accepted and closed
+(equal when it returns), refusals and timeouts by kind, overflows,
+contract breaks by `D` or `P`, OS errors, bytes each way, and the most
+output memory held at once.
+
+**The 16 KB limit is gone.** The first loop kept at most 16 KB of a
+response unsent per connection and closed the connection, counted as a
+server error, when more was left; no route then produced more. Now
+`/v1/items?repeat=1000` answers about 630 KB built whole, and
+`/v1/items/export` streams up to 1,000,000 copies of the catalog, about
+64 MB per 100,000, in chunks (to an HTTP/1.0 client, until the connection
+closes). `test_api.py` checks a 630 KB and a 12.8 MB response each
+followed by a request on the same connection, a slow reader of a stream
+while other clients are served (slowest of 20 in 1 ms), a reset 300 KB
+into a 64 MB stream, fragmented and split pipelined requests, and a stream
+under way at shutdown that is finished before its connection closes.
+`net_serve.goose` checks an 8 MB response through a 64 KB queue in order
+with the line after it, a 2 MB slow reader, input past `in_size`,
+`max_conns`, the idle timeout, 200 connections of churn, a stop with
+connections idle and mid-response, and a worker whose output memory is
+all held by one unread connection, where the other connection's
+producer waits parked and both get every byte.
+
+**Blocking handlers.** In the pool a handler that blocks stalls every
+connection of its worker: there is no preemption and no scheduler moving
+connections between workers, unlike Go's goroutines, and an abort ends
+all of a worker's connections, not one request. The thread-per-connection
+mode is the tested alternative: the acceptor detaches each connection, a
+contained thread adopts it and runs the same loop over it alone, so its
+handler may block and an abort ends only that connection, at about
+130 KB resident and two threads per connection (section 2).
+
+### Readiness, completion, and the next backends
+
+`poll` and `WSAPoll` report readiness: the loop calls `recv` or `send`
+when a socket is ready and the call finishes at once, so a buffer belongs
+to the OS only during that call, cancelling is closing, and a connection's
+memory can go back to the free lists the moment it closes. epoll and
+kqueue are readiness interfaces too, and fit behind `wait` and `want`
+unchanged, level-triggered as the loop expects (it reads once per report
+and asks again); a connection waiting for nothing would be removed from
+the set, as it is from the `poll` array now. IOCP reports completion: a
+read or write is submitted with its buffer, which the OS owns until the
+completion arrives, cancelling (`CancelIoEx`) is itself asynchronous, and
+a connection's buffers cannot be reused until every operation on it has
+completed, even after it is closed. That moves buffer ownership into the
+runtime, with `serve`'s slots and chunks lent to the OS per operation and
+returned on completion, a different contract for `recv` and `send`. The
+readiness route on Windows that fits the current interface is the AFD
+poll that wepoll and Rust's mio use. None of these was added: `poll`
+scans every socket of a worker on each wait, which at the connection
+counts measured here (up to 256 busy and 500 idle in all, a few dozen per
+worker) did not show as a cost; nothing was measured at tens of
+thousands of connections, where it would (section 7).
+
+### Before and after
+
+`python examples/api/bench.py --reps 5 --seconds 10 --kinds gust --before
+old_api.exe`, on 26 October 2026: the pool server built from the tree
+before the module (commit `6008946c`, the example's own `net.c` and
+`serve_loop`) and after it, both by the same compiler with clang at `-O2`,
+`--workers 8`, on the same CPUs and load as section 5, alternating which
+runs first. Raw runs are in
+`examples/api/results/2026-10-26-net-before-after.json`; medians, with the
+lowest and highest of the five reps:
+
+| scenario | server | req/s (range) | p50 µs | p99 µs (range) | p99.9 µs (range) | peak RSS MB | other CPU before |
+|---|---|---:|---:|---:|---:|---:|---:|
+| mixed, 16 connections | before | 122,376 (109,028–137,820) | 104 | 535 (386–695) | 1,278 (806–1,657) | 5.8 | 41% |
+| mixed, 16 connections | after | 127,221 (98,860–137,760) | 102 | 454 (395–914) | 1,061 (830–2,551) | 5.9 | 21% |
+| mixed, 64 connections | before | 145,268 (140,695–155,082) | 305 | 2,791 (2,479–3,560) | 6,916 (5,198–10,540) | 5.9 | 32% |
+| mixed, 64 connections | after | 155,647 (149,187–162,156) | 309 | 2,430 (2,144–2,903) | 6,390 (5,456–9,882) | 6.0 | 31% |
+| mixed, 256 connections | before | 165,271 (130,331–179,084) | 1,271 | 5,556 (4,454–11,047) | 11,251 (8,543–39,762) | 6.0 | 15% |
+| mixed, 256 connections | after | 160,096 (155,482–170,654) | 1,266 | 5,684 (5,009–6,349) | 12,856 (10,449–14,799) | 6.2 | 26% |
+| health, 64 connections | before | 161,934 (146,583–169,498) | 283 | 2,440 (2,229–2,898) | 7,844 (4,948–9,843) | 5.9 | 17% |
+| health, 64 connections | after | 156,213 (143,199–161,164) | 290 | 2,517 (2,429–3,539) | 6,006 (5,478–8,740) | 5.9 | 38% |
+| order, 64 connections | before | 160,913 (146,519–169,142) | 304 | 2,336 (1,998–3,112) | 8,190 (6,366–8,639) | 5.9 | 31% |
+| order, 64 connections | after | 151,993 (143,309–164,540) | 307 | 2,896 (2,233–3,141) | 8,436 (6,551–8,559) | 6.0 | 26% |
+| mixed, 64 connections, 20k req/s fixed rate | before | 20,000 | 85 | 198 (175–376) | 494 (271–3,519) | 5.9 | 18% |
+| mixed, 64 connections, 20k req/s fixed rate | after | 20,000 | 86 | 209 (181–419) | 598 (335–1,832) | 5.9 | 23% |
+| mixed, new connection per request, 16 clients | before | 3,977 (1,251–7,446) | 1,679 | 9,473 (2,977–34,790) | 20,819 (13,083–61,029) | 5.9 | 71% |
+| mixed, new connection per request, 16 clients | after | 6,903 (1,167–7,647) | 1,451 | 5,485 (2,967–39,504) | 22,942 (15,046–71,460) | 6.0 | 29% |
+| mixed, 64 connections, 32 slow readers | before | 99,958 (77,250–117,641) | 507 | 1,865 (1,197–6,090) | 3,489 (1,914–20,378) | 7.1 | 43% |
+| mixed, 64 connections, 32 slow readers | after | 111,426 (67,572–128,064) | 470 | 3,190 (1,350–10,196) | 10,717 (2,421–21,645) | 7.3 | 75% |
+| large (63 KB built whole), 64 connections | after | 19,087 (18,245–20,955) | 3,084 | 8,628 (7,467–10,734) | 14,473 (10,353–21,144) | 6.8 | 19% |
+| stream (640 KB chunked), 16 connections | after | 2,081 (1,707–2,133) | 6,993 | 24,028 (15,187–38,450) | 35,664 (29,511–49,942) | 7.7 | 26% |
+
+"Other CPU before" is the machine's CPU use in the second before each run,
+the median over the reps, from programs this benchmark does not control
+(no application was closed for it): it ranged from 11% to 100% in single
+runs, against 23.5% measured once before the benchmark started, and the
+churn and slow-reader runs saw the most. What the runs show:
+
+- **No difference beyond the noise.** In every scenario both servers ran,
+  the after server's range overlaps the before server's, in throughput
+  and in the tails. Its medians are higher in four (mixed at 16 and 64
+  connections, churn, slow readers) and lower in four (mixed at 256,
+  health, order, the fixed rate's p99.9); none of these is a measured
+  change, and a regression smaller than about 10% would not show at this
+  level of background load.
+- **Memory is the same where the work is the same**: 5.8–6.2 MB peak in
+  the closed-loop scenarios, 2 KB resident per idle connection (500 idle
+  connections), and page faults per thousand requests at or below the
+  before server's.
+- **What only the after server does stays bounded.** 63 KB responses built
+  whole, 19,000 a second (about 1.2 GB/s), peaked at 6.8 MB; 640 KB
+  streamed responses, 2,100 a second (about 1.3 GB/s), at 7.7 MB, with 16
+  of them in flight. Both are limited by the server's CPU (85%), which
+  spends it encoding the JSON, not by the loop. The before server could
+  not send either: no route produced more than 16 KB, which it would have
+  closed the connection on.
+- **Slow readers.** With 32 clients pipelining requests and reading 4 KB
+  every 50 ms beside 64 normal connections, both servers held the slow
+  ones' output back without failing anyone (no errors, the slow readers
+  receiving the same amount); the after server's p99.9 median is higher
+  (10.7 ms against 3.5 ms), with ranges that overlap (2.4–21.6 against
+  1.9–20.4 ms) in the runs where other programs used the most CPU (75%
+  median), so this one is the first to measure again on a quieter machine.
+- **Errors**: none for the after server; one for the before server in one
+  churn rep, a load-generator dial failure, as in section 5.
+
+## 7. Roadmap for backends, in order
+
+Ranked by measured impact against effort; each names its evidence. The
+`net` module, first here before, is done (section 6).
+
+1. **Next milestone: the network in hosted CI, and measured at scale.**
+   Exit criteria: (a) the hosted CI run on Windows, Linux and macOS is
+   green with `stdlib_net`, `net_serve`, the API and echo examples, and
+   the sanitize profile runs both examples under ASan and UBSan; (b) a
+   scaling run of the pool at 1,000, 10,000 and 50,000 mostly idle
+   connections with 1,000 active, reporting throughput, p99 and p99.9,
+   memory per connection and the share of server CPU in `poll`/`WSAPoll`
+   from a profiler; (c) epoll, kqueue or Windows' AFD poll added behind
+   `wait` and `want` only where (b) shows the wait taking more than a
+   fifth of the server's CPU at 10,000 connections, the same tests
+   passing with it, and section 6's scenarios no slower beyond their
+   run-to-run range.
+2. **Cancellation the runtime owns**: a stop token that `qget`,
    `thread_wait` and the `net` waits return on, and a deadline per request
    a handler can see (Go's `context`, Zig 0.16's `cancel`). Today a stop
    reaches a loop within 50 ms but cannot interrupt a handler. Effort:
    runtime and compiler (new builtins).
-4. **M:N workers on the data stacks**, so handlers may block at event-loop
+3. **M:N workers on the data stacks**, so handlers may block at event-loop
    cost. A worker's data lives on its data stacks, so switching workers in
    user space moves no data. This is what would retire the thread-per-
-   connection mode. Effort: large (runtime research).
-5. **Freeze-then-share** (ROADMAP Phase 4): data built at startup and read
+   connection mode. Effort: large (runtime research); a milestone of its
+   own, as is work stealing between workers.
+4. **Freeze-then-share** (ROADMAP Phase 4): data built at startup and read
    by every worker in place. Today it must be a compile-time `const` or be
-   copied into each thread.
-6. **Addressed mailboxes**, so a worker can ask another and get the answer
+   copied into each thread. A milestone of its own.
+5. **Addressed mailboxes**, so a worker can ask another and get the answer
    itself; without them mutable shared state (a store, a cache, a rate
    limiter) has no place in a share-nothing server.
-7. **Containable out-of-memory**: a data stack the system will not commit,
+6. **Containable out-of-memory**: a data stack the system will not commit,
    in a contained worker, could end that worker rather than the process.
-8. **A non-blocking `thread_wait`.** It would halve the thread-per-
-   connection mode's memory (measured, section 2), and nothing else here
-   needs it.
-9. **`const if` and field attributes**, so JSON needs no opt-in line and
+7. **`const if` and field attributes**, so JSON needs no opt-in line and
    validation can be declared on fields, as FastAPI does with annotations;
    **a router** from an enum of routes expanded with `const for`.
-10. **The rest of HTTP**: chunked bodies, a client, TLS in a package that
-    wraps a C library, HTTP/2 later; logging, metrics and dates in the
-    standard library.
+8. **The rest of HTTP and networking**: chunked request bodies, a client,
+   IPv6 and DNS, TLS in a package that wraps a C library, HTTP/2 later;
+   logging, metrics and dates in the standard library.
+9. **A non-blocking `thread_wait`.** It would halve the thread-per-
+   connection mode's memory (measured, section 2); nothing else here needs
+   it, and the runtime now closes an ended thread's sockets itself.
 
-## 7. What is not settled
+## 8. What is not settled
 
-- **Measured on Windows; tested on Windows and Linux; not on macOS.** On
-  Linux (WSL2, kernel 6.6, gcc 15.2) the C that gust wrote for the API
-  server, the stack-growth program and the contained-overflow program was
-  built with gcc and run there, and `test_api.py` passed against the pool
-  (normal and `--checked`) and a thread per connection, as did
-  `runtime_commit_chunks.c`; `net.c` builds with `-std=c11
-  -D_POSIX_C_SOURCE=200809L -Wall -Wextra -Werror`, which found a `usleep`
-  (gone from POSIX since 2008) that is now `poll`. The Linux Gust compiler
-  itself was not built there (no CMake in that environment), so the whole
-  suite ran on Windows only. macOS, whose fault-handler commit path the
-  stack change touches, was not available. CI builds and tests both on
-  every push (`test/api_example.py`), and no hosted run has been made for
-  this work: nothing has been pushed. Nothing was benchmarked on Linux,
-  whose scheduler and loopback path are not Windows'.
+- **Where it has run.** Windows 11: everything, with clang and MSVC, and
+  the single-threaded `net` test in the JIT. Linux (WSL2, kernel 6.6,
+  gcc 15.2, not native Linux): the C gust wrote for both `net` fixtures
+  and both examples, built there with `-fsanitize=address,undefined`
+  (the suite's flags) and run, `test_api.py` passing against the pool and
+  a thread per connection, normal and `--checked`; the Linux compiler
+  itself was not built there (no CMake in that environment), and the
+  handle-count check needs `psutil`, which was not installed. macOS: not
+  run; the `SO_NOSIGPIPE` path is untested. Hosted CI last ran on commit
+  `395acee8` (run 40247107115: green on ubuntu-latest, macos-latest and
+  windows-latest and the Linux ASan and UBSan profile), before this work;
+  none of the `net` commits has been pushed or run there. Nothing was
+  benchmarked on Linux, whose scheduler and loopback path are not
+  Windows'.
 - **One machine, loopback.** A network between client and server adds
   latency that hides some of these differences.
 - **Gust's allocation count is established from the generated C, not
-  counted.** The request path (`serve_loop`'s handlers and everything they
-  call, `serve` and everything it calls) contains no call to an allocator;
-  slot slabs grow on a data stack only when more connections than ever
-  before have a request in flight at once. Page faults per request are
-  the runtime-side check. Go's numbers are its runtime's counters.
-- **The Gust server is a subset of `net/http`**: no chunked bodies, no
-  `Date` header, no `context` per request, no HTTP/2. The minimal-HTTP Go
-  server is the like-for-like comparison.
-- **Large responses to slow clients.** A worker keeps at most 16 KB of
-  unsent response per connection; a larger remainder closes the
-  connection (counted as a server error). The example's responses are
-  under 1 KB.
+  counted.** The request path (`http.gust`'s protocol and handlers, and
+  `net::serve` around them) contains no call to an allocator: its slot and
+  chunk slabs grow on a data stack only when more connections than before
+  have input or output pending at once, and the poller's C tables grow by
+  doubling when more connections are open at once than before. Page
+  faults per request are the runtime-side check. Go's numbers are its
+  runtime's counters.
+- **The Gust server is a subset of `net/http`**: no chunked request
+  bodies, no `Date` header, no `context` per request, no HTTP/2. The
+  minimal-HTTP Go server is the like-for-like comparison.
+- **Untested paths.** The HTTP 503s for `max_conns` and for a worker out
+  of output memory are not reached by `test_api.py` (the loop's busy reply
+  and its parking are, in `net_serve.goose`); nothing exercises IPv6
+  (unsupported) or a platform poller other than `poll` and `WSAPoll`.
+- **Out of file descriptors.** When `accept` fails for want of one, the
+  loop goes back to waiting, and the listener, still ready, wakes it at
+  once: a worker spins until a descriptor is freed. The usual remedy (a
+  descriptor held in reserve, closed to accept and drop the connection) is
+  not implemented, and the case is not tested.
+- **Not production-ready.** The module is new, has run on one Windows
+  machine and in WSL, has no hosted CI run yet, no TLS, and no scale
+  testing past a few hundred connections; the comparisons with Go and
+  Rust say how these programs did on these workloads, not that Gust is
+  faster or as safe in general.
