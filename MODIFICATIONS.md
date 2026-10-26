@@ -104,6 +104,10 @@ git log upstream/master..main
   directory at first use, its functions checked against `winsock2.h` at
   compile time on clang and gcc. `src/codegen.h`: the C slice type of
   `i64` is emitted with the runtime's extern support, for `net`'s wait.
+- `src/runtime/runtime_net.h`, `stdlib/net.goose`: out of file
+  descriptors, an accept on Linux and macOS spends a reserved one to drop
+  the waiting connection, and `net::serve` rests its listener after
+  repeated failures (`Stats.accept_failures`) rather than spin.
 - `src/runtime/runtime_threads.h`: a hook a thread program runs at its end
   however it ends, which `runtime_net.h` sets at first use to close the
   network handles the thread still owns.
@@ -144,6 +148,8 @@ git log upstream/master..main
   `--check` mode `.github/workflows/ci.yml` runs on every platform, the
   probes' expected outcomes (`compare/safety/expected.json`), and a
   measured baseline (`compare/results.json`).
+- `test/net_fd_limit.py` (new), `test/run_tests.py`: a server out of file
+  descriptors drops what it cannot take and does not spin (Linux, macOS).
 - `test/api_example.py` (new), `test/echo_example.py` (new),
   `test/run_tests.py`, `docs/testing.md`: the suite builds the API and echo
   examples normally and with `--checked` and runs their behaviour tests over

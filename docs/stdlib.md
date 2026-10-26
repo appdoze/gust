@@ -798,7 +798,7 @@ fn poller() -> Poller, i64
 fn close(p: Poller) -> i64                 // and every connection in it
 fn count(p: Poller) -> i64                 // the connections in it
 fn watch(p: Poller, l: Listener, on: bool = true) -> i64   // wait for connections on l too
-fn accept(p: Poller, l: Listener) -> Conn, i64             // 0, AGAIN, or an error
+fn accept(p: Poller, l: Listener) -> Conn, i64             // 0, AGAIN, LIMIT, or an error
 fn connect(p: Poller, host: const u8[:], port: i64, timeout_ms: i64 = 5000) -> Conn, i64
 fn recv(p: Poller, c: Conn, buf: u8[:]) -> i64             // bytes read; 0: the peer closed
 fn send(p: Poller, c: Conn, bytes: const u8[:]) -> i64     // what the socket took now
@@ -887,7 +887,11 @@ At a stop (`stop_requested()`), `serve` stops accepting, closes idle
 connections, lets busy ones finish within `grace_ms`, and returns its
 `Stats`: connections accepted and closed (equal once it returns), refusals
 and timeouts of each kind, overflows, contract breaks by `D` or `P`, OS
-errors, bytes each way, and the most output memory held at once. The
+errors, failed accepts, bytes each way, and the most output memory held
+at once. Out of file descriptors, an `accept` on Linux and macOS drops the
+waiting connection so that its client hears at once (one descriptor is
+held in reserve for it) and returns `LIMIT`; `serve` drains up to 64 such,
+then rests the listener 100 ms rather than spin. The
 memory `serve` has used for input and output stays its own until it
 returns, bounded by the limits.
 

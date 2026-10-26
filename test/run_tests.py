@@ -2613,6 +2613,20 @@ def main():
     if cc:
         r.show_task(echo_example)
 
+    def net_fd_limit():
+        from net_fd_limit import check_net_fd_limit
+        try:
+            skipped = check_net_fd_limit(exe, gendir, **example_build)
+            if skipped:
+                r.say(f"skip net fd limit ({skipped})")
+            else:
+                r.ok("net fd limit: out of descriptors, the server drops what it cannot take, "
+                     "does not spin, and serves again")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("net fd limit", str(e))
+    if cc:
+        r.show_task(net_fd_limit)
+
     show_goose_in_goose()
 
     # --- JIT: the same programs, compiled and run inside the compiler --------

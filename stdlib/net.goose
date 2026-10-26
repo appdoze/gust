@@ -105,7 +105,9 @@ fn count(p: Poller) -> i64 { rt_count(p.handle) }
 fn watch(p: Poller, l: Listener, on: bool = true) -> i64 { rt_watch(p.handle, l.handle, on) }
 
 // A connection from l, in p and waiting to read: the connection, and 0,
-// AGAIN when none is waiting, or an error.
+// AGAIN when none is waiting, LIMIT when the process is out of descriptors
+// (on Linux and macOS the waiting connection is then dropped, so that its
+// client hears at once), or an error.
 fn accept(p: Poller, l: Listener) -> Conn, i64 {
     let h = rt_accept(p.handle, l.handle);
     if h < 0 { return Conn { .. }, h; }
@@ -229,6 +231,7 @@ struct Stats {
     bytes_in: i64 = 0,
     bytes_out: i64 = 0,
     peak_out: i64 = 0,           // the most output memory held at once, in whole chunks
+    accept_failures: i64 = 0,    // accepts that failed (out of descriptors, say): the listener rested
     parks: i64 = 0,              // times a producer waited for output memory
 }
 
@@ -291,6 +294,7 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
     var parked = 0;
     var next_id = first_id;
     var listening = listener.handle != 0 && watch(poller, listener) == 0;
+    var resume_at = 0.0;          // when a resting listener is watched again
     var stop_at = 0.0;
 
     fn open(c: Conn, now: f64) {
@@ -535,9 +539,24 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
     }
 
     fn accept_all(now: f64) {
+        var failed = 0;
         loop {
             let c, status = accept(poller, listener);
-            if status != 0 { return; }    // none left: this worker or another took them
+            if status == AGAIN || status == BAD_HANDLE { return; }    // none left, or no listener
+            if status != 0 {
+                // Out of descriptors or memory, or the OS failed it. On Linux
+                // and macOS each such accept has dropped a waiting connection,
+                // so a few more drain the queue; then the listener rests a
+                // moment, rather than wake the loop again at once, ready with
+                // nothing it can take.
+                stats.accept_failures += 1;
+                failed += 1;
+                if failed < 64 { continue; }
+                watch(poller, listener, false);
+                listening = false;
+                resume_at = now + 0.1;
+                return;
+            }
             if live >= limits.max_conns {
                 send(poller, c, replies.busy);    // what fits; it is closed either way
                 close(poller, c);
@@ -600,6 +619,10 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
                     rearm(i);
                 }
             }
+        }
+        if !listening && resume_at > 0.0 && now >= resume_at && stop_at == 0.0 {
+            listening = watch(poller, listener) == 0;
+            resume_at = 0.0;
         }
         if stop_at == 0.0 && stop_requested() { stop_at = now; }
         if stop_at > 0.0 && listening {

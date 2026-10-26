@@ -51,6 +51,7 @@ fn serve(listener: net::Listener, workers: i64) -> net::Stats {
         sum.overflows += s.overflows;
         sum.errors += s.errors;
         sum.idle_timeouts += s.idle_timeouts;
+        sum.accept_failures += s.accept_failures;
         sum.peak_out = max(sum.peak_out, s.peak_out);
     }
     return sum;
@@ -199,5 +200,6 @@ fn main() {
     let s = serve(l, workers);
     net::close(l);
     print("echoed ", s.bytes_out, " of ", s.bytes_in, " bytes on ", s.accepted, " connection(s), ",
-          s.closed, " closed, ", s.overflows + s.errors, " dropped");
+          s.closed, " closed, ", s.overflows + s.errors, " dropped, ", s.accept_failures,
+          " accept(s) failed");
 }

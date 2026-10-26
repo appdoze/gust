@@ -677,11 +677,17 @@ Ranked by measured impact against effort; each names its evidence. The
   of output memory are not reached by `test_api.py` (the loop's busy reply
   and its parking are, in `net_serve.goose`); nothing exercises IPv6
   (unsupported) or a platform poller other than `poll` and `WSAPoll`.
-- **Out of file descriptors.** When `accept` fails for want of one, the
-  loop goes back to waiting, and the listener, still ready, wakes it at
-  once: a worker spins until a descriptor is freed. The usual remedy (a
-  descriptor held in reserve, closed to accept and drop the connection) is
-  not implemented, and the case is not tested.
+- **Out of file descriptors.** On Linux and macOS the runtime holds one
+  descriptor in reserve: an accept refused for want of descriptors spends
+  it to take the waiting connection off the queue and drop it, so its
+  client hears at once, and `serve` drains up to 64 such before resting the
+  listener 100 ms rather than spin (`Stats.accept_failures`).
+  `test/net_fd_limit.py` runs the echo example with a 40-descriptor limit
+  and 120 clients: some are served, the rest dropped, the worker uses
+  little CPU while out of descriptors, and it serves again once they go;
+  against the runtime before this change, 84 of the 120 were left hanging
+  in the queue and none dropped. On Windows, where nothing is dropped, the
+  listener rests the same way; that path is not tested.
 - **Not production-ready.** The module is new: its tests pass on three
   platforms in CI and under the sanitizers, but it has no TLS, no IPv6,
   no scale testing past a few hundred connections, has served no traffic

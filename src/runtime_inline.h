@@ -4756,6 +4756,26 @@ static gs_mutex gs_net_mutex = GS_MUTEX_INIT;
 #define GS_NET_UNLOCK() ((void)0)
 #endif
 
+#ifndef _WIN32
+/* One descriptor held in reserve, as libuv does: an accept refused for want
+   of descriptors closes it, takes the waiting connection off the queue and
+   closes that, and opens it again. The client is told at once, and the
+   listener does not stay ready with nothing anyone can take. Opened with the
+   first listener; under the shared lock. */
+static int gs_net_reserve = -1;
+static void gs_net_drop_one(gs_sock ls) {
+    GS_NET_LOCK();
+    if (gs_net_reserve >= 0) {
+        close(gs_net_reserve);
+        gs_net_reserve = -1;
+        int s = accept(ls, NULL, NULL);
+        if (s >= 0) close(s);
+        gs_net_reserve = open("/dev/null", O_RDONLY | O_CLOEXEC);
+    }
+    GS_NET_UNLOCK();
+}
+#endif
+
 /* Listeners: shared. refs counts the accepts under way and the pollers
    watching it; a close marks it closing and the last reference closes the
    socket. */
@@ -4867,7 +4887,8 @@ static int64_t gs_net_addfd(gs_net_pl *p, gs_sock sock, short events, int64_t re
         p->fds = fds;
         int64_t *refs = (int64_t *)realloc(p->fdref, (size_t)cap * sizeof *refs);
         if (!refs) return -1;
-        p->fdref = refs;
+)GSRT"
+R"GSRT(        p->fdref = refs;
         p->capfds = cap;
     }
     int64_t f = p->nfds++;
@@ -4891,8 +4912,7 @@ static void gs_net_dropfd(gs_net_pl *p, int64_t f) {
 
 /* A connection entry for sock, in the poller and waiting to read: its
    handle, or GS_NET_LIMIT (and sock closed). */
-)GSRT"
-R"GSRT(static int64_t gs_net_addcn(gs_net_pl *p, gs_sock sock) {
+static int64_t gs_net_addcn(gs_net_pl *p, gs_sock sock) {
     int64_t i;
     if (p->nfree) i = p->freecns[--p->nfree];
     else {
@@ -4971,6 +4991,9 @@ GS_API int64_t gs_net_listen(int64_t port, int64_t backlog, uint8_t local_only) 
         bound = (int64_t)((b.sin_port >> 8 & 0xff) | (b.sin_port << 8 & 0xff00));
     GS_NET_LOCK();
     gs_net_used = 1;
+#ifndef _WIN32
+    if (gs_net_reserve < 0) gs_net_reserve = open("/dev/null", O_RDONLY | O_CLOEXEC);
+#endif
     int64_t i;
     GS_NET_TAKE(gs_net_lsts, gs_net_nlsts, gs_net_lst, i);
     int64_t h = GS_NET_LIMIT;
@@ -5095,7 +5118,8 @@ GS_API int64_t gs_net_watch(int64_t ph, int64_t lh, uint8_t on) {
     if (l) { l->refs++; s = l->sock; }
     GS_NET_UNLOCK();
     if (!l) return GS_NET_BAD_HANDLE;
-    int64_t w = p->nwatches;
+)GSRT"
+R"GSRT(    int64_t w = p->nwatches;
     int64_t f = gs_net_addfd(p, s, GS_POLL_IN, -1 - w);
     if (f < 0) {
         GS_NET_LOCK();
@@ -5111,7 +5135,9 @@ GS_API int64_t gs_net_watch(int64_t ph, int64_t lh, uint8_t on) {
 }
 
 /* A connection from the listener, into the poller and waiting to read:
-   its handle, GS_NET_AGAIN when none is waiting, or an error. */
+   its handle, GS_NET_AGAIN when none is waiting, GS_NET_LIMIT when the
+   process is out of descriptors (on POSIX the waiting connection has been
+   dropped, gs_net_drop_one), or an error. */
 GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
     gs_net_pl *p = gs_net_pl_of(ph);
     if (!p) return GS_NET_BAD_HANDLE;
@@ -5121,19 +5147,26 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
     if (l) { l->refs++; ls = l->sock; }
     GS_NET_UNLOCK();
     if (!l) return GS_NET_BAD_HANDLE;
-)GSRT"
-R"GSRT(    gs_sock s = GS_NET_CALL(accept)(ls, NULL, NULL);
+    gs_sock s = GS_NET_CALL(accept)(ls, NULL, NULL);
     int again = s == GS_BAD_SOCK && gs_net_wouldblock();
+    int64_t err = s == GS_BAD_SOCK ? gs_net_oserr : 0;
+#ifndef _WIN32
+    /* Out of descriptors: the waiting connection is taken off the queue and
+       dropped, while the listener is still referenced. */
+    if (err == EMFILE || err == ENFILE) gs_net_drop_one(ls);
+#endif
     GS_NET_LOCK();
     gs_net_lst_unref(l);
     GS_NET_UNLOCK();
     if (s == GS_BAD_SOCK) {
+        gs_net_oserr = err;
 #ifndef _WIN32
-        /* A connection reset before it was taken is no reason to stop. The
-           code gs_net_wouldblock saved, as the lock since may have set errno. */
-        if (gs_net_oserr == ECONNABORTED || gs_net_oserr == EINTR) again = 1;
+        /* A connection reset before it was taken is no reason to stop. */
+        if (err == ECONNABORTED || err == EINTR) again = 1;
+        if (err == EMFILE || err == ENFILE) return GS_NET_LIMIT;
 #else
-        if (gs_net_oserr == WSAECONNRESET) again = 1;
+        if (err == WSAECONNRESET) again = 1;
+        if (err == WSAEMFILE || err == WSAENOBUFS) return GS_NET_LIMIT;
 #endif
         return again ? GS_NET_AGAIN : GS_NET_ERROR;
     }
@@ -5290,7 +5323,8 @@ GS_API int64_t gs_net_wait(int64_t ph, int64_t ms, sl_i64 hs, sl_i64 evs) {
         if (!re) continue;
         int64_t ev = 0;
         if (re & GS_POLL_IN) ev |= GS_NET_READ;
-        if (re & GS_POLL_OUT) ev |= GS_NET_WRITE;
+)GSRT"
+R"GSRT(        if (re & GS_POLL_OUT) ev |= GS_NET_WRITE;
         if (re & (POLLERR | POLLHUP | POLLNVAL)) ev |= GS_NET_HUP;
         int64_t ref = p->fdref[f];
         if (ref >= 0) handles[k] = gs_net_handle(GS_NET_K_CONN, gs_net_self(), p->cns[ref].gen, ref);
@@ -5326,8 +5360,7 @@ GS_API int64_t gs_net_detach(int64_t ph, int64_t ch) {
     return h;
 }
 
-)GSRT"
-R"GSRT(/* The detached connection, into this thread's poller and waiting to read. */
+/* The detached connection, into this thread's poller and waiting to read. */
 GS_API int64_t gs_net_adopt(int64_t ph, int64_t dh) {
     gs_net_pl *p = gs_net_pl_of(ph);
     if (!p) return GS_NET_BAD_HANDLE;
