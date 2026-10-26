@@ -170,7 +170,7 @@
     }
   },
   "p09_use_after_free": {
-    "note": "Not caught: a reference to a freed and reused slot of a reusable pool reads the slot's new value (a value of the right type, never memory corruption; spec 5.4). slots handles (stdlib/slots.goose) catch it for handles, not for references.",
+    "note": "Release reads the freed and reused slot's new value: a value of the right type, never memory corruption (spec 5.4). --checked and --debug check each reference into a reusable pool against its slot's generation and abort.",
     "release": {
       "outcome": "ok",
       "contains": [
@@ -179,17 +179,15 @@
       ]
     },
     "checked": {
-      "outcome": "ok",
+      "outcome": "abort",
       "contains": [
-        "old reference reads id 2",
-        "slot reused: true"
+        "used after its slot was freed"
       ]
     },
     "debug": {
-      "outcome": "ok",
+      "outcome": "abort",
       "contains": [
-        "old reference reads id 2",
-        "slot reused: true"
+        "used after its slot was freed"
       ]
     }
   },

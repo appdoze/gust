@@ -212,6 +212,7 @@ static void *gs_thread_main(void *p)
     void (*end)(void) = gs_thread_end_hook;
     gs_mutex_unlock(&gs_threads_mutex);
     if (end) end();
+    gs_slot_table_end();
     t->release();
     free(t->args);
     gs_release_regions();

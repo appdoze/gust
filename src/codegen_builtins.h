@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — codegen's builtins (definitions of CodeGen members,
 // codegen.h): the builtin functions and array members (§3.3, §5.4), queues
 // and threads (§11.2).
@@ -451,6 +452,8 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             auto x = GenPure(an[1]);
             auto i = T();
             L("int64_t ", i, " = GS_IDX(", x, ", ", lv.lenlv, ", ", LocArgs(ln), ");");
+            // Gust: references to the slot see it freed (GS_SLOTCHK).
+            L("GS_SLOTFREED(", ElemAddr(ArrayView(lv), i), ");");
             L("*(int64_t *)", Top(lv.flstk), " = ", i, ";");
             L(TopW(lv.flstk), " += 8;");
             L(lv.fl, ".len++;");

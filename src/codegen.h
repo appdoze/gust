@@ -814,9 +814,23 @@ struct CodeGen {
         // object's tail (refalias): its pointee is that location.
         const VarDef *aliasof = nullptr;
         Node *aliaspath = nullptr;
+        // Gust: the hidden generation of a reference variable rooted in a
+        // reusable pool (GS_SLOTCHK): its uses check it before reaching the
+        // pointee. Empty for every other location.
+        string slotgen;
     };
 
     bool PrefVar(const VarDef *vd);
+
+    // Gust: reference variables rooted in a reusable pool of slots, bound
+    // by a let or var here, with the name of each one's hidden generation
+    // (runtime.h, GS_SLOTGEN). Debug builds check it at each use.
+    unordered_map<const VarDef *, string> slotgens;
+    bool SlotCheckedRef(const VarDef *vd);
+    void NoteSlotGen(VarDef *vd);
+    void SlotCheck(const Loc &lv, Line ln) {
+        if (!lv.slotgen.empty()) L("GS_SLOTCHK(", lv.s, ", ", lv.slotgen, ", ", LocArgs(ln), ");");
+    }
 
     // A fat reference variable that cannot be rebound, bound to a resizable
     // variable or to another such reference -- an inlined callee's `A&`

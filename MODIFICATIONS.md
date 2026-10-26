@@ -81,6 +81,18 @@ git log upstream/master..main
   types now resolve where it was declared. `test/typing/
   nested_fnval_generic_names.goose` (new).
 
+## Safety checks
+
+- `src/runtime/runtime.h`, `src/runtime/runtime_impl.h`,
+  `src/runtime/runtime_threads.h`, `src/codegen.h`, `src/codegen_values.h`,
+  `src/codegen_nodes.h`, `src/codegen_stmts.h`, `src/codegen_builtins.h`
+  (and `src/runtime_inline.h`, regenerated): in a debug build (`--checked`,
+  `--debug`) a `let` or `var` reference rooted in a reusable pool of slots
+  records its slot's generation, which `free` advances, and aborts where it
+  is used after its slot was freed. `docs/goose_spec.md` 5.4 and
+  `docs/reference.md` 14 say so; `test/runtime/pool_ref_*.goose` (new);
+  `compare/safety/expected.json` holds probe 9 to it.
+
 ## Standard library
 
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles

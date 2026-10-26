@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the per-node codegen implementations (the CgX / CgAny /
 // CgStmt virtuals): the pass reads top to bottom here; the shared machinery
 // is CodeGen's, codegen.h and the codegen_*.h it lists. CgX yields a C
@@ -56,7 +57,9 @@ inline string StrLit::CgX(CodeGen &cg) {
 
 inline string Ident::CgX(CodeGen &cg) {
     assert(vdef);   // Named-function values never reach runtime.
-    auto x = cg.LoadLoc(cg.VarLoc(vdef), exprtype, line);
+    auto vl = cg.VarLoc(vdef);
+    cg.SlotCheck(vl, line);
+    auto x = cg.LoadLoc(vl, exprtype, line);
     // A literal parameter (§7.7) is passed at its nominal type and read at
     // the type each use adapted it to; the call-site check made the
     // conversion exact. A named constant is read likewise at the type its
@@ -824,13 +827,18 @@ inline void VarDecl::CgStmt(CodeGen &cg) {
         cg.EmitCallInto(c, dsts);
         return;
     }
-    for (size_t i = 0; i < defs.size(); i++)
+    for (size_t i = 0; i < defs.size(); i++) {
         cg.BindLocal(defs[i], i < inits.size() ? inits[i] : nullptr, !inline_arg);
+        if (i < inits.size()) cg.NoteSlotGen(defs[i]);
+    }
 }
 
 inline void Assign::CgStmt(CodeGen &cg) {
     auto lv = cg.GenLoc(lval);
-    if (pointee) cg.DerefLoc(lv);
+    if (pointee) {
+        cg.SlotCheck(lv, line);
+        cg.DerefLoc(lv);
+    }
     // Resolve the destination before the RHS can rebind a reference or
     // change an index used by its C lvalue expression. A resizable one is
     // also its count and its stack, which a reference that can be rebound

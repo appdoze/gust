@@ -88,18 +88,21 @@ Both are in `compare/` since Phase 0, and CI runs both with `--check`.
   as explicit vector types fixed it (0.077 s), so the fix belongs with Phase 5's lane
   pass. Until then, put `simd` on the function the hot loop is inlined into.
 - **Generation checks for `reusable` pools**, so a stale reference aborts instead of
-  reading another value (safety probe 9). **(partly done: generation-checked handles,
-  `stdlib/slots.goose`, abort on a stale or doubly released handle in every build, tested
-  by `test/runtime/slots_*.goose`; a plain index or reference into a reusable pool is still
-  unchecked, which needs a generation carried by each reference, a change to their
-  representation, not attempted)**
+  reading another value (safety probe 9). **(done for debug builds: in `--checked` and
+  `--debug`, a `let` or `var` reference rooted in a reusable pool aborts where it is used
+  after its slot was freed, through a per-thread table of freed slots' generations, with no
+  change to how references or pools are laid out; probe 9 now aborts in both, tested by
+  `test/runtime/pool_ref_*.goose` and `compare/safety/`. Generation-checked handles,
+  `stdlib/slots.goose`, check stored handles in every build. Not checked: references
+  held in fields, elements, captured variables and parameters, relative links, plain
+  indices, and release builds, which keep the spec's type-safe reuse)**
 - Send the general fixes (clang discovery, CMake packages under clang) upstream as pull
   requests while the fork is still close to Goose.
 
 **Exit:** a test shows `--checked` catching overflow in an optimized build **(done)**; no
 benchmark regresses **(measurable from now: `compare/results.json` is the baseline)**;
 generation checks for
-pools land **(opt-in handles landed; checked plain references did not)**. The `simd fn`
+pools land **(handles in every build; references in debug builds)**. The `simd fn`
 criterion moves to Phase 5.
 
 ## Phase 2: Code quality (months 2–3)

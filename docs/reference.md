@@ -1,3 +1,4 @@
+<!-- Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. -->
 # The Goose Language Reference
 
 <details>
@@ -2310,6 +2311,13 @@ bug of the same kind as a stale index, never memory corruption, type
 confusion or an out-of-bounds access. Such logic bugs are the full extent
 of the unsafety, and this design is what lets tree-mutating workloads run
 without an allocator.
+
+*Gust:* a debug build (`--checked`, `--debug`) turns that logic bug into an
+abort: a reference variable bound into a reusable pool remembers the slot's
+generation, which `free` advances, and using the reference after its slot
+was freed stops the program with "a reference into a reusable pool used
+after its slot was freed". A release build reads the new value, as above.
+Handles from the standard library's `slots` check in every build.
 
 ```goose
 struct Item { id: i32, weight: f32 }

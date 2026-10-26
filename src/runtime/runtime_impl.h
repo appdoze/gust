@@ -110,6 +110,64 @@ GS_API GS_NORETURN void gs_abort_msg(const uint8_t *msg, int64_t len, const char
     gs_fail(msg, len, file, line);
 }
 
+/* Gust: the generations of freed pool slots (runtime.h, GS_SLOTCHK), per
+   thread: an open-addressing table from an element's address to the number
+   of times it has been freed, which only debug builds fill. An address never
+   freed reads 0. The table only grows (a slot freed once stays in it), and a
+   thread program's ending frees it (gs_slot_table_end). */
+typedef struct { const void *p; uint64_t gen; } gs_slot_ent;
+static GS_TLS gs_slot_ent *gs_slots;
+static GS_TLS uint64_t gs_slots_cap, gs_slots_n;
+
+static uint64_t gs_slot_hash(const void *p) {
+    uint64_t h = (uint64_t)(uintptr_t)p * 0x9E3779B97F4A7C15ull;
+    return h ^ (h >> 29);
+}
+
+GS_API uint64_t gs_slot_gen(const void *p) {
+    if (!gs_slots_n) return 0;
+    for (uint64_t i = gs_slot_hash(p) & (gs_slots_cap - 1);; i = (i + 1) & (gs_slots_cap - 1)) {
+        if (gs_slots[i].p == p) return gs_slots[i].gen;
+        if (!gs_slots[i].p) return 0;
+    }
+}
+
+GS_API void gs_slot_freed(const void *p) {
+    if ((gs_slots_n + 1) * 2 > gs_slots_cap) {
+        uint64_t cap = gs_slots_cap ? gs_slots_cap * 2 : 256;
+        gs_slot_ent *t = (gs_slot_ent *)calloc((size_t)cap, sizeof *t);
+        if (!t) gs_panic("out of memory for the generations of freed pool slots");
+        for (uint64_t k = 0; k < gs_slots_cap; k++) {
+            if (!gs_slots[k].p) continue;
+            uint64_t i = gs_slot_hash(gs_slots[k].p) & (cap - 1);
+            while (t[i].p) i = (i + 1) & (cap - 1);
+            t[i] = gs_slots[k];
+        }
+        free(gs_slots);
+        gs_slots = t;
+        gs_slots_cap = cap;
+    }
+    uint64_t i = gs_slot_hash(p) & (gs_slots_cap - 1);
+    while (gs_slots[i].p && gs_slots[i].p != p) i = (i + 1) & (gs_slots_cap - 1);
+    if (!gs_slots[i].p) {
+        gs_slots[i].p = p;
+        gs_slots_n++;
+    }
+    gs_slots[i].gen++;
+}
+
+#if GS_NEED_THREADS
+static void gs_slot_table_end(void) {
+    free(gs_slots);
+    gs_slots = NULL;
+    gs_slots_cap = gs_slots_n = 0;
+}
+#endif
+
+GS_API GS_NORETURN void gs_slot_fail(const char *file, int line) {
+    gs_failf(file, line, "a reference into a reusable pool used after its slot was freed");
+}
+
 GS_API GS_NORETURN void gs_exit(int64_t code) {
     gs_end((int)code);
 }

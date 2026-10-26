@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — codegen's statements (definitions of CodeGen members,
 // codegen.h): blocks and scopes, loops with their break and continue paths,
 // declarations and assignment, and returns (§7.3, §7.9).
@@ -833,6 +834,7 @@ inline void CodeGen::GenRebind(Assign *a, Loc lv) {
         return;
     }
     L(lv.s, " = ", lv.ispref ? GenPrefVal(a->rhs) : GenX(a->rhs), ";");
+    if (!lv.slotgen.empty()) L("GS_SLOTSET(", lv.slotgen, ", ", lv.s, ");");
 }
 
 // ------------------------------------------------------------------

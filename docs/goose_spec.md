@@ -1,3 +1,4 @@
+<!-- Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. -->
 # The Goose Language — Specification (v4 draft)
 
 <details>
@@ -1820,6 +1821,17 @@ remain valid at all times*. A reference to a freed-then-reused slot reads a
 different (same-typed) value. This is type-safe reuse, never memory
 corruption. This is the language's answer to tree-mutation workloads that
 would otherwise need an allocator.
+
+*Gust:* a debug build (`--checked`, `--debug`) also checks that the slot a
+reference variable points into has not been freed since the reference was
+bound: `free` advances the slot's generation, a `let` or `var` reference
+whose provenance includes a `reusable` pool of slots records the
+generation it is bound or rebound at, and a read of it, an access to a
+field or an element through it, and an assignment through it each abort if
+the generation has moved. A release build is as above. References held
+elsewhere (fields, elements, captured variables, function parameters,
+relative links) are not checked; `slots` handles (the standard library)
+check stored handles in every build.
 
 **Slice pools.** Declared `reusable[]` (`reusable[] var pool: T[>..] = [];`,
 also valid on globals), the array hands out runs of elements instead. Its

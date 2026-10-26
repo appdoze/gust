@@ -1,3 +1,4 @@
+/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. */
 /* Goose runtime — the part every compiler-generated C file starts with.
    Plain C99 (+ #pragma pack, unaligned scalar access); compiles with MSVC,
    gcc, clang, and tcc. Kept deliberately small: per-operation behavior (push,
@@ -214,6 +215,28 @@ GS_API GS_NORETURN void gs_asfail_f(const char *why, double d, int f32, const ch
 #define GS_IDX(i, n, f, l) \
     ((uint64_t)(i) < (uint64_t)(n) ? (i) \
                                    : (gs_idxfail((int64_t)(i), (n), (f), (l)), (int64_t)0))
+
+/* Gust: generation checks for references into reusable pools, in a debug
+   build (--checked, --debug). The runtime keeps, per thread, a generation
+   for each element address a pool has freed; `free` bumps it, a reference
+   variable rooted in a reusable pool records it where it is bound, and its
+   uses check it, so one used after its slot was freed (and maybe reused)
+   aborts rather than read whatever the slot holds now. A release build
+   emits nothing. */
+GS_API uint64_t gs_slot_gen(const void *p);
+GS_API void gs_slot_freed(const void *p);
+GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
+#if GS_DEBUG
+#define GS_SLOTGEN(g, p) uint64_t g = gs_slot_gen(p); (void)(g)
+#define GS_SLOTSET(g, p) ((g) = gs_slot_gen(p))
+#define GS_SLOTCHK(p, g, f, l) do { if (gs_slot_gen(p) != (g)) gs_slot_fail((f), (l)); } while (0)
+#define GS_SLOTFREED(p) gs_slot_freed(p)
+#else
+#define GS_SLOTGEN(g, p) ((void)0)
+#define GS_SLOTSET(g, p) ((void)0)
+#define GS_SLOTCHK(p, g, f, l) ((void)0)
+#define GS_SLOTFREED(p) ((void)0)
+#endif
 
 /* Statically unreachable spots (e.g. an ADT tag no variant matches): checked
    in debug builds, an optimizer hint in release. */

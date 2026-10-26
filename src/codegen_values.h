@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — codegen's values (definitions of CodeGen members,
 // codegen.h): locations (paths resolved to C lvalues or byte pointers, with
 // their data stacks), loop-invariant array views, expression values, string
@@ -10,6 +11,27 @@ namespace goose {
 // Locations: an assignable/addressable path resolved to either a typed C
 // lvalue (val) or a byte pointer (bytes values, packed dynamic layouts).
 // The root's data stack (and pool freelist) ride along for growth ops.
+
+// Gust: a plain reference variable that may point into a reusable pool of
+// slots, which a debug build checks (GS_SLOTCHK): not a pool reference, a
+// fat, relative or optional one, a captured or global one.
+inline bool CodeGen::SlotCheckedRef(const VarDef *vd) {
+    auto t = vd->type;
+    if (!t || t->kind != TY_REF || t->ref->optional || IsRelRef(t) || IsFatRef(t) || CarriesPool(t) ||
+        vd->captured || vd->isglobal || refalias.count(vd))
+        return false;
+    for (auto &a : vd->ref.alts)
+        if (a.root && (a.root->reusable & RU_SLOTS)) return true;
+    return false;
+}
+
+// Records the generation of what vd was just bound to.
+inline void CodeGen::NoteSlotGen(VarDef *vd) {
+    if (!SlotCheckedRef(vd)) return;
+    auto g = Unique(cat(VName(vd), "_sg"));
+    L("GS_SLOTGEN(", g, ", ", VName(vd), ");");
+    slotgens[vd] = g;
+}
 
 // Reference variables with reusable-pool provenance are represented as
 // gs_pref so pool operations stay available through them (§5.4). This is
@@ -279,6 +301,7 @@ inline CodeGen::Loc CodeGen::VarLoc(VarDef *vd) {
     l.val = true;
     l.s = fvptr.count(vd) ? cat("(*", name, ")") : name;
     l.viaref = vd->isvar && vd->type->kind == TY_REF;
+    if (auto sg = slotgens.find(vd); sg != slotgens.end()) l.slotgen = sg->second;
     if (PrefVar(vd)) {
         l.ispref = true;
         l.fl = cat("(*", l.s, ".fl)");
@@ -763,14 +786,20 @@ inline CodeGen::Loc CodeGen::GenLoc(Node *n) {
     // not a path: it is built on a temporary below like the other rvalues.
     if (auto d = Is<Dot>(n); d && d->IsField()) {
         auto lv = GenLoc(d->obj);
-        if (lv.t->kind == TY_REF) DerefLoc(lv);
+        if (lv.t->kind == TY_REF) {
+            SlotCheck(lv, d->line);
+            DerefLoc(lv);
+        }
         auto ml = MemberLoc(lv, d);
         if (!fieldviews.empty()) UseFieldView(d, ml);
         return ml;
     }
     if (auto ix = Is<Index>(n)) {
         auto lv = GenLoc(ix->obj);
-        if (lv.t->kind == TY_REF) DerefLoc(lv);
+        if (lv.t->kind == TY_REF) {
+            SlotCheck(lv, ix->line);
+            DerefLoc(lv);
+        }
         return IndexLoc(lv, ix->idx, ix->line, ix->nobc);
     }
     // `&path` addressed as a location is the path itself: going through a

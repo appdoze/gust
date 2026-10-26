@@ -1,0 +1,1 @@
+goose runtime error: a reference into a reusable pool used after its slot was freed
