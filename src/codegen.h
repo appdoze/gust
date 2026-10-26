@@ -1489,6 +1489,9 @@ struct CodeGen {
         if (!usedexterns.empty() || !runtime_ext_text.empty()) {
             EmitCoreTypes();
             CT(ast.SliceOf(ast.inttypes[IS_U8], Line {}));
+            // Gust: the network's wait (runtime_net.h) fills i64 slices, so
+            // that no extern of the standard library takes a bare pointer.
+            CT(ast.SliceOf(ast.inttypes[IS_I64], Line {}));
         }
         for (auto sp : usedexterns) {
             if (sp->sf->dylib.empty() &&

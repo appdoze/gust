@@ -11,6 +11,7 @@
 - [vec](#vec)
 - [math](#math)
 - [os](#os)
+- [net](#net)
 - [ffi](#ffi)
 - [binary](#binary)
 - [base64](#base64)
@@ -24,15 +25,16 @@
 
 </details>
 
-The standard library has seventeen modules under `stdlib/`: `std`,
-`dictionary`, `slots`, `vec`, `math`, `os`, `ffi`, `binary`, `base64`, `csv`, `json`,
+The standard library has eighteen modules under `stdlib/`: `std`,
+`dictionary`, `slots`, `vec`, `math`, `os`, `net`, `ffi`, `binary`, `base64`, `csv`, `json`,
 `regex`, `audio`, `gfx`, `physics`, `ui`, and `exception`. Import each module by name,
 for example `import std;`. The compiler locates the library in its source
 tree; use `--stdlib <dir>` or `GOOSE_STDLIB` to select another location.
 Everything is written in Goose except the following parts, all reached
 through `extern fn` (spec §7.10):
 
-* the C behind `os` (`src/runtime/runtime_os.h`);
+* the C behind `os` (`src/runtime/runtime_os.h`) and `net`
+  (`src/runtime/runtime_net.h`);
 * the byte search behind `std`'s `find_any` and `find_pair`
   (`src/runtime/runtime_impl.h`);
 * `std`'s `popcount`, `clz` and `ctz`, and `ffi`'s two copies
@@ -105,7 +107,7 @@ The library uses these conventions:
   but its temporary array cannot hold copies of self-relative links (spec
   §3.9).
 * The `std`, `dictionary`, `vec`, `math`, and `os` names are global;
-  `slots`, `ffi`, `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`,
+  `slots`, `net`, `ffi`, `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`,
   `physics`, `ui` and `exception` use their own namespaces. A local named
   `fill` or `count` shadows the global function of that name, so a call to
   that function is an error. A global variable of such a name does not
@@ -775,8 +777,153 @@ it is not guaranteed to be writable. User-supplied paths, outputs and saves
 can continue to use ordinary file operations and their chosen locations.
 
 `exit(code)` and `abort(msg)` are builtins, so that the checker knows they
-diverge. Subprocesses and networking are not in v1; they arrive as
-`extern fn`s when a program needs them.
+diverge. Subprocesses are not in v1; they arrive as `extern fn`s when a
+program needs them. Networking is the [`net`](#net) module (Gust).
+
+## net
+
+*Gust.* TCP over IPv4, every socket non-blocking and waited on with a
+poller (`WSAPoll` on Windows, `poll` elsewhere), over the C in
+`src/runtime/runtime_net.h`; and `serve`, an event loop for a server,
+which knows bytes and connections and nothing of any protocol.
+`examples/echo/` is a TCP echo server on it and `examples/api/` an
+HTTP/1.1 JSON API, whose `http.gust` is a protocol over `serve`.
+
+<!-- fragment -->
+```goose
+fn listen(port: i64, backlog: i64 = 1024, local_only: bool = false) -> Listener, i64
+fn port(l: Listener) -> i64                // the port it listens on (0 asked the system for one)
+fn close(l: Listener) -> i64
+fn poller() -> Poller, i64
+fn close(p: Poller) -> i64                 // and every connection in it
+fn count(p: Poller) -> i64                 // the connections in it
+fn watch(p: Poller, l: Listener, on: bool = true) -> i64   // wait for connections on l too
+fn accept(p: Poller, l: Listener) -> Conn, i64             // 0, AGAIN, or an error
+fn connect(p: Poller, host: const u8[:], port: i64, timeout_ms: i64 = 5000) -> Conn, i64
+fn recv(p: Poller, c: Conn, buf: u8[:]) -> i64             // bytes read; 0: the peer closed
+fn send(p: Poller, c: Conn, bytes: const u8[:]) -> i64     // what the socket took now
+fn want(p: Poller, c: Conn, events: i64) -> i64            // READ, WRITE, both, or 0
+fn shutdown(p: Poller, c: Conn) -> i64     // end what c sends; it can still read
+fn close(p: Poller, c: Conn) -> i64
+fn wait(p: Poller, ms: i64, handles: i64[:], events: i64[:]) -> i64   // how many are ready
+fn index(c: Conn) -> i64                   // small and dense, for per-connection arrays
+fn detach(p: Poller, c: Conn) -> Detached, i64             // for another thread to adopt
+fn adopt(p: Poller, d: Detached) -> Conn, i64
+fn os_error() -> i64                       // the OS's code for this thread's last ERROR
+fn error_text(code: i64) -> const u8[:]
+fn catch_signals()                         // Ctrl-C, SIGINT and SIGTERM set the stop flag
+fn request_stop()   fn stop_requested() -> bool
+```
+
+A result of 0 or a count is success; a negative one is `ERROR` (the OS
+failed it; the connection is no good), `AGAIN` (it would have to wait),
+`BAD_HANDLE`, `LIMIT` (a table or memory ran out), `ADDRESS` (not an IPv4
+address or `localhost`, or the port is taken), `TIMEOUT`, `UNAVAILABLE`
+(the platform's sockets could not be started) or `INVALID` (an argument
+the call does not take). `wait` reports, for each socket that is ready,
+its handle (a connection's, or a watched listener's) and its events:
+`READ`, `WRITE`, and `HUP` when the peer hung up or the socket failed.
+
+**Handles.** A `Listener`, `Poller`, `Conn` or `Detached` is a 64-bit
+handle naming an entry of a table the runtime keeps, with that entry's
+generation and, for a poller and its connections, the thread that owns
+them. A handle that does not name a live object of its kind (closed,
+reused, sent to another thread, made up) gets `BAD_HANDLE` from every
+call, which then touches nothing, so a stale handle cannot reach a socket
+that has since been reused. No call takes a pointer: buffers are slices,
+whose length the runtime takes from the slice.
+
+**Ownership and threads.** A poller owns the connections in it, and
+closing it closes them. A poller and its connections belong to the thread
+program that made them and can be reached only from it. Listeners and
+detached connections are shared, under one lock: any thread may accept
+from a listener whose handle it holds, and any thread's poller may adopt a
+detached connection, once. When a thread program ends, by returning or by
+a contained abort (spec §11.2), the runtime closes the pollers,
+connections, listeners and unadopted detached connections it still owns,
+so a supervisor restarting an aborted worker leaks no socket. The main
+program's are closed by the process ending.
+
+**`serve`** multiplexes connections over one thread and one poller:
+
+<!-- fragment -->
+```goose
+fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, limits: Limits,
+                  replies: Replies, first_id: i64, id_step: i64) -> Stats
+// D(state: S&, ctl: Ctl&, input: const u8[:], out: u8[>..]&) -> i64   consumed
+// P(state: S&, ctl: Ctl&, out: u8[>..]&, room: i64)                   produce
+```
+
+It accepts from `listener` (or serves only `first`, until it ends), reads
+what each connection sends and hands it to `D`, which appends any reply to
+`out` and returns how many bytes it consumed (0 while it needs more). `D`
+may set `ctl.close` (end the connection once its output is sent) or
+`ctl.produce`, after which `P` is called with `room` (at least 16 KB, or
+`out_queue` if less) whenever none of the connection's output is waiting,
+until `P` clears it: a response of any size, in bounded memory, as fast as
+the client takes it. `state` is a copy of `proto` per connection.
+
+Order and backpressure: `D` is not called while output is waiting or `P`
+is producing, so replies go out in the order their requests came, and a
+connection whose client does not read is not read either, which in turn
+blocks the client's own sends. `D` and `P` must not block: the thread is
+every connection's. One worker thread per CPU, each in `serve` over the
+same listener, is a server; a thread per connection, each in `serve` over
+the one connection it adopted, is the other way to serve, where they may.
+
+| `Limits` field | default | when it is broken |
+|---|---:|---|
+| `max_conns` | 4096 | a new connection gets `replies.busy` and is closed |
+| `in_size` | 16 KB | input `D` has not consumed fills it: closed |
+| `out_queue` | 256 KB | a connection's unsent output past it: closed |
+| `out_total` | 64 MB | the worker's unsent output, in 16 KB chunks: a producer waits, out of the poll set, until another connection frees some; `D` sees less `ctl.room` |
+| `idle_ms` | 5000 | nothing pending either way: closed |
+| `read_ms` | 5000 | from the first byte of input not yet consumed: `replies.timeout`, closed |
+| `write_ms` | 5000 | output waiting and none of it taken: closed |
+| `grace_ms` | 10000 | after a stop, connections still busy are closed |
+| `wait_ms` | 50 | the longest wait, so timeouts and the stop flag are looked at |
+
+At a stop (`stop_requested()`), `serve` stops accepting, closes idle
+connections, lets busy ones finish within `grace_ms`, and returns its
+`Stats`: connections accepted and closed (equal once it returns), refusals
+and timeouts of each kind, overflows, contract breaks by `D` or `P`, OS
+errors, bytes each way, and the most output memory held at once. The
+memory `serve` has used for input and output stays its own until it
+returns, bounded by the limits.
+
+A protocol in a few lines: an echo server.
+
+<!-- check-only -->
+```goose
+import net;
+
+struct Echo { bytes: i64 = 0 }
+
+fn echo_input(st: Echo&, ctl: net::Ctl&, input: const u8[:], out: u8[>..]&) -> i64 {
+    out.append(input);
+    st.bytes += input.len;
+    return input.len;
+}
+
+fn no_stream(st: Echo&, ctl: net::Ctl&, out: u8[>..]&, room: i64) { ctl.produce = false; }
+
+fn main() {
+    net::catch_signals();
+    let l, status = net::listen(7007);
+    if status != 0 { abort(net::error_text(status)); }
+    let p, ps = net::poller();
+    let stats = net::serve(l, p, net::Conn { .. }, Echo { .. }, net::Limits { .. }, net::Replies { .. },
+                           1, 1, echo_input, no_stream);
+    print("echoed ", stats.bytes_out, " bytes on ", stats.accepted, " connections");
+}
+```
+
+What it does not have yet: IPv6, names other than `localhost` (no DNS),
+TLS, UDP, and a readiness interface other than `poll`/`WSAPoll`, which
+scan every socket of a poller on each wait. The interface is shaped for
+epoll and kqueue behind the same calls; IOCP, whose completions own the
+buffers until they finish, would need `serve`'s buffers to be the
+runtime's (`docs/gust/backend_api.md` §7).
 
 ## ffi
 

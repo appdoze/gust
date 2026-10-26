@@ -34,6 +34,10 @@ Early fork. The language today is Goose's, with these changes
   check each `extern fn` against its header.
 - A thread's data stacks commit memory as they grow from 16 KB, not 1 MB at
   a time, so a server with a thread per connection stays small.
+- A standard library module for TCP, [`net`](docs/stdlib.md#net):
+  non-blocking sockets behind checked handles, and an event loop for
+  servers with bounded output, streaming and backpressure. `slots` gives
+  `reusable` pools generation-checked handles.
 - [examples/api/](examples/api/README.md) is a JSON API over HTTP/1.1 with
   FastAPI-style validation errors, served by a pool of event-loop workers
   and measured against Go.

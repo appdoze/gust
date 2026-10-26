@@ -1,0 +1,40 @@
+listen 0, port picked true
+poller 0, count 0
+watch 0, again 0
+connect 0
+listener ready true
+accepted, count 2, distinct true
+unwatch 0
+four megabytes across: true, mismatched bytes 0
+reply sent 4
+reply done
+shutdown 0
+server reads 0 once the peer shut down; answers 4
+the client still reads: late
+close 0, again -3, shutdown -3
+closed handle: send -3, recv -3, want -3
+want neither 0, something else -8
+a connection waiting for nothing is reported false
+again once it waits to read true, reads 4
+count 1
+connect 0, poller 0, detach 0, count 2
+detached conn: send -3
+adopt 0, adopt twice -3, count 1
+sent through the adopted end 5
+received moved
+a connection of another poller: send -3
+bad addresses -5 -5 -5
+a port in use -5
+a negative port -5
+a default poller -3, a made-up one -3
+a listener as a poller -3
+a poller as a listener -3
+a default conn -3
+close poller 0, again -3
+its conn -3, count -3
+the adopted end sees its peer gone: true
+an empty wait slice 0
+close q 0
+close listener 0, again -3, port -3
+wait on a closed poller -3
+not a live handle of this thread; it would have to wait; no error

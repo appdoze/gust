@@ -82,8 +82,26 @@ git log upstream/master..main
   over a `reusable` pool: a handle names one allocation by index and serial
   number, and using it after the allocation is released, or releasing it
   twice, aborts in every build. `test/runtime/slots_*.goose` (new).
+- `stdlib/net.goose` (new), `docs/stdlib.md`: TCP over IPv4 with
+  non-blocking sockets and a poller, every handle checked (kind,
+  generation, owning thread), and `serve`, an event loop for a server with
+  per-connection and per-worker limits, bounded output queues, a producer
+  for responses of any size, timeouts, overload replies and a graceful
+  stop. `test/stdlib/stdlib_net.goose`, `test/threads/net_serve.goose`
+  (new).
 
 ## Runtime
+
+- `src/runtime/runtime_net.h` (new), `src/runtime/runtime_ext.h`,
+  `src/main.cpp`, `CMakeLists.txt` (and `src/runtime_inline.h`,
+  regenerated): the sockets and poller behind `net`, part of the runtime
+  object and the standalone runtime. Winsock is loaded from the system
+  directory at first use, its functions checked against `winsock2.h` at
+  compile time on clang and gcc. `src/codegen.h`: the C slice type of
+  `i64` is emitted with the runtime's extern support, for `net`'s wait.
+- `src/runtime/runtime_threads.h`: a hook a thread program runs at its end
+  however it ends, which `runtime_net.h` sets at first use to close the
+  network handles the thread still owns.
 
 - `src/runtime/runtime_impl.h` (and `src/runtime_inline.h`, regenerated):
   on Windows and macOS, where the fault handler commits a data stack as it

@@ -1,3 +1,4 @@
+/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. */
 /* Goose runtime: extern-fn support, spliced in after the generated type
    declarations, since it is written against them: sl_u8 (a u8 slice: data,
    len) and gs_rref (a reference to a resizable: its header and its data
@@ -13,6 +14,7 @@
 typedef struct { uint8_t *base; int64_t len; } gs_rhdr;
 typedef struct { gs_rhdr *hdr; gs_stack *stk; } gs_rref;
 typedef struct { uint8_t *data; int64_t len; } sl_u8;
+typedef struct { int64_t *data; int64_t len; } sl_i64;   /* Gust: for net's wait */
 #pragma pack(pop)
 #endif
 
@@ -228,3 +230,26 @@ GS_API uint64_t gs_os_random_u64(void);
    cached tops first; C called from Goose must not call it. 0 means an OS
    request failed; a top outside its region panics. */
 GS_API uint8_t gs_trim_memory(void);
+/* Gust: the network behind stdlib/net.goose (runtime_net.h): handles are
+   checked int64_t values, and a negative result is an error. */
+GS_API int64_t gs_net_listen(int64_t port, int64_t backlog, uint8_t local_only);
+GS_API int64_t gs_net_listener_port(int64_t listener);
+GS_API int64_t gs_net_close_listener(int64_t listener);
+GS_API int64_t gs_net_poller(void);
+GS_API int64_t gs_net_close_poller(int64_t poller);
+GS_API int64_t gs_net_count(int64_t poller);
+GS_API int64_t gs_net_watch(int64_t poller, int64_t listener, uint8_t on);
+GS_API int64_t gs_net_accept(int64_t poller, int64_t listener);
+GS_API int64_t gs_net_connect(int64_t poller, sl_u8 host, int64_t port, int64_t timeout_ms);
+GS_API int64_t gs_net_recv(int64_t poller, int64_t conn, sl_u8 buf);
+GS_API int64_t gs_net_send(int64_t poller, int64_t conn, sl_u8 bytes);
+GS_API int64_t gs_net_want(int64_t poller, int64_t conn, int64_t events);
+GS_API int64_t gs_net_shutdown(int64_t poller, int64_t conn);
+GS_API int64_t gs_net_close(int64_t poller, int64_t conn);
+GS_API int64_t gs_net_wait(int64_t poller, int64_t ms, sl_i64 handles, sl_i64 events);
+GS_API int64_t gs_net_detach(int64_t poller, int64_t conn);
+GS_API int64_t gs_net_adopt(int64_t poller, int64_t detached);
+GS_API int64_t gs_net_os_error(void);
+GS_API void gs_net_catch_signals(void);
+GS_API void gs_net_request_stop(void);
+GS_API uint8_t gs_net_stop_requested(void);

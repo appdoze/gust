@@ -1,0 +1,40 @@
+listen 0, poller 0
+fragmented: fragmented
+
+pipelined: one
+two
+what?
+
+big: true, pattern true, then after
+
+slow reader: 2000000 bytes, intact true
+quit: bye
+closed true
+input past in_size closed true
+still serving: alive
+closing 0
+churn: 200 of 200 answered, poller holds 3
+second server: first
+
+past max_conns: busy
+closed true
+idle closed true
+the other connection's room 0
+
+starved worker: 33554432 and 1000000 bytes, intact true
+before the stop: idle
+
+idle closed at the stop true
+busy closed within the grace true
+first closed true
+servers: accepted == closed true, output memory held true and within out_total true
+idle timeouts true, busy 1, overflows 1, protocol 0, accepted 210, a producer parked true
+servers returned true true true
+from another thread: count -3, recv -3
+owner accepted true
+owner returned: true, its connection closed true
+its listener gone true
+owner accepted true
+owner aborted: false, its connection closed true
+its listener gone true
+close 0 0 0 0

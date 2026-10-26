@@ -1,3 +1,4 @@
+/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. */
 /* Goose runtime — threads and typed queues (§11.2), as runtime.h declares
    them. Follows runtime_impl.h. A standalone program's unit compiles only
    hardware_threads() unless the program uses threads or queues (the compiler
@@ -183,6 +184,16 @@ static int gs_run_contained(gs_thread *t, gs_contained *c) {
     return 0;
 }
 
+/* Gust: what a thread program runs at its end however it ends, to close
+   the network handles it still owns: set by runtime_net.h the first time
+   the network is used, so a runtime built without it runs nothing. */
+static void (*gs_thread_end_hook)(void);   /* under gs_threads_mutex */
+static void gs_set_thread_end_hook(void (*f)(void)) {
+    gs_mutex_lock(&gs_threads_mutex);
+    gs_thread_end_hook = f;
+    gs_mutex_unlock(&gs_threads_mutex);
+}
+
 #ifdef _WIN32
 static DWORD WINAPI gs_thread_main(LPVOID p)
 #else
@@ -197,6 +208,10 @@ static void *gs_thread_main(void *p)
     gs_contained contain;
     if (t->contained) aborted = gs_run_contained(t, &contain);
     else t->run(t->entry, t->args);
+    gs_mutex_lock(&gs_threads_mutex);
+    void (*end)(void) = gs_thread_end_hook;
+    gs_mutex_unlock(&gs_threads_mutex);
+    if (end) end();
     t->release();
     free(t->args);
     gs_release_regions();
