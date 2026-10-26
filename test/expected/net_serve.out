@@ -19,6 +19,8 @@ second server: first
 past max_conns: busy
 closed true
 idle closed true
+past pool_conns: two answered true, the third busy
+closed true
 the other connection's room 0
 
 starved worker: 33554432 and 1000000 bytes, intact true
@@ -28,8 +30,8 @@ idle closed at the stop true
 busy closed within the grace true
 first closed true
 servers: accepted == closed true, output memory held true and within out_total true
-idle timeouts true, busy 1, overflows 1, protocol 0, accepted 210, a producer parked true
-servers returned true true true
+idle timeouts true, busy 2, overflows 1, protocol 0, accepted 212, a producer parked true
+servers returned true true true true true
 from another thread: count -3, recv -3
 owner accepted true
 owner returned: true, its connection closed true

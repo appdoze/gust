@@ -3815,6 +3815,7 @@ GS_API int64_t gs_net_close_poller(int64_t poller);
 GS_API int64_t gs_net_count(int64_t poller);
 GS_API int64_t gs_net_watch(int64_t poller, int64_t listener, uint8_t on);
 GS_API int64_t gs_net_accept(int64_t poller, int64_t listener);
+GS_API int64_t gs_net_listener_open(void);
 GS_API int64_t gs_net_connect(int64_t poller, sl_u8 host, int64_t port, int64_t timeout_ms);
 GS_API int64_t gs_net_recv(int64_t poller, int64_t conn, sl_u8 buf);
 GS_API int64_t gs_net_send(int64_t poller, int64_t conn, sl_u8 bytes);
@@ -4590,9 +4591,12 @@ GS_API uint64_t gs_os_random_u64(void) {
     { "runtime_net.h", string_view(
 R"GSRT(/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. */
 /* Gust runtime: the network behind stdlib/net.goose. TCP over IPv4, every
-   socket non-blocking, waited on with a poller: WSAPoll on Windows, poll
-   elsewhere. runtime_ext.h declares what a program calls, which this
-   defines; it is part of the runtime object, after runtime_os.h.
+   socket non-blocking, waited on with a poller: epoll on Linux, kqueue on
+   macOS and the BSDs, AFD polling through a completion port on Windows,
+   and poll or WSAPoll where none of those is, or GUST_NET_POLL is set (the
+   readiness backend, below). runtime_ext.h declares what a program calls,
+   which this defines; it is part of the runtime object, after
+   runtime_os.h.
 
    Handles. A listener, a poller, a connection and a detached connection are
    each an int64_t naming an entry of a table the runtime keeps:
@@ -4620,7 +4624,9 @@ R"GSRT(/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS
    connection whose handle it holds. An accept or a poller watching a
    listener holds a reference to it, so closing the listener while they use
    it cannot let its socket number be reused under them; the socket closes
-   when the last reference goes.
+   when the last reference goes. A listener's tally of its connections
+   still open is an atomic count each of them holds a place in, wherever
+   it is, so workers sharing the listener can keep to one limit.
 
    Errors are negative results (GS_NET_AGAIN and the rest, below); the OS's
    own code for the last one on this thread is gs_net_os_error(). A recv of
@@ -4661,6 +4667,14 @@ typedef WSAPOLLFD gs_pollfd;
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
+#if defined(__linux__)
+#include <sys/epoll.h>
+#define GS_NET_EPOLL 1
+#elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || \
+      defined(__DragonFly__)
+#include <sys/event.h>
+#define GS_NET_KQUEUE 1
+#endif
 #include <sys/socket.h>
 typedef int gs_sock;
 typedef struct pollfd gs_pollfd;
@@ -4705,6 +4719,8 @@ static struct {
     int (WSAAPI *getsockopt)(SOCKET, int, int, char *, int *);
     int (WSAAPI *getsockname)(SOCKET, struct sockaddr *, int *);
     int (WSAAPI *WSAPoll)(LPWSAPOLLFD, ULONG, INT);
+    int (WSAAPI *WSAIoctl)(SOCKET, DWORD, LPVOID, DWORD, LPVOID, DWORD, LPDWORD, LPWSAOVERLAPPED,
+                           LPWSAOVERLAPPED_COMPLETION_ROUTINE);
 } gs_ws;
 #if defined(__clang__) || defined(__GNUC__)
 #define GS_WS_CHECK(f) _Static_assert(__builtin_types_compatible_p(__typeof__(gs_ws.f), __typeof__(&f)), \
@@ -4712,7 +4728,7 @@ static struct {
 GS_WS_CHECK(WSAStartup); GS_WS_CHECK(WSAGetLastError); GS_WS_CHECK(socket); GS_WS_CHECK(bind);
 GS_WS_CHECK(listen); GS_WS_CHECK(accept); GS_WS_CHECK(connect); GS_WS_CHECK(recv); GS_WS_CHECK(send);
 GS_WS_CHECK(closesocket); GS_WS_CHECK(shutdown); GS_WS_CHECK(ioctlsocket); GS_WS_CHECK(setsockopt); GS_WS_CHECK(getsockopt);
-GS_WS_CHECK(getsockname); GS_WS_CHECK(WSAPoll);
+GS_WS_CHECK(getsockname); GS_WS_CHECK(WSAPoll); GS_WS_CHECK(WSAIoctl);
 #endif
 static volatile LONG gs_net_state;   /* 0 not tried, 1 ready, 2 failed */
 
@@ -4727,7 +4743,7 @@ static int gs_net_start(void) {
     GS_WS_LOAD(WSAStartup); GS_WS_LOAD(WSAGetLastError); GS_WS_LOAD(socket); GS_WS_LOAD(bind);
     GS_WS_LOAD(listen); GS_WS_LOAD(accept); GS_WS_LOAD(connect); GS_WS_LOAD(recv); GS_WS_LOAD(send);
     GS_WS_LOAD(closesocket); GS_WS_LOAD(shutdown); GS_WS_LOAD(ioctlsocket); GS_WS_LOAD(setsockopt); GS_WS_LOAD(getsockopt);
-    GS_WS_LOAD(getsockname); GS_WS_LOAD(WSAPoll);
+    GS_WS_LOAD(getsockname); GS_WS_LOAD(WSAPoll); GS_WS_LOAD(WSAIoctl);
 #undef GS_WS_LOAD
     WSADATA wsa;
     if (ok && gs_ws.WSAStartup(MAKEWORD(2, 2), &wsa) != 0) ok = 0;
@@ -4741,7 +4757,8 @@ static int gs_net_wouldblock(void) {
 }
 static void gs_net_noteerr(void) { gs_net_oserr = gs_ws.WSAGetLastError(); }
 static void gs_net_closesock(gs_sock s) { gs_ws.closesocket(s); }
-static int gs_net_nonblock(gs_sock s) { u_long on = 1; return gs_ws.ioctlsocket(s, FIONBIO, &on) == 0; }
+)GSRT"
+R"GSRT(static int gs_net_nonblock(gs_sock s) { u_long on = 1; return gs_ws.ioctlsocket(s, FIONBIO, &on) == 0; }
 static int gs_net_poll(gs_pollfd *fds, int64_t n, int64_t ms) {
     if (n == 0) { Sleep((DWORD)ms); return 0; }
     int r = gs_ws.WSAPoll(fds, (ULONG)n, (INT)ms);
@@ -4765,8 +4782,7 @@ static void gs_net_noteerr(void) { gs_net_oserr = errno; }
 static void gs_net_closesock(gs_sock s) { close(s); }
 static int gs_net_nonblock(gs_sock s) {
     int f = fcntl(s, F_GETFL, 0);
-)GSRT"
-R"GSRT(    /* Not inherited by a child process either. */
+    /* Not inherited by a child process either. */
     fcntl(s, F_SETFD, FD_CLOEXEC);
     return f >= 0 && fcntl(s, F_SETFL, f | O_NONBLOCK) == 0;
 }
@@ -4858,6 +4874,31 @@ static void gs_net_drop_one(gs_sock ls) {
 }
 #endif
 
+/* What the connections accepted from a listener count themselves in, on
+   whatever thread they are, so that workers sharing it can hold their
+   total to a limit: refs is the connections still open, plus one while
+   the listener's socket is. The last to let it go frees it. */
+typedef struct { int64_t refs; } gs_net_tally;
+static int64_t gs_net_tally_add(gs_net_tally *t, int64_t d) {
+#if defined(_WIN32) && !defined(__TINYC__)
+    return InterlockedExchangeAdd64((volatile LONG64 *)&t->refs, d) + d;
+#else
+    /* TinyCC has the fetch-first form only, and on Windows neither the
+       intrinsic nor the order's name. */
+#ifndef __ATOMIC_SEQ_CST
+#define __ATOMIC_SEQ_CST 5
+#endif
+    return __atomic_fetch_add(&t->refs, d, __ATOMIC_SEQ_CST) + d;
+#endif
+}
+static void gs_net_tally_drop(gs_net_tally *t) {
+    if (t && gs_net_tally_add(t, -1) == 0) free(t);
+}
+/* After this thread's last accept: the connections from that listener
+   open, the new one among them. */
+static GS_TLS int64_t gs_net_accepted_open;
+GS_API int64_t gs_net_listener_open(void) { return gs_net_accepted_open; }
+
 /* Listeners: shared. refs counts the accepts under way and the pollers
    watching it; a close marks it closing and the last reference closes the
    socket. */
@@ -4866,6 +4907,7 @@ typedef struct {
     uint32_t gen;
     uint8_t live, closing;
     int64_t owner, refs, port;
+    gs_net_tally *tally;
 } gs_net_lst;
 static gs_net_lst *gs_net_lsts;
 static int64_t gs_net_nlsts;
@@ -4876,6 +4918,7 @@ typedef struct {
     uint32_t gen;
     uint8_t live;
     int64_t owner;
+    gs_net_tally *tally;
 } gs_net_det;
 static gs_net_det *gs_net_dets;
 static int64_t gs_net_ndets;
@@ -4907,10 +4950,33 @@ static gs_net_lst *gs_net_lst_of(int64_t h) {
     gs_net_lst *l = &gs_net_lsts[i];
     return l->live && !l->closing && l->gen == gs_net_gen_of(h) ? l : NULL;
 }
+/* Advanced whenever a listener is closed, so that a poller looks for closed
+   listeners it watches only when one has closed since it last did. Written
+   under the lock, read without it. */
+#ifdef _WIN32
+)GSRT"
+R"GSRT(static volatile LONG gs_net_lst_epoch;   /* wraps; only equality is asked of it */
+static int64_t gs_net_epoch_now(void) { return InterlockedCompareExchange(&gs_net_lst_epoch, 0, 0); }
+static void gs_net_epoch_bump(void) { InterlockedExchange(&gs_net_lst_epoch, gs_net_lst_epoch + 1); }
+#else
+static int64_t gs_net_lst_epoch;
+static int64_t gs_net_epoch_now(void) {
+    int64_t v;
+    __atomic_load(&gs_net_lst_epoch, &v, __ATOMIC_SEQ_CST);
+    return v;
+}
+static void gs_net_epoch_bump(void) {
+    int64_t v = gs_net_epoch_now() + 1;
+    __atomic_store(&gs_net_lst_epoch, &v, __ATOMIC_SEQ_CST);
+}
+#endif
+
 /* Drops a reference, closing the socket with the last. Under the lock. */
 static void gs_net_lst_unref(gs_net_lst *l) {
     if (--l->refs == 0 && l->closing) {
         gs_net_closesock(l->sock);
+        gs_net_tally_drop(l->tally);
+        l->tally = NULL;
         l->live = 0;
         l->closing = 0;
         l->gen = gs_net_nextgen(l->gen);
@@ -4923,6 +4989,7 @@ typedef struct {
     uint32_t gen;
     uint8_t live;
     int32_t fd;            /* its entry in fds; -1 while it waits for nothing */
+    gs_net_tally *tally;   /* its listener's, when accepted */
 } gs_net_cn;
 typedef struct {
     gs_sock sock;
@@ -4932,6 +4999,14 @@ typedef struct {
 typedef struct {
     uint32_t gen;
     uint8_t live;
+    int kfd;               /* its epoll or kqueue descriptor (Windows: 1 for AFD); -1: poll over fds */
+    int64_t epoch;         /* gs_net_lst_epoch when it last looked for closed listeners */
+#ifdef _WIN32
+    HANDLE iocp, afd;      /* AFD polling: the completion port, and the AFD device */
+    struct gs_net_ks **kst;        /* per registry entry: its poll's state */
+    struct gs_net_ks **kq;         /* the states to submit or resubmit at the next wait */
+    int64_t nkq, capkq, kpending;  /* ... and how many polls are outstanding */
+#endif
     gs_pollfd *fds;
     int64_t *fdref;        /* per fds entry: a connection's index, or -1 - a watch's */
     int64_t nfds, capfds;
@@ -4960,7 +5035,251 @@ static gs_net_cn *gs_net_cn_of(gs_net_pl *p, int64_t h) {
     return c->live && c->gen == gs_net_gen_of(h) ? c : NULL;
 }
 
-/* A pollfd entry for sock, refering back to ref; -1 when memory ran out. */
+/* ---- the readiness backend ---------------------------------------------- */
+
+/* What a poller waits with: epoll on Linux, kqueue on macOS and the BSDs,
+   else (Windows, or with GUST_NET_POLL set, for testing the portable path)
+   poll or WSAPoll over its array. The array is the registry either way, an
+   entry per socket waited on with what it waits for; epoll and kqueue
+   mirror it in the kernel, which then reports only what is ready, where
+   poll scans every entry on every wait, so a worker's wait costs what is
+   ready, not what is open. Both kernels' sets are level-triggered, as poll
+   is. An entry's kernel payload is a connection's index, or a watched
+   listener's handle with the top bit set. */
+#define GS_NET_WATCHBIT ((uint64_t)1 << 63)
+
+static uint64_t gs_net_payload(gs_net_pl *p, int64_t ref) {
+    return ref >= 0 ? (uint64_t)ref : GS_NET_WATCHBIT | (uint64_t)p->watches[-1 - ref].handle;
+}
+
+static int gs_net_force_poll(void) {
+    const char *e = getenv("GUST_NET_POLL");
+    return e && *e && strcmp(e, "0") != 0;
+}
+
+#ifdef _WIN32
+/* Windows: AFD polling, as wepoll and Rust's mio do it. Each socket waited
+   on has an IOCTL_AFD_POLL request outstanding on the AFD device, which
+   completes through the poller's completion port when the socket is ready
+   (or the request is cancelled). A request is one-shot: one that completed
+   is submitted again at the next wait, which reports a socket still ready
+   again, as poll would. The request's buffers belong to the kernel from
+   submission to completion, so a state removed or changed meanwhile is
+   cancelled and freed only when its completion arrives. The ntdll and
+   kernel32 calls are looked up at first use; where any is missing, or the
+   device does not open, the poller uses WSAPoll. */
+typedef LONG gs_ntstatus;
+typedef struct { ULONG_PTR status; ULONG_PTR information; } gs_iosb;   /* IO_STATUS_BLOCK */
+typedef struct { USHORT len, maxlen; PWSTR buf; } gs_ustr;             /* UNICODE_STRING */
+typedef struct {
+    ULONG len;
+    HANDLE root;
+    gs_ustr *name;
+    ULONG attributes;
+    PVOID sd, sqos;
+} gs_objattr;                                                          /* OBJECT_ATTRIBUTES */
+typedef struct { HANDLE handle; ULONG events; gs_ntstatus status; } gs_afd_handle;
+typedef struct {
+    int64_t timeout;
+    ULONG nhandles;
+    ULONG exclusive;
+    gs_afd_handle handles[1];
+} gs_afd_poll;
+typedef struct { ULONG_PTR key; LPOVERLAPPED ovl; ULONG_PTR internal; DWORD bytes; } gs_ovl_entry;
+typedef gs_ntstatus (WINAPI *gs_NtCreateFile)(HANDLE *, ULONG, gs_objattr *, gs_iosb *, void *, ULONG, ULONG,
+                                              ULONG, ULONG, void *, ULONG);
+typedef gs_ntstatus (WINAPI *gs_NtDeviceIoControlFile)(HANDLE, HANDLE, void *, void *, gs_iosb *, ULONG, void *,
+                                                       ULONG, void *, ULONG);
+typedef gs_ntstatus (WINAPI *gs_NtCancelIoFileEx)(HANDLE, gs_iosb *, gs_iosb *);
+typedef HANDLE (WINAPI *gs_CreateIoCompletionPort)(HANDLE, HANDLE, ULONG_PTR, DWORD);
+typedef BOOL (WINAPI *gs_GetQueuedCompletionStatusEx)(HANDLE, gs_ovl_entry *, ULONG, ULONG *, DWORD, BOOL);
+typedef BOOL (WINAPI *gs_SetFileCompletionNotificationModes)(HANDLE, UCHAR);
+static struct {
+    gs_NtCreateFile NtCreateFile;
+    gs_NtDeviceIoControlFile NtDeviceIoControlFile;
+    gs_NtCancelIoFileEx NtCancelIoFileEx;
+    gs_CreateIoCompletionPort CreateIoCompletionPort;
+    gs_GetQueuedCompletionStatusEx GetQueuedCompletionStatusEx;
+    gs_SetFileCompletionNotificationModes SetFileCompletionNotificationModes;
+} gs_afd;
+static volatile LONG gs_afd_state;   /* 0 not tried, 1 ready, 2 unavailable */
+
+#define GS_AFD_POLL_RECEIVE      0x0001
+#define GS_AFD_POLL_SEND         0x0004
+#define GS_AFD_POLL_DISCONNECT   0x0008
+#define GS_AFD_POLL_ABORT        0x0010
+#define GS_AFD_POLL_LOCAL_CLOSE  0x0020
+#define GS_AFD_POLL_ACCEPT       0x0080
+#define GS_AFD_POLL_CONNECT_FAIL 0x0100
+#define GS_IOCTL_AFD_POLL        0x00012024
+#define GS_STATUS_PENDING        ((gs_ntstatus)0x00000103L)
+#define GS_STATUS_CANCELLED      ((gs_ntstatus)0xC0000120L)
+#define GS_SIO_BASE_HANDLE       0x48000022
+
+static int gs_afd_start(void) {
+    LONG st = InterlockedCompareExchange(&gs_afd_state, 0, 0);
+    if (st) return st == 1;
+    HMODULE nt = GetModuleHandleW(L"ntdll.dll"), k32 = GetModuleHandleW(L"kernel32.dll");
+    int ok = nt && k32;
+#define GS_AFD_LOAD(m, f) if (ok && !(*(FARPROC *)&gs_afd.f = GetProcAddress(m, #f))) ok = 0
+    GS_AFD_LOAD(nt, NtCreateFile); GS_AFD_LOAD(nt, NtDeviceIoControlFile); GS_AFD_LOAD(nt, NtCancelIoFileEx);
+    GS_AFD_LOAD(k32, CreateIoCompletionPort); GS_AFD_LOAD(k32, GetQueuedCompletionStatusEx);
+    GS_AFD_LOAD(k32, SetFileCompletionNotificationModes);
+#undef GS_AFD_LOAD
+    InterlockedExchange(&gs_afd_state, ok ? 1 : 2);
+    return ok;
+}
+
+/* A poll's state; the status block first, so that a completion's
+   overlapped pointer is the state's address. */
+struct gs_net_ks {
+    gs_iosb iosb;
+    gs_afd_poll info;
+)GSRT"
+R"GSRT(    HANDLE base;           /* the socket the AFD driver knows (SIO_BASE_HANDLE) */
+    uint64_t payload;
+    short want;            /* what is waited for */
+    short pending;         /* what the outstanding request waits for; 0: none */
+    uint8_t queued, deleted;
+};
+
+/* The poller's completion port and AFD device: false where there are none. */
+static int gs_afd_open(gs_net_pl *p) {
+    if (!gs_afd_start()) return 0;
+    static WCHAR name[] = L"\\Device\\Afd\\Gust";
+    gs_ustr us = { (USHORT)(sizeof name - sizeof(WCHAR)), (USHORT)sizeof name, name };
+    gs_objattr attr = { sizeof attr, NULL, &us, 0, NULL, NULL };
+    gs_iosb io;
+    HANDLE afd = INVALID_HANDLE_VALUE;
+    HANDLE iocp = gs_afd.CreateIoCompletionPort(INVALID_HANDLE_VALUE, NULL, 0, 0);
+    if (!iocp) return 0;
+    gs_ntstatus st = gs_afd.NtCreateFile(&afd, 0x00100000 /* SYNCHRONIZE */, &attr, &io, NULL, 0,
+                                         FILE_SHARE_READ | FILE_SHARE_WRITE, 1 /* FILE_OPEN */, 0, NULL, 0);
+    if (st != 0 || !gs_afd.CreateIoCompletionPort(afd, iocp, 0, 0) ||
+        !gs_afd.SetFileCompletionNotificationModes(afd, 2 /* FILE_SKIP_SET_EVENT_ON_HANDLE */)) {
+        if (st == 0) CloseHandle(afd);
+        CloseHandle(iocp);
+        return 0;
+    }
+    p->iocp = iocp;
+    p->afd = afd;
+    return 1;
+}
+
+static void gs_afd_queue(gs_net_pl *p, struct gs_net_ks *k) {
+    if (k->queued) return;
+    if (p->nkq == p->capkq) {
+        int64_t cap = p->capkq ? p->capkq * 2 : 64;
+        struct gs_net_ks **q = (struct gs_net_ks **)realloc(p->kq, (size_t)cap * sizeof *q);
+        if (!q) return;   /* Not resubmitted: the socket waits until it changes. */
+        p->kq = q;
+        p->capkq = cap;
+    }
+    p->kq[p->nkq++] = k;
+    k->queued = 1;
+}
+
+static void gs_afd_cancel(gs_net_pl *p, struct gs_net_ks *k) {
+    gs_iosb io;
+    if (k->pending) gs_afd.NtCancelIoFileEx(p->afd, &k->iosb, &io);
+}
+
+static void gs_afd_submit(gs_net_pl *p, struct gs_net_ks *k) {
+    ULONG ev = GS_AFD_POLL_ABORT | GS_AFD_POLL_CONNECT_FAIL | GS_AFD_POLL_LOCAL_CLOSE;
+    if (k->want & GS_POLL_IN) ev |= GS_AFD_POLL_RECEIVE | GS_AFD_POLL_ACCEPT | GS_AFD_POLL_DISCONNECT;
+    if (k->want & GS_POLL_OUT) ev |= GS_AFD_POLL_SEND;
+    k->info.timeout = INT64_MAX;
+    k->info.nhandles = 1;
+    k->info.exclusive = 0;
+    k->info.handles[0].handle = k->base;
+    k->info.handles[0].events = ev;
+    k->info.handles[0].status = 0;
+    k->iosb.status = (ULONG_PTR)(ULONG)GS_STATUS_PENDING;
+    gs_ntstatus st = gs_afd.NtDeviceIoControlFile(p->afd, NULL, NULL, &k->iosb, &k->iosb, GS_IOCTL_AFD_POLL,
+                                                  &k->info, sizeof k->info, &k->info, sizeof k->info);
+    /* Pending or done at once, its completion is queued either way. */
+    if (st == GS_STATUS_PENDING || st == 0) {
+        k->pending = k->want;
+        p->kpending++;
+    }
+}
+
+static void gs_afd_free_if_done(struct gs_net_ks *k) {
+    if (k->deleted && !k->pending && !k->queued) free(k);
+}
+#endif
+
+/* Changes what the kernel set waits for on registry entry f, from old to
+   now (0: not in it): false when the kernel refused. */
+#if GS_NET_EPOLL
+static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
+    gs_sock s = p->fds[f].fd;
+    int64_t ref = p->fdref[f];
+    struct epoll_event e;
+    memset(&e, 0, sizeof e);
+    e.events = (uint32_t)(((now & GS_POLL_IN) ? EPOLLIN : 0) | ((now & GS_POLL_OUT) ? EPOLLOUT : 0));
+    e.data.u64 = gs_net_payload(p, ref);
+    int op = !old ? EPOLL_CTL_ADD : !now ? EPOLL_CTL_DEL : EPOLL_CTL_MOD;
+    return epoll_ctl(p->kfd, op, s, &e) == 0;
+}
+#elif GS_NET_KQUEUE
+static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
+    gs_sock s = p->fds[f].fd;
+    int64_t ref = p->fdref[f];
+    struct kevent ch[2];
+    int n = 0;
+    void *data = (void *)(uintptr_t)gs_net_payload(p, ref);
+    if ((old & GS_POLL_IN) != (now & GS_POLL_IN)) {
+        EV_SET(&ch[n], (uintptr_t)s, EVFILT_READ, (now & GS_POLL_IN) ? EV_ADD | EV_ENABLE : EV_DELETE, 0, 0,
+               data);
+        n++;
+    }
+    if ((old & GS_POLL_OUT) != (now & GS_POLL_OUT)) {
+        EV_SET(&ch[n], (uintptr_t)s, EVFILT_WRITE, (now & GS_POLL_OUT) ? EV_ADD | EV_ENABLE : EV_DELETE, 0, 0,
+               data);
+        n++;
+    }
+    return n == 0 || kevent(p->kfd, ch, n, NULL, 0, NULL) == 0;
+}
+#elif defined(_WIN32)
+static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
+    struct gs_net_ks *k = p->kst[f];
+    if (!old) {
+        k = (struct gs_net_ks *)calloc(1, sizeof *k);
+        if (!k) return 0;
+        DWORD got = 0;
+        SOCKET base = INVALID_SOCKET;
+        if (gs_ws.WSAIoctl(p->fds[f].fd, GS_SIO_BASE_HANDLE, NULL, 0, &base, sizeof base, &got, NULL, NULL) != 0)
+            base = p->fds[f].fd;
+        k->base = (HANDLE)base;
+        k->payload = gs_net_payload(p, p->fdref[f]);
+        k->want = now;
+        p->kst[f] = k;
+        gs_afd_queue(p, k);
+        return 1;
+    }
+    if (!k) return 1;
+    if (!now) {
+        p->kst[f] = NULL;
+        k->deleted = 1;
+        gs_afd_cancel(p, k);
+        gs_afd_free_if_done(k);
+        return 1;
+    }
+    k->want = now;
+    if (k->pending && k->pending != now) gs_afd_cancel(p, k);
+    else if (!k->pending) gs_afd_queue(p, k);
+    return 1;
+}
+#else
+static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
+    (void)p; (void)f; (void)old; (void)now;
+    return 1;
+}
+#endif
+
+/* A pollfd entry for sock, refering back to ref; -1 when memory ran out or
+   the kernel set refused it. */
 static int64_t gs_net_addfd(gs_net_pl *p, gs_sock sock, short events, int64_t ref) {
     if (p->nfds == p->capfds) {
         int64_t cap = p->capfds ? p->capfds * 2 : 64;
@@ -4969,8 +5288,12 @@ static int64_t gs_net_addfd(gs_net_pl *p, gs_sock sock, short events, int64_t re
         p->fds = fds;
         int64_t *refs = (int64_t *)realloc(p->fdref, (size_t)cap * sizeof *refs);
         if (!refs) return -1;
-)GSRT"
-R"GSRT(        p->fdref = refs;
+        p->fdref = refs;
+#ifdef _WIN32
+        struct gs_net_ks **ks = (struct gs_net_ks **)realloc(p->kst, (size_t)cap * sizeof *ks);
+        if (!ks) return -1;
+        p->kst = ks;
+#endif
         p->capfds = cap;
     }
     int64_t f = p->nfds++;
@@ -4978,14 +5301,34 @@ R"GSRT(        p->fdref = refs;
     p->fds[f].events = events;
     p->fds[f].revents = 0;
     p->fdref[f] = ref;
+#ifdef _WIN32
+    p->kst[f] = NULL;
+#endif
+    if (p->kfd >= 0 && !gs_net_kreg(p, f, 0, events)) {
+        p->nfds--;
+        return -1;
+    }
     return f;
+}
+/* What entry f waits for, from now on: false when the kernel set refused. */
+static int gs_net_setfd(gs_net_pl *p, int64_t f, short events) {
+    /* The loop asks again for what it already waits for after most
+       requests: no system call for that. */
+    if (p->fds[f].events == events) return 1;
+    if (p->kfd >= 0 && !gs_net_kreg(p, f, p->fds[f].events, events)) return 0;
+    p->fds[f].events = events;
+    return 1;
 }
 /* Removes entry f, moving the last one into its place. */
 static void gs_net_dropfd(gs_net_pl *p, int64_t f) {
+    if (p->kfd >= 0) gs_net_kreg(p, f, p->fds[f].events, 0);
     int64_t last = --p->nfds;
     if (f != last) {
         p->fds[f] = p->fds[last];
         p->fdref[f] = p->fdref[last];
+#ifdef _WIN32
+        p->kst[f] = p->kst[last];
+#endif
         int64_t r = p->fdref[f];
         if (r >= 0) p->cns[r].fd = (int32_t)f;
         else p->watches[-1 - r].fd = (int32_t)f;
@@ -5003,7 +5346,8 @@ static int64_t gs_net_addcn(gs_net_pl *p, gs_sock sock) {
             int64_t cap = p->capcns ? p->capcns * 2 : 64;
             gs_net_cn *cns = (gs_net_cn *)realloc(p->cns, (size_t)cap * sizeof *cns);
             if (!cns) { gs_net_closesock(sock); return GS_NET_LIMIT; }
-            memset(cns + p->capcns, 0, (size_t)(cap - p->capcns) * sizeof *cns);
+)GSRT"
+R"GSRT(            memset(cns + p->capcns, 0, (size_t)(cap - p->capcns) * sizeof *cns);
             p->cns = cns;
             int64_t *fr = (int64_t *)realloc(p->freecns, (size_t)cap * sizeof *fr);
             if (!fr) { gs_net_closesock(sock); return GS_NET_LIMIT; }
@@ -5019,13 +5363,17 @@ static int64_t gs_net_addcn(gs_net_pl *p, gs_sock sock) {
     c->gen = gs_net_nextgen(c->gen);
     c->live = 1;
     c->fd = (int32_t)f;
+    c->tally = NULL;
     return gs_net_handle(GS_NET_K_CONN, gs_net_self(), c->gen, i);
 }
 /* Takes connection i out of the poller: its socket closed, or not. */
 static void gs_net_dropcn(gs_net_pl *p, int64_t i, int closesock) {
     gs_net_cn *c = &p->cns[i];
-    if (closesock) gs_net_closesock(c->sock);
+    /* Out of the kernel set first, while the descriptor is still this one. */
     if (c->fd >= 0) gs_net_dropfd(p, c->fd);   /* -1: waiting for nothing */
+    if (closesock) gs_net_closesock(c->sock);
+    gs_net_tally_drop(c->tally);
+    c->tally = NULL;
     c->live = 0;
     c->gen = gs_net_nextgen(c->gen);
     p->freecns[p->nfree++] = i;
@@ -5079,8 +5427,11 @@ GS_API int64_t gs_net_listen(int64_t port, int64_t backlog, uint8_t local_only) 
     int64_t i;
     GS_NET_TAKE(gs_net_lsts, gs_net_nlsts, gs_net_lst, i);
     int64_t h = GS_NET_LIMIT;
-    if (i >= 0) {
+    gs_net_tally *t = i >= 0 ? (gs_net_tally *)malloc(sizeof *t) : NULL;
+    if (t) {
+        t->refs = 1;
         gs_net_lst *l = &gs_net_lsts[i];
+        l->tally = t;
         l->sock = s;
         l->gen = gs_net_nextgen(l->gen);
         l->live = 1;
@@ -5111,6 +5462,7 @@ GS_API int64_t gs_net_close_listener(int64_t lh) {
     int64_t r = 0;
     if (!l || l->owner != gs_net_self()) r = GS_NET_BAD_HANDLE;
     else {
+        gs_net_epoch_bump();
         l->closing = 1;
         l->refs++;
         gs_net_lst_unref(l);
@@ -5140,6 +5492,18 @@ GS_API int64_t gs_net_poller(void) {
     memset(p, 0, sizeof *p);
     p->gen = gen;
     p->live = 1;
+    p->kfd = -1;
+#if GS_NET_EPOLL
+    if (!gs_net_force_poll()) p->kfd = epoll_create1(EPOLL_CLOEXEC);
+#elif GS_NET_KQUEUE
+    if (!gs_net_force_poll()) {
+        p->kfd = kqueue();
+        if (p->kfd >= 0) fcntl(p->kfd, F_SETFD, FD_CLOEXEC);
+    }
+#elif defined(_WIN32)
+    if (!gs_net_force_poll() && gs_afd_open(p)) p->kfd = 1;
+#endif
+    /* A kernel that refuses a set leaves the poller on poll. */
     return gs_net_handle(GS_NET_K_POLLER, gs_net_self(), gen, i);
 }
 
@@ -5157,18 +5521,67 @@ static void gs_net_unwatch_at(gs_net_pl *p, int64_t w) {
     }
 }
 
+#ifdef _WIN32
+/* The poller's AFD polls ended: every outstanding one cancelled and its
+   completion awaited, for the kernel writes into its state until then
+   (a second at most; past that the states are left, not freed), then the
+   states, the device and the port. */
+static void gs_afd_close(gs_net_pl *p) {
+    for (int64_t f = 0; f < p->nfds; f++) {
+        struct gs_net_ks *k = p->kst[f];
+        if (!k) continue;
+        p->kst[f] = NULL;
+        k->deleted = 1;
+        gs_afd_cancel(p, k);
+    }
+    for (int64_t q = 0; q < p->nkq; q++) p->kq[q]->queued = 0;
+    for (int64_t q = 0; q < p->nkq; q++) {
+        struct gs_net_ks *k = p->kq[q];
+        k->deleted = 1;
+        gs_afd_free_if_done(k);
+    }
+    p->nkq = 0;
+    DWORD start = GetTickCount();
+    while (p->kpending > 0 && GetTickCount() - start < 1000) {
+        gs_ovl_entry es[64];
+        ULONG n = 0;
+        if (!gs_afd.GetQueuedCompletionStatusEx(p->iocp, es, 64, &n, 100, FALSE)) continue;
+        for (ULONG j = 0; j < n; j++) {
+            struct gs_net_ks *k = (struct gs_net_ks *)es[j].ovl;
+            k->pending = 0;
+            p->kpending--;
+            k->deleted = 1;
+            gs_afd_free_if_done(k);
+        }
+    }
+    free(p->kq);
+    CloseHandle(p->afd);
+    CloseHandle(p->iocp);
+}
+#endif
+
 /* Closes the poller's connections and frees it. */
 static void gs_net_free_pl(gs_net_pl *p) {
     while (p->nwatches) gs_net_unwatch_at(p, p->nwatches - 1);
     for (int64_t i = 0; i < p->ncns; i++)
-        if (p->cns[i].live) gs_net_closesock(p->cns[i].sock);
+        if (p->cns[i].live) {
+            gs_net_closesock(p->cns[i].sock);
+            gs_net_tally_drop(p->cns[i].tally);
+        }
+#ifndef _WIN32
+    if (p->kfd >= 0) close(p->kfd);
+#else
+    if (p->kfd >= 0) gs_afd_close(p);
+    free(p->kst);
+#endif
     free(p->fds);
     free(p->fdref);
     free(p->cns);
     free(p->freecns);
     uint32_t gen = gs_net_nextgen(p->gen);
     memset(p, 0, sizeof *p);
-    p->gen = gen;
+)GSRT"
+R"GSRT(    p->gen = gen;
 }
 
 GS_API int64_t gs_net_close_poller(int64_t ph) {
@@ -5200,8 +5613,10 @@ GS_API int64_t gs_net_watch(int64_t ph, int64_t lh, uint8_t on) {
     if (l) { l->refs++; s = l->sock; }
     GS_NET_UNLOCK();
     if (!l) return GS_NET_BAD_HANDLE;
-)GSRT"
-R"GSRT(    int64_t w = p->nwatches;
+    int64_t w = p->nwatches;
+    /* Its handle first: it is the kernel set's payload for the listener. */
+    p->watches[w].sock = s;
+    p->watches[w].handle = lh;
     int64_t f = gs_net_addfd(p, s, GS_POLL_IN, -1 - w);
     if (f < 0) {
         GS_NET_LOCK();
@@ -5209,8 +5624,6 @@ R"GSRT(    int64_t w = p->nwatches;
         GS_NET_UNLOCK();
         return GS_NET_LIMIT;
     }
-    p->watches[w].sock = s;
-    p->watches[w].handle = lh;
     p->watches[w].fd = (int32_t)f;
     p->nwatches++;
     return 0;
@@ -5226,7 +5639,12 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
     GS_NET_LOCK();
     gs_net_lst *l = gs_net_lst_of(lh);
     gs_sock ls = GS_BAD_SOCK;
-    if (l) { l->refs++; ls = l->sock; }
+    gs_net_tally *t = NULL;
+    if (l) {
+        l->refs++;
+        ls = l->sock;
+        t = l->tally;
+    }
     GS_NET_UNLOCK();
     if (!l) return GS_NET_BAD_HANDLE;
     gs_sock s = GS_NET_CALL(accept)(ls, NULL, NULL);
@@ -5237,6 +5655,10 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
        dropped, while the listener is still referenced. */
     if (err == EMFILE || err == ENFILE) gs_net_drop_one(ls);
 #endif
+    /* The connection's place in the tally, while the listener, and so the
+       tally, is held; only a connection counts, so that another worker's
+       accept that finds none never makes the total look larger. */
+    if (s != GS_BAD_SOCK) gs_net_tally_add(t, 1);
     GS_NET_LOCK();
     gs_net_lst_unref(l);
     GS_NET_UNLOCK();
@@ -5252,9 +5674,19 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
 #endif
         return again ? GS_NET_AGAIN : GS_NET_ERROR;
     }
-    if (!gs_net_nonblock(s)) { gs_net_noteerr(); gs_net_closesock(s); return GS_NET_ERROR; }
+    if (!gs_net_nonblock(s)) {
+        gs_net_noteerr();
+        gs_net_closesock(s);
+        gs_net_tally_drop(t);
+        return GS_NET_ERROR;
+    }
     gs_net_tune(s);
-    return gs_net_addcn(p, s);
+    int64_t h = gs_net_addcn(p, s);
+    if (h < 0) { gs_net_tally_drop(t); return h; }
+    p->cns[gs_net_index_of(h)].tally = t;
+    /* Another thread's connection may close in between: a count. */
+    gs_net_accepted_open = gs_net_tally_add(t, 0) - 1;
+    return h;
 }
 
 /* A connection to host:port (an IPv4 address, or localhost), into the
@@ -5346,8 +5778,9 @@ GS_API int64_t gs_net_want(int64_t ph, int64_t ch, int64_t events) {
         int64_t f = gs_net_addfd(p, c->sock, e, gs_net_index_of(ch));
         if (f < 0) return GS_NET_LIMIT;
         c->fd = (int32_t)f;
-    } else {
-        p->fds[c->fd].events = e;
+    } else if (!gs_net_setfd(p, c->fd, e)) {
+        gs_net_noteerr();
+        return GS_NET_ERROR;
     }
     return 0;
 }
@@ -5359,7 +5792,8 @@ GS_API int64_t gs_net_shutdown(int64_t ph, int64_t ch) {
     gs_net_cn *c = p ? gs_net_cn_of(p, ch) : NULL;
     if (!c) return GS_NET_BAD_HANDLE;
 #ifdef _WIN32
-    if (gs_ws.shutdown(c->sock, SD_SEND) != 0) { gs_net_noteerr(); return GS_NET_ERROR; }
+)GSRT"
+R"GSRT(    if (gs_ws.shutdown(c->sock, SD_SEND) != 0) { gs_net_noteerr(); return GS_NET_ERROR; }
 #else
     if (shutdown(c->sock, SHUT_WR) != 0) { gs_net_noteerr(); return GS_NET_ERROR; }
 #endif
@@ -5374,6 +5808,124 @@ GS_API int64_t gs_net_close(int64_t ph, int64_t ch) {
     return 0;
 }
 
+/* The handle a kernel payload stands for (0: a connection no longer here). */
+static int64_t gs_net_unpayload(gs_net_pl *p, uint64_t data) {
+    if (data & GS_NET_WATCHBIT) return (int64_t)(data & ~GS_NET_WATCHBIT);
+    int64_t i = (int64_t)data;
+    if (i >= p->ncns || !p->cns[i].live) return 0;
+    return gs_net_handle(GS_NET_K_CONN, gs_net_self(), p->cns[i].gen, i);
+}
+
+/* Up to cap ready sockets from the kernel set, as gs_net_wait reports them. */
+static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t *events, int64_t cap) {
+    int64_t k = 0;
+#if GS_NET_EPOLL
+    struct epoll_event evs[256];
+    int n = epoll_wait(p->kfd, evs, (int)(cap < 256 ? cap : 256),
+                       ms < 0 ? -1 : ms > 0x7fffffff ? 0x7fffffff : (int)ms);
+    if (n < 0) {
+        gs_net_noteerr();
+        return errno == EINTR ? 0 : GS_NET_ERROR;
+    }
+    for (int j = 0; j < n; j++) {
+        int64_t h = gs_net_unpayload(p, evs[j].data.u64);
+        if (!h) continue;
+        int64_t ev = 0;
+        if (evs[j].events & EPOLLIN) ev |= GS_NET_READ;
+        if (evs[j].events & EPOLLOUT) ev |= GS_NET_WRITE;
+        if (evs[j].events & (EPOLLERR | EPOLLHUP)) ev |= GS_NET_HUP;
+        handles[k] = h;
+        events[k++] = ev;
+    }
+#elif GS_NET_KQUEUE
+    struct kevent evs[256];
+    struct timespec ts, *tsp = NULL;
+    if (ms >= 0) {
+        ts.tv_sec = (time_t)(ms / 1000);
+        ts.tv_nsec = (long)(ms % 1000) * 1000000;
+        tsp = &ts;
+    }
+    int n = kevent(p->kfd, NULL, 0, evs, (int)(cap < 256 ? cap : 256), tsp);
+    if (n < 0) {
+        gs_net_noteerr();
+        return errno == EINTR ? 0 : GS_NET_ERROR;
+    }
+    for (int j = 0; j < n; j++) {
+        int64_t h = gs_net_unpayload(p, (uint64_t)(uintptr_t)evs[j].udata);
+        if (!h) continue;
+        int64_t ev = evs[j].filter == EVFILT_WRITE ? GS_NET_WRITE : GS_NET_READ;
+        if (evs[j].flags & (EV_EOF | EV_ERROR)) ev |= GS_NET_HUP;
+        /* A socket ready both ways is two kernel events, and one report. */
+        int64_t m = 0;
+        while (m < k && handles[m] != h) m++;
+        if (m < k) events[m] |= ev;
+        else {
+            handles[k] = h;
+            events[k++] = ev;
+        }
+    }
+#elif defined(_WIN32)
+    /* A completion that reports nothing (a request cancelled for a change of
+       what is waited for) is waited past, until ms are up, so that a wait
+       returns 0 only at its timeout, as poll does. */
+    DWORD start = GetTickCount();
+    for (;;) {
+    /* What completed or changed since the last wait goes back to the kernel. */
+    int64_t nq = p->nkq;
+    p->nkq = 0;
+    for (int64_t q = 0; q < nq; q++) {
+        struct gs_net_ks *s = p->kq[q];
+        s->queued = 0;
+        if (s->deleted) {
+            gs_afd_free_if_done(s);
+            continue;
+        }
+        if (!s->pending && s->want) gs_afd_submit(p, s);
+    }
+    gs_ovl_entry es[256];
+    ULONG n = 0;
+    DWORD spent = GetTickCount() - start;
+    DWORD left = ms < 0 ? INFINITE : (int64_t)spent >= ms ? 0 : ms - spent > 0x7ffffffe ? 0x7ffffffe : (DWORD)(ms - spent);
+    if (!gs_afd.GetQueuedCompletionStatusEx(p->iocp, es, (ULONG)(cap < 256 ? cap : 256), &n, left, FALSE)) {
+        if (GetLastError() == WAIT_TIMEOUT) return 0;
+        gs_net_oserr = (int64_t)GetLastError();
+        return GS_NET_ERROR;
+    }
+    for (ULONG j = 0; j < n; j++) {
+        struct gs_net_ks *s = (struct gs_net_ks *)es[j].ovl;
+        s->pending = 0;
+        p->kpending--;
+        if (s->deleted) {
+            gs_afd_free_if_done(s);
+            continue;
+        }
+        /* Waited for again at the next wait, whatever this one says. */
+        gs_afd_queue(p, s);
+        gs_ntstatus st = (gs_ntstatus)(ULONG)s->iosb.status;
+        if (st == GS_STATUS_CANCELLED) continue;
+        ULONG got = st == 0 ? s->info.handles[0].events : GS_AFD_POLL_ABORT;
+        if (got & GS_AFD_POLL_LOCAL_CLOSE) continue;
+        int64_t want = ((s->want & GS_POLL_IN) ? GS_NET_READ : 0) | ((s->want & GS_POLL_OUT) ? GS_NET_WRITE : 0);
+        int64_t ev = 0;
+        if (got & (GS_AFD_POLL_RECEIVE | GS_AFD_POLL_ACCEPT | GS_AFD_POLL_DISCONNECT)) ev |= GS_NET_READ;
+        if (got & GS_AFD_POLL_SEND) ev |= GS_NET_WRITE;
+        if (got & (GS_AFD_POLL_ABORT | GS_AFD_POLL_CONNECT_FAIL)) ev |= GS_NET_HUP | want;
+        /* A report for what is no longer waited for is dropped. */
+        ev &= GS_NET_HUP | want;
+        if (!ev) continue;
+        int64_t h = gs_net_unpayload(p, s->payload);
+        if (!h) continue;
+        handles[k] = h;
+        events[k++] = ev;
+    }
+    if (k || (ms >= 0 && (int64_t)(GetTickCount() - start) >= ms)) break;
+    }
+#else
+    (void)p; (void)ms; (void)handles; (void)events; (void)cap;
+#endif
+    return k;
+}
+
 /* Waits up to ms for the poller's sockets: how many are ready, as many as
    both slices hold at most, with each one's handle (a connection's, or a
    watched listener's) and its events in handles[k] and events[k]. A watched
@@ -5386,18 +5938,25 @@ GS_API int64_t gs_net_wait(int64_t ph, int64_t ms, sl_i64 hs, sl_i64 evs) {
     int64_t *handles = hs.data, *events = evs.data;
     if (cap <= 0) return 0;
     int64_t k = 0;
-    /* Listeners closed under the watch first. */
-    for (int64_t w = 0; w < p->nwatches && k < cap; ) {
-        GS_NET_LOCK();
-        int closed = gs_net_lst_of(p->watches[w].handle) == NULL;
-        GS_NET_UNLOCK();
-        if (closed) {
-            handles[k] = p->watches[w].handle;
-            events[k++] = GS_NET_HUP;
-            gs_net_unwatch_at(p, w);
-        } else w++;
+    /* Listeners closed under the watch first: looked for only when one has
+       closed since, which the epoch says without the lock. */
+    int64_t epoch = gs_net_epoch_now();
+    if (p->nwatches && p->epoch != epoch) {
+        int64_t w = 0;
+        while (w < p->nwatches && k < cap) {
+            GS_NET_LOCK();
+            int closed = gs_net_lst_of(p->watches[w].handle) == NULL;
+            GS_NET_UNLOCK();
+            if (closed) {
+                handles[k] = p->watches[w].handle;
+                events[k++] = GS_NET_HUP;
+                gs_net_unwatch_at(p, w);
+            } else w++;
+        }
+        if (w >= p->nwatches) p->epoch = epoch;
     }
     if (k) return k;
+    if (p->kfd >= 0) return gs_net_kwait(p, ms, handles, events, cap);
     int r = gs_net_poll(p->fds, p->nfds, ms);
     if (r <= 0) return r < 0 ? GS_NET_ERROR : 0;
     for (int64_t f = 0; f < p->nfds && k < cap; f++) {
@@ -5405,8 +5964,7 @@ GS_API int64_t gs_net_wait(int64_t ph, int64_t ms, sl_i64 hs, sl_i64 evs) {
         if (!re) continue;
         int64_t ev = 0;
         if (re & GS_POLL_IN) ev |= GS_NET_READ;
-)GSRT"
-R"GSRT(        if (re & GS_POLL_OUT) ev |= GS_NET_WRITE;
+        if (re & GS_POLL_OUT) ev |= GS_NET_WRITE;
         if (re & (POLLERR | POLLHUP | POLLNVAL)) ev |= GS_NET_HUP;
         int64_t ref = p->fdref[f];
         if (ref >= 0) handles[k] = gs_net_handle(GS_NET_K_CONN, gs_net_self(), p->cns[ref].gen, ref);
@@ -5435,6 +5993,9 @@ GS_API int64_t gs_net_detach(int64_t ph, int64_t ch) {
         d->gen = gs_net_nextgen(d->gen);
         d->live = 1;
         d->owner = gs_net_self();
+)GSRT"
+R"GSRT(        d->tally = c->tally;   /* it goes with the connection */
+        c->tally = NULL;
         h = gs_net_handle(GS_NET_K_DETACHED, 0, d->gen, i);
     }
     GS_NET_UNLOCK();
@@ -5447,18 +6008,24 @@ GS_API int64_t gs_net_adopt(int64_t ph, int64_t dh) {
     gs_net_pl *p = gs_net_pl_of(ph);
     if (!p) return GS_NET_BAD_HANDLE;
     gs_sock s = GS_BAD_SOCK;
+    gs_net_tally *t = NULL;
     GS_NET_LOCK();
     if (gs_net_kind(dh) == GS_NET_K_DETACHED && gs_net_index_of(dh) < gs_net_ndets) {
         gs_net_det *d = &gs_net_dets[gs_net_index_of(dh)];
         if (d->live && d->gen == gs_net_gen_of(dh)) {
             s = d->sock;
+            t = d->tally;
+            d->tally = NULL;
             d->live = 0;
             d->gen = gs_net_nextgen(d->gen);
         }
     }
     GS_NET_UNLOCK();
     if (s == GS_BAD_SOCK) return GS_NET_BAD_HANDLE;
-    return gs_net_addcn(p, s);
+    int64_t h = gs_net_addcn(p, s);
+    if (h < 0) gs_net_tally_drop(t);
+    else p->cns[gs_net_index_of(h)].tally = t;
+    return h;
 }
 
 /* ---- a thread program's end --------------------------------------------- */
@@ -5478,6 +6045,7 @@ static void gs_net_thread_end(void) {
     for (int64_t i = 0; i < gs_net_nlsts; i++) {
         gs_net_lst *l = &gs_net_lsts[i];
         if (l->live && !l->closing && l->owner == self) {
+            gs_net_epoch_bump();
             l->closing = 1;
             l->refs++;
             gs_net_lst_unref(l);
@@ -5487,6 +6055,8 @@ static void gs_net_thread_end(void) {
         gs_net_det *d = &gs_net_dets[i];
         if (d->live && d->owner == self) {
             gs_net_closesock(d->sock);
+            gs_net_tally_drop(d->tally);
+            d->tally = NULL;
             d->live = 0;
             d->gen = gs_net_nextgen(d->gen);
         }

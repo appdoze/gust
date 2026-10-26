@@ -783,8 +783,11 @@ program needs them. Networking is the [`net`](#net) module (Gust).
 ## net
 
 *Gust.* TCP over IPv4, every socket non-blocking and waited on with a
-poller (`WSAPoll` on Windows, `poll` elsewhere), over the C in
-`src/runtime/runtime_net.h`; and `serve`, an event loop for a server,
+poller, over the C in `src/runtime/runtime_net.h`: epoll on Linux, kqueue
+on macOS and the BSDs, and on Windows the AFD poll its own sockets are
+built on, through an I/O completion port, so that a wait costs what is
+ready rather than what is open (`GUST_NET_POLL=1` makes it `poll` or
+`WSAPoll` instead, which scan every socket); and `serve`, an event loop for a server,
 which knows bytes and connections and nothing of any protocol.
 `examples/echo/` is a TCP echo server on it and `examples/api/` an
 HTTP/1.1 JSON API, whose `http.gust` is a protocol over `serve`.
@@ -799,6 +802,7 @@ fn close(p: Poller) -> i64                 // and every connection in it
 fn count(p: Poller) -> i64                 // the connections in it
 fn watch(p: Poller, l: Listener, on: bool = true) -> i64   // wait for connections on l too
 fn accept(p: Poller, l: Listener) -> Conn, i64             // 0, AGAIN, LIMIT, or an error
+fn accepted_open() -> i64                  // after an accept: its listener's connections open
 fn connect(p: Poller, host: const u8[:], port: i64, timeout_ms: i64 = 5000) -> Conn, i64
 fn recv(p: Poller, c: Conn, buf: u8[:]) -> i64             // bytes read; 0: the peer closed
 fn send(p: Poller, c: Conn, bytes: const u8[:]) -> i64     // what the socket took now
@@ -874,6 +878,7 @@ the one connection it adopted, is the other way to serve, where they may.
 | `Limits` field | default | when it is broken |
 |---|---:|---|
 | `max_conns` | 4096 | a new connection gets `replies.busy` and is closed |
+| `pool_conns` | 0 (none) | the same, counted over every worker serving the listener |
 | `in_size` | 16 KB | input `D` has not consumed fills it: closed |
 | `out_queue` | 256 KB | a connection's unsent output past it: closed |
 | `out_total` | 64 MB | the worker's unsent output, in 16 KB chunks: a producer waits, out of the poll set, until another connection frees some; `D` sees less `ctl.room` |
@@ -922,12 +927,16 @@ fn main() {
 }
 ```
 
+Workers sharing a listener are seldom given even shares of its
+connections (the busier a worker, the less often it reaches the
+listener), so a limit split evenly between them turns connections away
+while others have room: `pool_conns` is one limit over all of them,
+counted by the listener (`accepted_open`).
+
 What it does not have yet: IPv6, names other than `localhost` (no DNS),
-TLS, UDP, and a readiness interface other than `poll`/`WSAPoll`, which
-scan every socket of a poller on each wait. The interface is shaped for
-epoll and kqueue behind the same calls; IOCP, whose completions own the
-buffers until they finish, would need `serve`'s buffers to be the
-runtime's (`docs/gust/backend_api.md` §7).
+TLS and UDP. IOCP completions, whose buffers the OS owns until they
+finish, would need `serve`'s buffers to be the runtime's
+(`docs/gust/backend_api.md` §6).
 
 ## ffi
 

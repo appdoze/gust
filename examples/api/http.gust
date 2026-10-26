@@ -238,8 +238,8 @@ const SIZE_DIGITS = 8;
 
 // Serves HTTP until the server stops, on the connections of listener (none:
 // net::Listener { }) and the one in first (none: net::Conn { }), already in
-// poller, at most max_conns at once; with no listener, until that
-// connection ends. state is a copy of proto for each connection, of any
+// poller, at most max_conns at once over every worker serving listener;
+// with no listener, until that connection ends. state is a copy of proto for each connection, of any
 // fixed-size type with a `conn` field, which is set to the connection's
 // number: first_id, first_id + id_step, ...
 fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn, proto: S,
@@ -342,7 +342,7 @@ fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn
         }
     }
 
-    let limits = net::Limits { max_conns: max_conns, in_size: MAX_HEAD + MAX_BODY,
+    let limits = net::Limits { max_conns: max_conns, pool_conns: max_conns, in_size: MAX_HEAD + MAX_BODY,
                                out_queue: MAX_RESPONSE + 65536, out_total: MAX_QUEUED, idle_ms: IDLE_MS,
                                read_ms: REQUEST_MS, write_ms: SEND_TIMEOUT_MS, grace_ms: GRACE_MS, .. };
     let stats = net::serve(listener, poller, first, Conn { app: proto, .. }, limits,

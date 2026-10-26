@@ -339,7 +339,7 @@ thread_fn pool_worker(listener: net::Listener, slot: i64, workers: i64, round: i
     if ps != 0 { abort("cannot make a poller"); }
     let proto = Session { conn: 0, crash_route: crash_route, .. };
     let first = slot + workers * (round << 24);
-    qput(serve(listener, p, net::Conn { .. }, proto, max(1, MAX_LOOP_CONNECTIONS / workers), first, workers,
+    qput(serve(listener, p, net::Conn { .. }, proto, MAX_LOOP_CONNECTIONS, first, workers,
                handle, export_more));
 }
 

@@ -48,6 +48,7 @@ extern fn rt_close_poller(p: i64) -> i64 = "gs_net_close_poller";
 extern fn rt_count(p: i64) -> i64 = "gs_net_count";
 extern fn rt_watch(p: i64, l: i64, on: bool) -> i64 = "gs_net_watch";
 extern fn rt_accept(p: i64, l: i64) -> i64 = "gs_net_accept";
+extern fn rt_listener_open() -> i64 = "gs_net_listener_open";
 extern fn rt_connect(p: i64, host: const u8[:], port: i64, timeout_ms: i64) -> i64 = "gs_net_connect";
 extern fn rt_recv(p: i64, c: i64, buf: u8[:]) -> i64 = "gs_net_recv";
 extern fn rt_send(p: i64, c: i64, bytes: const u8[:]) -> i64 = "gs_net_send";
@@ -113,6 +114,10 @@ fn accept(p: Poller, l: Listener) -> Conn, i64 {
     if h < 0 { return Conn { .. }, h; }
     return Conn { handle: h }, 0;
 }
+// After this thread's last accept that returned a connection: how many
+// connections accepted from that listener are open, on every thread, the
+// new one among them. What workers sharing a listener hold to one limit.
+fn accepted_open() -> i64 { rt_listener_open() }
 // A connection to host (an IPv4 address such as 127.0.0.1, or localhost)
 // and port, in p: waits up to timeout_ms for it to be made.
 fn connect(p: Poller, host: const u8[:], port: i64, timeout_ms: i64 = 5000) -> Conn, i64 {
@@ -202,6 +207,7 @@ struct Ctl {
 // One worker's limits, and what each costs when broken.
 struct Limits {
     max_conns: i64 = 4096,       // open at once; past it, a new one gets replies.busy and is closed
+    pool_conns: i64 = 0,         // the same over every worker on the listener (0: no such limit)
     in_size: i64 = 16384,        // a connection's input D has not consumed yet; past it, closed
     out_queue: i64 = 262144,     // a connection's output waiting to be sent; past it, closed
     out_total: i64 = 67108864,   // all of the worker's waiting output, in 16 KB chunks
@@ -213,14 +219,14 @@ struct Limits {
 }
 
 // What the loop sends by itself before it closes a connection, as much as
-// the socket takes at once: to one past max_conns, and to one whose input
+// the socket takes at once: to one past max_conns or pool_conns, and to one whose input
 // timed out. Empty: nothing.
 struct Replies { busy: const u8[:] = "", timeout: const u8[:] = "" }
 
 // What the loop did, for the server's totals.
 struct Stats {
     accepted: i64 = 0,
-    busy: i64 = 0,               // refused past max_conns
+    busy: i64 = 0,               // refused past max_conns or pool_conns
     idle_timeouts: i64 = 0,
     read_timeouts: i64 = 0,
     write_timeouts: i64 = 0,
@@ -538,9 +544,20 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
         settle(i);
     }
 
+    fn rest(now: f64, secs: f64) {
+        watch(poller, listener, false);
+        listening = false;
+        resume_at = now + secs;
+    }
+
+    // At most 32 a turn, so the other workers on a shared listener, woken
+    // by the same readiness, take their share. They are seldom even, since
+    // the busier a worker the less often it gets to the listener: hence
+    // pool_conns, a limit over all of them.
     fn accept_all(now: f64) {
         var failed = 0;
-        loop {
+        var taken = 0;
+        while taken < 32 {
             let c, status = accept(poller, listener);
             if status == AGAIN || status == BAD_HANDLE { return; }    // none left, or no listener
             if status != 0 {
@@ -552,12 +569,11 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
                 stats.accept_failures += 1;
                 failed += 1;
                 if failed < 64 { continue; }
-                watch(poller, listener, false);
-                listening = false;
-                resume_at = now + 0.1;
+                rest(now, 0.1);
                 return;
             }
-            if live >= limits.max_conns {
+            taken += 1;
+            if live >= limits.max_conns || (limits.pool_conns > 0 && accepted_open() > limits.pool_conns) {
                 send(poller, c, replies.busy);    // what fits; it is closed either way
                 close(poller, c);
                 stats.busy += 1;

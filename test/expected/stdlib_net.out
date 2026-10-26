@@ -3,7 +3,7 @@ poller 0, count 0
 watch 0, again 0
 connect 0
 listener ready true
-accepted, count 2, distinct true
+accepted, count 2, distinct true, open from the listener 1
 unwatch 0
 four megabytes across: true, mismatched bytes 0
 reply sent 4

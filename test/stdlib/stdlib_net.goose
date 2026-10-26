@@ -47,7 +47,8 @@ fn main() {
     }
     print("listener ready ", seen);
     let s = accept_one(p, l);
-    print("accepted, count ", net::count(p), ", distinct ", s.handle != c.handle);
+    print("accepted, count ", net::count(p), ", distinct ", s.handle != c.handle, ", open from the listener ",
+          net::accepted_open());
     print("unwatch ", net::watch(p, l, false));
 
     // Four megabytes one way: the client sends what the socket takes, the

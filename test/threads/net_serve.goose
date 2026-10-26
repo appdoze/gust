@@ -230,6 +230,22 @@ fn main() {
     print("past max_conns: ", busy, "closed ", closes(p, g));
     print("idle closed ", closes(p, f, 3000));
 
+    // pool_conns, over two workers on one listener: the third connection
+    // is turned away whichever worker takes it.
+    let l4, ls4 = net::listen(0, 16, true);
+    let pool = net::Limits { max_conns: 100, pool_conns: 2, grace_ms: 1000, .. };
+    let srv4 = thread_spawn(server, l4, pool);
+    let srv5 = thread_spawn(server, l4, pool);
+    let h1 = open(p, net::port(l4));
+    let h2 = open(p, net::port(l4));
+    let first_two = ask(p, h1, "echo one\n", 4) == "one\n" && ask(p, h2, "echo two\n", 4) == "two\n";
+    let h3 = open(p, net::port(l4));
+    var pool_busy: u8[>..] = [];
+    read_n(p, h3, pool_busy, 5);
+    print("past pool_conns: two answered ", first_two, ", the third ", pool_busy, "closed ", closes(p, h3));
+    net::close(p, h1);
+    net::close(p, h2);
+
     // One output chunk for the whole worker. A client takes 32 MB but reads
     // none of it until the worker's output memory is all its own (past what
     // the kernel's buffers hold, which on Linux is megabytes), as the other
@@ -281,7 +297,7 @@ fn main() {
     var protocol = 0;
     var parks = 0;
     var accepted = 0;
-    for k in 3 {
+    for k in 5 {
         let st = qget<net::Stats>();
         reclaimed = reclaimed && st.accepted == st.closed;
         peak = max(peak, st.peak_out);
@@ -296,7 +312,8 @@ fn main() {
           " and within out_total ", peak <= 1048576);
     print("idle timeouts ", idles >= 1, ", busy ", busies, ", overflows ", overflows, ", protocol ",
           protocol, ", accepted ", accepted, ", a producer parked ", parks > 0);
-    print("servers returned ", thread_wait(srv), " ", thread_wait(srv2), " ", thread_wait(srv3));
+    print("servers returned ", thread_wait(srv), " ", thread_wait(srv2), " ", thread_wait(srv3), " ",
+          thread_wait(srv4), " ", thread_wait(srv5));
 
     // Another thread holding this one's handles reaches nothing.
     let h = open(p, port);

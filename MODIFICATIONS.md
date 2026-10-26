@@ -126,6 +126,17 @@ git log upstream/master..main
   descriptors, an accept on Linux and macOS spends a reserved one to drop
   the waiting connection, and `net::serve` rests its listener after
   repeated failures (`Stats.accept_failures`) rather than spin.
+- `src/runtime/runtime_net.h`: a poller waits with epoll on Linux, kqueue
+  on macOS and the BSDs, and on Windows the AFD poll that Windows' own
+  sockets are built on, through an I/O completion port (the technique of
+  wepoll and Rust's mio), instead of `poll`/`WSAPoll`, which scan every
+  socket on every wait; all level-triggered, behind the same calls.
+  `GUST_NET_POLL=1` keeps the portable path, for testing it. A listener
+  keeps an atomic tally of the connections accepted from it and still
+  open, on every thread (`net::accepted_open`), and `net::serve` takes at
+  most 32 connections a turn and honours `Limits.pool_conns`, a limit over
+  every worker on the listener, which `examples/api/http.gust` uses in
+  place of an even split of the pool's limit.
 - `src/runtime/runtime_threads.h`: a hook a thread program runs at its end
   however it ends, which `runtime_net.h` sets at first use to close the
   network handles the thread still owns.

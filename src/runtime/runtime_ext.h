@@ -240,6 +240,7 @@ GS_API int64_t gs_net_close_poller(int64_t poller);
 GS_API int64_t gs_net_count(int64_t poller);
 GS_API int64_t gs_net_watch(int64_t poller, int64_t listener, uint8_t on);
 GS_API int64_t gs_net_accept(int64_t poller, int64_t listener);
+GS_API int64_t gs_net_listener_open(void);
 GS_API int64_t gs_net_connect(int64_t poller, sl_u8 host, int64_t port, int64_t timeout_ms);
 GS_API int64_t gs_net_recv(int64_t poller, int64_t conn, sl_u8 buf);
 GS_API int64_t gs_net_send(int64_t poller, int64_t conn, sl_u8 bytes);
