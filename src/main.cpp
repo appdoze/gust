@@ -674,7 +674,8 @@ R"(  -q, --quiet           Print nothing on success but what the program prints:
 
 constexpr const char *DEBUGOPTION =
 R"(  --debug               Overflow, range and tag checks that name the source
-                        line they fail on.
+                        line they fail on; the C names each statement's
+                        source line (#line), for debuggers and profilers.
   --checked             The same checks in an optimized build (Gust).
 )";
 
@@ -749,7 +750,8 @@ Options:
   -O0, -O1, -O2         Inlining level (default -O2). The C compiler
                         optimizes at every level, unless --debug.
   --debug               Overflow, range and tag checks that name the source
-                        line they fail on, and the C built for a debugger.
+                        line they fail on, and the C built for a debugger,
+                        each statement marked with its source line (#line).
   --checked             The same checks in an optimized build, with no
                         debugger build: a program that aborts on overflow
                         rather than wrapping, at full speed otherwise.
@@ -1738,7 +1740,7 @@ int Main(int argc, char **argv) {
         for (auto &rf : runtime_files)
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
         auto stackcfg = StackConfigOf(cdefines);
-        CodeGen cg(ast, runtime_ext_text, progincludes, norfcheck, library, stackcfg.maxstacks);
+        CodeGen cg(ast, runtime_ext_text, progincludes, norfcheck, library, stackcfg.maxstacks, debug);
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT
         // run takes functions from and a build links: its own, when it has

@@ -39,6 +39,7 @@ inline size_t CodeGen::GenInlineArgs(Block *b) {
 }
 
 inline void CodeGen::GenStmt(Node *n) {
+    LineDirective(n->line);
     PushSc(SC_STMT);
     termjump = false;
     GenStmt2(n);

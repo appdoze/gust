@@ -2521,6 +2521,16 @@ def main():
     if cc:
         r.show_task(native_toolchain)
 
+    # Gust: --debug's C maps its statements to the program's lines.
+    def line_directives():
+        from line_directives import check_line_directives
+        try:
+            check_line_directives(exe, gendir, cc)
+            r.ok("line directives: --debug C names the .gust line of each statement")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("line directives", str(e))
+    r.show_task(line_directives)
+
     # Gust: clang is the default wherever it is installed.
     def default_toolchain():
         from native_toolchain import check_default_prefers_clang

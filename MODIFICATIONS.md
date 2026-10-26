@@ -49,6 +49,11 @@ git log upstream/master..main
 
 ## Safety options
 
+- `src/codegen.h`, `src/codegen_stmts.h`, `src/main.cpp`: a `--debug`
+  build's C marks each statement with its source line (`#line`), so that
+  debuggers, profilers and sanitizer reports name `.gust` lines.
+  `test/line_directives.py` (new), `test/run_tests.py`.
+
 - `src/main.cpp`: `--checked` defines `GS_DEBUG=1`, the overflow, `as`
   range and tag checks of `--debug`, without `--debug`'s unoptimized
   debugger build: an optimized program that aborts on signed overflow
