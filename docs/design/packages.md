@@ -529,8 +529,9 @@ The C compiler is chosen in this order: `--cc`, then `GOOSE_CC`, then
   environment is imported the way `toolchain.py` does it, and cached in
   `GOOSE_HOME` keyed on the installation's path and version, since
   importing it takes a second or two.
-* **Linux**: `cc`, then `gcc`, then `clang`, on PATH.
-* **macOS**: `cc` (Apple clang).
+* **Linux**: `clang`, then `cc`, then `gcc`, on PATH (Gust: clang first, as
+  on Windows; Goose takes `cc` first).
+* **macOS**: `clang`, then `cc` (both Apple clang).
 
 A single command finds its toolchain once and builds everything with it:
 the native parts, the runtime object and the link. "On PATH" means the

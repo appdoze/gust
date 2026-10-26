@@ -469,7 +469,9 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
             : cat("cannot find the C compiler ", request, " (", how, ") on PATH or in Visual Studio");
         return false;
     #else
-        for (auto n : { "cc", "gcc", "clang" }) {
+        // Gust: clang first wherever it is installed, as on Windows; it is the
+        // compiler the generated C is measured and sanitized with.
+        for (auto n : { "clang", "cc", "gcc" }) {
             if (!wanted(n)) continue;
             if (auto p = FindOnPath(n); !p.empty()) {
                 // A `cc` is whatever it turns out to be; gcc and clang by
@@ -484,7 +486,7 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
             return false;
         }
         why = name.empty()
-            ? "cannot find a C compiler (looked for cc, gcc and clang on PATH); install one, "
+            ? "cannot find a C compiler (looked for clang, cc and gcc on PATH); install one, "
               "or set GOOSE_CC"
             : cat("cannot find the C compiler ", request, " (", how, ") on PATH");
         return false;

@@ -18,6 +18,10 @@ git log upstream/master..main
   it to PATH, before falling back to MSVC through vcvars64; the not-found
   message names that place. The default `GOOSE_HOME` is `~/.gust`.
 - `docs/design/packages.md`: the not-found message as it now reads.
+- `src/toolchain.h`, `docs/design/packages.md`: on Linux, macOS and the
+  BSDs, discovery takes `clang` before `cc` and `gcc`, so clang is the
+  default wherever it is installed, as on Windows. `test/native_toolchain.py`
+  and `test/run_tests.py` check it.
 
 ## Name
 

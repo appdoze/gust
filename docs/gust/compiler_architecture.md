@@ -86,8 +86,9 @@ index types, exact control of the pass pipeline. But:
 Each step is shippable on its own, measured against the benchmarks before
 and after, and keeps C as the one backend.
 
-1. **Clang by default** (done for Windows): `gust build` finds clang where
-   the LLVM installer puts it. Next: make release archives say which clang
+1. **Clang by default** (done): `gust build` finds clang where the LLVM
+   installer puts it on Windows, and takes `clang` before `cc` and `gcc` on
+   Linux, macOS and the BSDs. Next: make release archives say which clang
    they need, or bundle one.
 2. **`#line` directives in the generated C**, mapping each statement to its
    `.gust` line, so debuggers, profilers and sanitizer reports point at Gust

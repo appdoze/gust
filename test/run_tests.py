@@ -2521,6 +2521,19 @@ def main():
     if cc:
         r.show_task(native_toolchain)
 
+    # Gust: clang is the default wherever it is installed.
+    def default_toolchain():
+        from native_toolchain import check_default_prefers_clang
+        try:
+            skipped = check_default_prefers_clang(exe, gendir)
+            if skipped:
+                r.say(f"skip default toolchain ({skipped})")
+            else:
+                r.ok("default toolchain: clang where it is installed")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("default toolchain", str(e))
+    r.show_task(default_toolchain)
+
     def cmake_response_files():
         from native_toolchain import check_cmake_response_files
         try:

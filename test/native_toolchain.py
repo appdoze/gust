@@ -1,3 +1,4 @@
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """One C toolchain for a whole build: `goose build` of a program using a CMake
 package builds the package, the runtime object and the executable with the
 toolchain `goose toolchain` reports, and a JIT `goose run` builds the package
@@ -104,3 +105,40 @@ def check_cmake_response_files(exe, base):
                     raise RuntimeError(f"CMake response file ({name}): exit {result.returncode}\n"
                                        f"{result.stdout}{result.stderr}")
     return None
+
+
+def check_default_prefers_clang(exe, base):
+    """Gust: with no --cc, GOOSE_CC or configured compiler, discovery takes
+    clang wherever it is installed (on Windows, once cl is off PATH, as in a
+    plain shell). Returns why it was skipped, or None."""
+    base = Path(base).resolve()
+    base.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="toolchain-default-", dir=base) as tmp:
+        env = {k: v for k, v in os.environ.items() if k != "GOOSE_CC"}
+        env["GOOSE_HOME"] = str(Path(tmp) / "home")
+        if tc.IS_WINDOWS:
+            env["PATH"] = os.pathsep.join(
+                d for d in env.get("PATH", "").split(os.pathsep)
+                if not d or not (Path(d) / "cl.exe").is_file())
+        r = subprocess.run([str(exe), "toolchain", "--json"], env=env, capture_output=True, text=True,
+                           errors="replace", timeout=600)
+        try:
+            info = json.loads(r.stdout)
+        except ValueError:
+            raise RuntimeError(f"default toolchain: goose toolchain --json:\n{r.stdout}{r.stderr}")
+        cc = info.get("cc")
+        if not cc:
+            return "no C compiler"
+        if tc.IS_WINDOWS:
+            if cc["name"] not in ("clang", "clang-cl"):
+                found = shutil.which("clang", path=env["PATH"]) or shutil.which("clang-cl", path=env["PATH"])
+                if found:
+                    raise RuntimeError(f"default toolchain: {cc['desc']} chosen where clang is at {found}")
+                return "no clang"
+            return None
+        if not shutil.which("clang", path=env.get("PATH")):
+            return "no clang on PATH"
+        if cc["name"] != "clang":
+            raise RuntimeError(f"default toolchain: {cc['desc']} ({cc['how']}) chosen where clang is on PATH")
+    return None
+

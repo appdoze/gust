@@ -63,11 +63,11 @@ Both are in `compare/` since Phase 0, and CI runs both with `--check`.
 
 ## Phase 1: Quick wins (weeks 2–4)
 
-- **clang as the default C compiler** wherever it is installed. **(done on Windows,
-  including CMake packages under clang. On Linux and macOS, CI requires clang to be found
-  and runs the suite's clang checks (`--require-clang`, green in run 40341927278), which
-  shows clang works there, not that it is the one chosen by default; that is still to
-  confirm)**
+- **clang as the default C compiler** wherever it is installed. **(done: on Windows
+  since the fork, including CMake packages under clang; on Linux, macOS and the BSDs
+  discovery now takes `clang` before `cc` and `gcc`, where it used to take `cc`, which is gcc
+  on most Linux systems. The suite's default-toolchain check asserts clang wherever clang is
+  installed; its first hosted run is with that commit)**
 - **`--checked`**: an optimized build that keeps the overflow, range and tag checks
   `--debug` has. **(done)** Measured cost on the 8 benchmarks: 0-1% on four, 6-7% on sort
   and astar, 12% on hashmap, 17% on bintrees, about 5% on average; still level with or
