@@ -46,19 +46,20 @@ Both move into `compare/` in Phase 0.
 - Commit the clang-discovery fix as the first change. **(done)**
 - CI on Windows, Linux and macOS running Goose's tests plus `compare/` and `compare/safety/`.
   **(partly done: Goose's suite, the samples under `--checked` and a Linux ASan and UBSan
-  profile run on ubuntu-latest, macos-latest and windows-latest; green at commit `395acee8`,
-  run 40247107115; `compare/` is not part of it)**
+  profile run on ubuntu-latest, macos-latest and windows-latest; green at commit `420714c5`,
+  run 40341927278, which includes the `net` tests and the network examples; `compare/` is
+  not part of it)**
 - Record today's numbers (`compare/results.json`) as the baseline every later phase is
   measured against. **(not done)**
 
-**Exit:** CI green on three platforms **(met for the suite at `395acee8`; to be met again
-for each pushed milestone)**; baseline stored **(not met)**.
+**Exit:** CI green on three platforms **(met for the suite, last at `420714c5`, run
+40341927278; to be met again for each pushed milestone)**; baseline stored **(not met)**.
 
 ## Phase 1: Quick wins (weeks 2–4)
 
 - **clang as the default C compiler** wherever it is installed. **(done on Windows,
   including CMake packages under clang. On Linux and macOS, CI requires clang to be found
-  and runs the suite's clang checks (`--require-clang`, green in run 40247107115), which
+  and runs the suite's clang checks (`--require-clang`, green in run 40341927278), which
   shows clang works there, not that it is the one chosen by default; that is still to
   confirm)**
 - **`--checked`**: an optimized build that keeps the overflow, range and tag checks
@@ -181,17 +182,19 @@ the plain function.
   HTTP server and client library on it. **(the first half done, without async: the
   standard library's `net`, `stdlib/net.goose` over `src/runtime/runtime_net.h`, with
   checked handles, thread ownership, a runtime that closes an ended thread's sockets, and
-  `net::serve`, an event loop with bounded output, streaming and backpressure; tested on
-  Windows and, through generated C, under ASan and UBSan in WSL; not yet run in hosted CI)**
+  `net::serve`, an event loop with bounded output, streaming and backpressure; tested in
+  hosted CI on Windows, macOS and Linux, and under ASan and UBSan on Linux, run 40341927278;
+  benchmarked on Windows only)**
 - Started early, as `examples/api/`: an HTTP/1.1 JSON API served by a pool of
   event-loop workers (one per CPU), measured against a thread per connection and
   against Go (net/http, and Go with the same HTTP) in `docs/gust/backend_api.md`; it
   now stands on `net`, with responses of any size, and `examples/echo/` is a second,
   HTTP-free user of the loop. The backend roadmap there orders what follows; its next
-  milestone is the network in hosted CI on three platforms and measured at tens of
-  thousands of connections, with epoll / kqueue / Windows AFD only where that shows
-  `poll` costing, then runtime-owned cancellation. M:N workers, work stealing and
-  freeze-then-share stay milestones of their own.
+  milestone is the network in hosted CI on three platforms (that criterion met, run
+  40341927278) and measured at tens of thousands of connections (not started), with
+  epoll / kqueue / Windows AFD only where that shows `poll` costing, then runtime-owned
+  cancellation. M:N workers, work stealing and freeze-then-share stay milestones of
+  their own.
 
 **Exit:** an HTTP server and a callback-heavy GUI program written idiomatically; HTTP
 throughput compared against a Rust (tokio) server in `compare/`.

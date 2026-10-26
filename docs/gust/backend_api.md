@@ -596,7 +596,8 @@ Ranked by measured impact against effort; each names its evidence. The
 1. **Next milestone: the network in hosted CI, and measured at scale.**
    Exit criteria: (a) the hosted CI run on Windows, Linux and macOS is
    green with `stdlib_net`, `net_serve`, the API and echo examples, and
-   the sanitize profile runs both examples under ASan and UBSan; (b) a
+   the sanitize profile runs both examples under ASan and UBSan **(met:
+   run 40341927278 on commit `420714c5`, section 8)**; (b) a
    scaling run of the pool at 1,000, 10,000 and 50,000 mostly idle
    connections with 1,000 active, reporting throughput, p99 and p99.9,
    memory per connection and the share of server CPU in `poll`/`WSAPoll`
@@ -635,20 +636,30 @@ Ranked by measured impact against effort; each names its evidence. The
 
 ## 8. What is not settled
 
-- **Where it has run.** Windows 11: everything, with clang and MSVC, and
-  the single-threaded `net` test in the JIT. Linux (WSL2, kernel 6.6,
-  gcc 15.2, not native Linux): the C gust wrote for both `net` fixtures
-  and both examples, built there with `-fsanitize=address,undefined`
-  (the suite's flags) and run, `test_api.py` passing against the pool and
-  a thread per connection, normal and `--checked`; the Linux compiler
-  itself was not built there (no CMake in that environment), and the
-  handle-count check needs `psutil`, which was not installed. macOS: not
-  run; the `SO_NOSIGPIPE` path is untested. Hosted CI last ran on commit
-  `395acee8` (run 40247107115: green on ubuntu-latest, macos-latest and
-  windows-latest and the Linux ASan and UBSan profile), before this work;
-  none of the `net` commits has been pushed or run there. Nothing was
-  benchmarked on Linux, whose scheduler and loopback path are not
-  Windows'.
+- **Where it has run.** Hosted CI, run 40341927278 on commit `420714c5`,
+  green in every job: windows-latest (MSVC 19.51), macos-latest (clang
+  21.0) and ubuntu-latest (gcc 13.3), each running the whole suite, with
+  both `net` fixtures in generated C at `-O0` and `-O2` (and
+  `stdlib_net` in the TinyCC JIT) and the API and echo examples, normal
+  and `--checked`, the API in both ways to serve; and the Linux sanitize
+  profile (clang 18.1.3, ASan and UBSan, no JIT), which runs the fixtures
+  and builds and drives both examples with its sanitizer flags. On macOS
+  that includes the API's resets mid-response and mid-stream, which a
+  `SIGPIPE` would have ended the server on, so the `SO_NOSIGPIPE` path
+  holds there. The handle-count check of `test_api.py` needs `psutil`,
+  which CI's Python does not have: it ran on Windows here only (64
+  handles before and after). The run before it, 40339108305 on
+  `671d700e`, failed on two faults these tests found, both fixed: on
+  macOS every TinyCC JIT program failed to compile, the stop flag using
+  atomics TinyCC does not have on POSIX (`4b60ae52`; Linux has the same
+  backend and would have failed alike); and Linux stopped before its tests
+  at a format check, merged from Goose, that called `build/goose`
+  (`420714c5`). Locally as well: Windows 11 with clang, MSVC and the JIT,
+  and Linux in WSL2 (kernel 6.6, gcc 15.2, not native Linux), where the
+  C gust wrote for the fixtures and both examples was built with the
+  sanitizers and run, and the vendored TinyCC was built to reproduce and
+  check the JIT fault. Nothing was benchmarked on Linux or macOS, whose
+  schedulers and loopback paths are not Windows'.
 - **One machine, loopback.** A network between client and server adds
   latency that hides some of these differences.
 - **Gust's allocation count is established from the generated C, not
@@ -671,8 +682,9 @@ Ranked by measured impact against effort; each names its evidence. The
   once: a worker spins until a descriptor is freed. The usual remedy (a
   descriptor held in reserve, closed to accept and drop the connection) is
   not implemented, and the case is not tested.
-- **Not production-ready.** The module is new, has run on one Windows
-  machine and in WSL, has no hosted CI run yet, no TLS, and no scale
-  testing past a few hundred connections; the comparisons with Go and
-  Rust say how these programs did on these workloads, not that Gust is
-  faster or as safe in general.
+- **Not production-ready.** The module is new: its tests pass on three
+  platforms in CI and under the sanitizers, but it has no TLS, no IPv6,
+  no scale testing past a few hundred connections, has served no traffic
+  but these tests' and benchmarks', and was measured on one Windows
+  machine only; the comparisons with Go and Rust say how these programs
+  did on these workloads, not that Gust is faster or as safe in general.
