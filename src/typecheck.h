@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the typechecker. Whole-program, call-graph order (§10.1):
 // starting from global initializers and main, every function is checked per
 // unique specialization of (argument types, reference roots and writability,
@@ -984,10 +985,16 @@ struct TypeCheck {
     // enclosing function's generics).
 
     TypeExpr *LookupBinding(string_view name) {
-        for (auto sp = frames.back().lexspec; sp; sp = sp->lexparent)
+        for (auto sp = candidateenv ? candidateenv : frames.back().lexspec; sp; sp = sp->lexparent)
             for (auto &[n, t] : sp->bindings) if (n == name) return t;
         return nullptr;
     }
+    // Gust: while a nested function's parameter types are matched against a
+    // call's arguments, the names they share with the functions around it
+    // are those functions' bindings, where it was declared (TryMatch), not
+    // the calling frame's: a function value called inside a generic that
+    // has a type parameter of the same name.
+    FnSpec *candidateenv = nullptr;
 
     // The innermost type parameter of the name in scope, as an expression
     // names it (§11.1): one bound to a type returns the type, one bound to a

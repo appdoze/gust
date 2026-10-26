@@ -66,6 +66,16 @@ git log upstream/master..main
   defines such a function in the generated file itself (`--include`) takes
   `const T *` (`test/extern_types.py` follows).
 
+## Compiler
+
+- `src/typecheck.h`, `src/typecheck_calls.h`: a nested function passed as a
+  function value into a generic whose type parameter has the same name as
+  one of the nested function's enclosing generic (`S` in both) had its
+  parameter types read with the callee's binding of the name, and failed to
+  match its own arguments; the names in a nested candidate's parameter
+  types now resolve where it was declared. `test/typing/
+  nested_fnval_generic_names.goose` (new).
+
 ## Standard library
 
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles

@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the typechecker's calls (definitions of TypeCheck members,
 // typecheck.h): overload resolution with generic inference (§7.1, §7.7),
 // case-function dispatch (§8.2), specialization in call-graph order (§10.1,
@@ -753,6 +754,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
         // The callee's own generic names must not resolve to same-named
         // enclosing bindings while unifying (the recursive-generic case).
         Saved<const vector<GenericParam> *> ex(ownexclude, &sf->generics);
+        Saved<FnSpec *> ce(candidateenv, sf->isnested ? mi.env : nullptr);
         // Trying a candidate records nothing: the chosen overload's
         // argument re-check does.
         FlagScope lr(litrecord, false);
@@ -864,6 +866,7 @@ inline bool TypeCheck::TryMatch(SFunction *sf, Call *c, vector<Val> &argvals, Ma
         TypeExpr *pt;
         {
             Saved<const vector<GenericParam> *> ex(ownexclude, &sf->generics);
+            Saved<FnSpec *> ce(candidateenv, sf->isnested ? mi.env : nullptr);
             pt = Subst(sf->params[i].type);
         }
         auto ct = DeclType(sf->params[i].type, SubstOwn(pt, mi.bindings));
