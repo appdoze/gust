@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler -- codegen's data stack accounting (definitions of CodeGen
 // members, codegen.h): the static count of data stacks the main program and
 // each worker can have in use at once, which the generated program hands the
@@ -18,7 +19,8 @@ namespace goose {
 
 // Tarjan's components, callees' before callers', so a component's count can
 // take its external callees' as final.
-inline void CodeGen::BoundStacks() {
+inline void CodeGen::BoundStacks(bool withcallbacks) {
+    stackneed.clear();
     unordered_map<FnSpec *, int> index, low;
     vector<FnSpec *> stack;
     unordered_set<FnSpec *> onstack;
@@ -30,6 +32,7 @@ inline void CodeGen::BoundStacks() {
         if (auto it = stackcalls.find(v); it != stackcalls.end()) {
             for (auto &c : it->second) {
                 auto w = c.callee;
+                if (w == cbsentinel && !withcallbacks) continue;
                 if (!index.count(w)) {
                     visit(w);
                     low[v] = std::min(low[v], low[w]);
@@ -54,6 +57,7 @@ inline void CodeGen::BoundStacks() {
             auto it = stackcalls.find(m);
             if (it == stackcalls.end()) continue;
             for (auto &c : it->second) {
+                if (c.callee == cbsentinel && !withcallbacks) continue;
                 if (members.count(c.callee)) {
                     if (c.offset)
                         Fail(c.line, cat("internal: ", m->sf->name, " holds ", c.offset,

@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the typechecker's builtins (definitions of TypeCheck
 // members, typecheck.h): the builtin functions and array members (§3.3,
 // §3.7, §5.4, §11.2), text rendering through user `format` overloads, and
@@ -100,6 +101,30 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             c->spec = spec;
             Val v;
             v.type = ast.inttypes[IS_I64];
+            return v;
+        }
+        case B_C_CALLBACK: {
+            // Gust: c_callback(f), the C address of export fn f's wrapper,
+            // for C to call back while an extern call runs (§7.11). What f
+            // may do then is judged once every body is checked
+            // (CheckCallbacks).
+            auto fid = Is<Ident>(args[0]);
+            vector<SFunction *> found;
+            auto fvd = fid ? LookupVar(fid->name, fid->ns) : nullptr;
+            if (fid && !(fvd && !fvd->isglobal) && !ScopeNameKind(fid->name))
+                for (auto sf : ast.LookupFunctions(fid->name, fid->ns))
+                    if (sf->isexport) found.push_back(sf);
+            if (found.empty()) Error(c, "c_callback's argument names an export fn (§7.11)");
+            if (found.size() > 1)
+                Error(c, cat("ambiguous c_callback of ", fid->name, ": more than one export fn has "
+                             "that name"));
+            auto fsf = found[0];
+            fid->fnref = fsf;
+            fid->exprtype = fntype;
+            fsf->cbtaken = true;
+            callbacks.push_back({ c, fsf });
+            Val v;
+            v.type = ast.inttypes[IS_U64];
             return v;
         }
         case B_THREAD_WAIT: {
@@ -2048,6 +2073,29 @@ inline void TypeCheck::NoteGlobalShrink(Node *at, const string &prefix, VarDef *
 // function making it was checked: a shrink of the array is an error where
 // another global may hold one (§5.1). A bound stands for every array of its
 // type the root's references may lead to, which for a global are globals.
+// Gust: what a callback may do (§7.11). It runs while the code that made
+// the extern call waits in it, with its references and its narrowed
+// optionals still in use, which no call site of the callback can see: so
+// it may grow what lies outside it (a grow-only array never moves), but not
+// shrink it or rebind an optional binding of it.
+inline void TypeCheck::CheckCallbacks() {
+    set<SFunction *> done;
+    for (auto &[at, sf] : callbacks) {
+        if (!done.insert(sf).second || sf->specs.size() != 1 || sf->specs[0]->failed) continue;
+        auto &r = sf->specs[0]->record;
+        string why;
+        if (!r.shrinkexternals.empty())
+            why = cat("it may shrink ", r.shrinkexternals.begin()->first->name);
+        else if (!r.shrinkexternalbounds.empty())
+            why = "it may shrink an array that storage outside it leads to";
+        else if (!r.reboundoptionals.empty())
+            why = cat("it may rebind ", (*r.reboundoptionals.begin())->name);
+        if (!why.empty())
+            Error(at, cat("c_callback(", sf->name, "): ", why, ", while the code that called C "
+                          "may still use a reference into it or rely on its test (§7.11)"));
+    }
+}
+
 inline void TypeCheck::CheckGlobalShrinks() {
     if (globalshrinks.empty()) return;
     map<VarDef *, vector<size_t>> bycontainer;

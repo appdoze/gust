@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — codegen's function bodies (definitions of CodeGen
 // members, codegen.h): named results (§7.3), the two top-caching modes,
 // element-run twins (C.3), and the emission of every specialization, the
@@ -874,6 +875,15 @@ inline void CodeGen::EmitProgramInit() {
     // Every function is emitted by now, so the counts are final: the main
     // program's stacks, and the most regions it and any one worker hold.
     // The worker thunks follow, each opening its program's block.
+    // Gust: with callbacks, first what each needs on its own, which its
+    // wrapper checks at entry, then the counts with every extern call that
+    // may call back counted as a call to the neediest (§7.11).
+    if (callbacks) {
+        BoundStacks(false);
+        int64_t most = 0;
+        for (auto cb : cbspecs) most = std::max(most, cbneed[cb] = stackneed[cb]);
+        stackown[cbsentinel] = (int)most;
+    }
     BoundStacks();
     auto mainstacks = ProgramStacks(MainRoots());
     auto mainsf = ast.MainFunction();
@@ -943,13 +953,25 @@ inline void CodeGen::EmitExports() {
         if (returnslice) Append(params, params.empty() ? "" : ", ", "int64_t *", outlen);
         if (params.empty()) params = "void";
         if (!args.empty() && si.needssp) args += ", ";
-        if (si.needssp) args += "0";
+        // Gust: from where C was called if this runs as a callback inside
+        // an extern call, else from 0 (gs_cb_base); a thread the runtime
+        // did not start has no stacks to run on (§7.11).
+        if (si.needssp) args += "gs_cb_base";
         auto ret = sp->rets.empty() ? string("void")
                    : returnslice ? string("const uint8_t *") : CT(sp->rets[0]);
         Append(exportprotos, ret, " ", sf->cname, "(", params, ");\n");
         Append(code, ret, " ", sf->cname, "(", params, ") {\n"
                      "    if (!gs_program_initialized)\n"
                      "        gs_panic(\"goose_init must be called before exported functions\");\n");
+        if (si.needssp) {
+            auto need = cbneed.count(sp) ? cbneed[sp] : stackneed[sp];
+            Append(code, "    if (!gs_stks)\n"
+                         "        gs_panic(\"", sf->name, " was called on a thread the Gust runtime did not "
+                         "start\");\n"
+                         "    if (gs_cb_base + ", need, " > gs_nstks)\n"
+                         "        gs_panic(\"", sf->name, " called back from C nested too deep for the data "
+                         "stacks reserved\");\n");
+        }
         if (returnslice) {
             auto value = Unique("gs_export_result");
             Append(code, "    if (!", outlen,

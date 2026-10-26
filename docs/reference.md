@@ -3874,6 +3874,31 @@ the Goose `main`, if there is one, so `main` is where a library keeps its
 start-up code. Exported functions are not thread-safe: call them from the
 thread that called `goose_init`. Spec §7.11.
 
+### Callbacks (Gust)
+
+`c_callback(f)` is the C address of export fn `f`'s wrapper, as a `u64`,
+for C to call back while an `extern fn` call runs: a comparator for
+`qsort`, a write callback for libcurl. In C it is a function pointer of the
+wrapper's C type (two `u64`s and an `i32` match qsort's comparator on every
+target). Where C passes a `void *` user pointer, pass an integer, such as an
+index into a global array; nothing else crosses.
+
+```goose
+export fn by_value(a: u64, b: u64) -> i32 { if a < b { -1 } else if a > b { 1 } else { 0 } }
+
+fn main() { print(c_callback(by_value) != 0); }
+```
+
+```
+true
+```
+
+The callback runs above every data stack its caller holds, so what the
+caller is building is untouched, and it may call C that calls back again.
+It may grow storage outside it, but not shrink it or rebind an optional
+outside it, which the caller, suspended in the extern call, may still rely
+on: those are compile errors at `c_callback`. Spec §7.11.
+
 ---
 
 ## 25. Builtins
@@ -3895,6 +3920,7 @@ standard library, written in Goose under `stdlib/` and documented in
 | `qput(v)`, `qget<T>()`, `qpoll<T>()`, `qlimit<T>(n)` | the typed queues | [22](#22-threads) |
 | `to_bytes(a)`, `to_bytes(a, out)`, `bytes_of(a)`, `from_bytes<T[>..]>(b)` | serialization | [23](#23-serialization) |
 | `embed_file(path)`, `embed_shader(…)` | a file's bytes, or a compiled shader, read at compile time | [21](#embed_file) |
+| `c_callback(f) -> u64` | Gust: export fn `f`'s C address, for C to call back | [24](#callbacks-gust) |
 
 The array members, `.len`, `.cap`, `.push`, `.append`, `.pop`, `.pop_n`,
 `.resize`, `.clear`, `.index_of`, are in [section 5](#members), and the

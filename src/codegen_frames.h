@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — codegen's frames (definitions of CodeGen members,
 // codegen.h): each specialization's C interface (C.3), data-stack top
 // caching, scopes with their watermark restores, and the naming of globals
@@ -90,6 +91,9 @@ inline string CodeGen::SyncReach(FnSpec *callee, const vector<string> &args,
 inline void CodeGen::CollectSpecs() {
     for (auto sp : ast.fnspecs)
         if (sp->live && sp->body) livespecs.push_back(sp);
+    for (auto sf : ast.functions)
+        if (sf->cbtaken && sf->specs.size() == 1 && sf->specs[0]->live) cbspecs.push_back(sf->specs[0]);
+    callbacks = !cbspecs.empty();
     // Names: suffix whenever the goose name maps to more than one live
     // spec (overloads or multiple specializations).
     map<string_view, int> namecount;
@@ -166,6 +170,13 @@ inline void CodeGen::CollectSpecs() {
                 };
                 if (c->builtin < 0) add(c->spec);
                 for (auto d : c->dispatch) add(d);
+                // Gust: an extern that may call back runs any callback, on
+                // stacks above the caller's (§7.11): the callbacks' globals
+                // and needs are its caller's too.
+                if (c->spec && MayCallBack(c->spec)) {
+                    si.needssp = true;
+                    for (auto cb : cbspecs) add(cb);
+                }
                 // Formatting a user type calls its format overload, and print
                 // and thread_spawn assemble their text or packet on a stack.
                 for (auto &fs : c->fmtspecs) add(fs.second);

@@ -1,0 +1,2 @@
+// The sidecar of c_callbacks.goose: the C that calls back.
+c_sources = ["c_callbacks_impl.c"];

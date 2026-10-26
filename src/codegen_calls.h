@@ -115,6 +115,15 @@ inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
         if (HoldsFatRef(pt)) grows = true;
     }
     if (grows) MarkFlush();
+    // Gust: C that may call back runs a callback above what this caller
+    // holds (§7.11): gs_cb_base, the first free index, for the while.
+    string cbsaved;
+    if (MayCallBack(sp)) {
+        NoteStackCall(cbsentinel, c->line);
+        cbsaved = T();
+        L("int64_t ", cbsaved, " = gs_cb_base;");
+        L("gs_cb_base = ", SpTop(), ";");
+    }
     vector<string> rets;
     if (sp->rets.empty()) {
         L(callee, "(", argstr, ");");
@@ -123,6 +132,7 @@ inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
         L(CT(sp->rets[0]), " ", r0, " = ", callee, "(", argstr, ");");
         rets.push_back(r0);
     }
+    if (!cbsaved.empty()) L("gs_cb_base = ", cbsaved, ";");
     if (grows) MarkReload();
     return rets;
 }

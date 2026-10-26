@@ -2530,6 +2530,10 @@ struct TypeCheck {
     void NoteGlobalShrink(Node *at, const string &prefix, VarDef *vd, TypeExpr *bound);
     [[noreturn]] void ThreadIndexError(Node *at, TypeExpr *t);
     void CheckGlobalShrinks();
+    // Gust: every c_callback(f), and what f may do while code waits in an
+    // extern call for C to call back (CheckCallbacks).
+    vector<pair<Call *, SFunction *>> callbacks;
+    void CheckCallbacks();
     // Whether what a store record leads to may point into the array `arr`
     // of type `arrtype`: its stores followed through the containers they
     // copied and the calls that passed the parameter classes they name.
@@ -3032,6 +3036,7 @@ struct TypeCheck {
         if (library && !exportcount)
             throw CompileError { "--header requires at least one export fn" };
         CheckRoot([&] { CheckGlobalShrinks(); });
+        CheckRoot([&] { CheckCallbacks(); });
         CheckRoot([&] { SettleParamRootExactness(); });
         CheckRoot([&] { ResolveGrowConflicts(); });
         CheckRoot([&] { VerifyLiterals(); });

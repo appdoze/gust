@@ -154,6 +154,12 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             return { t };
         }
         case B_THREAD_SPAWN: case B_THREAD_SPAWN_CONTAINED: return EmitThreadSpawn(c, an);
+        // Gust: the export fn's wrapper, declared with the extern
+        // prototypes (§7.11).
+        case B_C_CALLBACK: {
+            auto id = Is<Ident>(an[0]);
+            return { cat("((uint64_t)(uintptr_t)&", id->fnref->cname, ")") };
+        }
         case B_QPUT: {
             auto t = an[0]->exprtype;
             auto q = QueueFor(t);

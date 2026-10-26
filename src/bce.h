@@ -3332,6 +3332,18 @@ struct BCE {
     // empty. An extern fn (§7.10) has no body to walk: it may resize or
     // write whatever it is handed by reference, and reaches nothing else.
     void ComputeEffects() {
+        // Gust: with callbacks (c_callback, §7.11), an extern outside the
+        // standard library may run any of them before it returns, and
+        // through them change any storage or integer they reach.
+        auto callbacks = false;
+        for (auto sf : ast.functions) callbacks = callbacks || sf->cbtaken;
+        auto maycallback = [&](FnSpec *sp) {
+            if (!callbacks || !sp->sf->isextern) return false;
+            auto fi = sp->sf->line.fileidx;
+            if (fi < 0 || fi >= (int)ast.filepkg.size()) return true;
+            auto &pkg = ast.packages[ast.filepkg[fi]];
+            return !pkg.stdlib && pkg.builtin < 0;
+        };
         for (auto sp : ast.fnspecs) {
             if (!sp->live) continue;
             auto &e = effects[sp];
@@ -3341,6 +3353,7 @@ struct BCE {
                     e.params.insert((int)j);
                     e.intparams.insert((int)j);
                 }
+            if (maycallback(sp)) e.opaque = e.intopaque = true;
         }
         for (auto changed = true; changed;) {
             changed = false;

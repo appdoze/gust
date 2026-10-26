@@ -1461,6 +1461,9 @@ struct SFunction {
     bool isthread = false;
     bool isextern = false;      // A C function behind a Goose signature (§7.10); no body.
     bool isexport = false;      // A Goose function exposed through a C ABI wrapper.
+    // Gust: an export fn whose wrapper's address c_callback takes, which C
+    // may call back during an extern call (§7.11).
+    bool cbtaken = false;
     string cname;               // Its C symbol (the Goose name unless spelled out).
     // The shared library an extern block binds it from by that symbol as
     // the program starts (§7.10); empty for an extern the link resolves.

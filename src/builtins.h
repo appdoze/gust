@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the builtin function table. Builtins are ordinary
 // functions reachable both as f(a, b) and, per UFCS, as a.f(b); the entries
 // flagged BF_MEMBER are the array operations (§3.3, §5.4), which resolution
@@ -77,7 +78,7 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_EXIT,             "exit",             1,  1,   "",   "",  0,              "",            0) \
     F(B_HARDWARE_THREADS, "hardware_threads", 0,  0,   "",   "i", 0,              "",            0) \
     F(B_THREAD_SPAWN,     "thread_spawn",     1, 99,   "",   "i", 0,              "",            0) \
-    F(B_THREAD_SPAWN_CONTAINED, "thread_spawn_contained", 1, 99, "", "i", 0,       "",            0) \
+    F(B_THREAD_SPAWN_CONTAINED, "thread_spawn_contained", 1, 99, "", "i", 0,       "",            0)     F(B_C_CALLBACK,       "c_callback",       1,  1,   "",   "",  0,              "",            0) \
     F(B_THREAD_WAIT,      "thread_wait",      1,  2,   "",   "",  0,              "append to",   BF_OUTARG) \
     F(B_QPUT,             "qput",             1,  1,   "",   "",  0,              "",            0) \
     F(B_QGET,             "qget",             0,  1,   "",   "",  0,              "",            BF_TYARGS) \

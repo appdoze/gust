@@ -139,6 +139,10 @@ interp at Lobster's 0.419.)**
 
 - **C callbacks**: pass an `export fn` to C as a function pointer, with C's `void*`
   user-data mapped to a typed reference. No closure objects, so the language's rules hold.
+  **(Done, with the user data an integer rather than a typed reference: `c_callback(f)`
+  gives the C address, the callback runs above every data stack its caller holds, and may
+  grow storage outside it but not shrink it or rebind an optional of it; qsort with a Gust
+  comparator, and callbacks nested through C, in `test/packages/c_callbacks.goose`.)**
 - **Automatic C header import** (`import c "sqlite3.h"`) using TinyCC's parser, with raw
   imports confined to auditable boundary modules.
 - Prove it on four real libraries: SQLite, libcurl, zlib, OpenSSL.

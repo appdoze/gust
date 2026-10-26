@@ -3287,6 +3287,37 @@ The wrapper calls the normal generated Goose specialization, not its hidden
 internal C signature. This keeps Goose's stack argument and other compiler
 implementation details out of the function's public C signature.
 
+*Gust: callbacks.* `c_callback(f)` is the C address of export fn `f`'s
+wrapper, a `u64` that C can call as a function pointer of the wrapper's C
+type: a comparator for `qsort`, a write callback for libcurl, a row
+callback for `sqlite3_exec`. C may call it while an `extern fn` call it is
+in runs, on that thread. What C's `void *` user data would be is a `u64`
+the callback receives back, such as an index into a global array: there
+are no closure objects, and no reference crosses into C and back.
+
+<!-- fragment -->
+```goose
+extern fn cb_sort(xs: i64[:], cmp: u64);      // calls qsort with cmp
+export fn by_value(a: u64, b: u64) -> i32 { ... }
+cb_sort(ys, c_callback(by_value));
+```
+
+Such a callback runs on data stacks above everything its caller holds:
+every call of an `extern fn` outside the standard library hands the first
+free index on (`gs_cb_base`), and the wrapper starts there, so the arrays
+the caller is building and the tops it has cached are not disturbed. The
+stack count of a program counts each such call as a call to the neediest
+callback. A callback that calls C which calls back again nests above it;
+past what was reserved, the wrapper stops the program with an error, as it
+does when a thread the runtime did not start calls it. While it runs, the
+code that called C is suspended in that call with its references still in
+use and its optional tests made, which no call site of the callback can
+see: so a callback (with everything it calls) may grow storage outside it,
+since a grow-only array never moves, but may not shrink it or rebind an
+optional binding outside it; either is a compile error at `c_callback`.
+In the analyses, an extern that may call back counts as calling every
+callback: it reaches their globals, and it may change anything they can.
+
 ### 7.12 `simd fn`: versions per instruction set
 
 ```goose

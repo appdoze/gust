@@ -972,6 +972,10 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
    gs_sp-relative indices resolve through it. */
 static GS_TLS gs_stack *gs_stks;
 static GS_TLS int64_t gs_nstks;
+/* Gust: where an export fn's wrapper starts its stacks (§7.11): 0, unless
+   it runs as a callback while an extern call is under way, which sets it to
+   the first index its caller does not hold. */
+static GS_TLS int64_t gs_cb_base;
 
 /* The current program instance's globals (goose_spec.md 11.1), a struct the
    compiler lays out: main's is its one static instance, a worker's a fresh
@@ -993,6 +997,7 @@ static void gs_stack_block(int64_t n) {
     if (!gs_stks) gs_panic("out of memory allocating stack block");
     for (int64_t i = 0; i < n; i++) gs_stack_init(&gs_stks[i]);
     gs_nstks = n;
+    gs_cb_base = 0;
 }
 
 /* The compiler passes the main program's stack count and the most regions
@@ -1062,7 +1067,8 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
 GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx, int64_t cnt);
 
 /* ---------------------------------------------------------------------------
-   varint (§3.6): ULEB128; struct/payload/offset values additionally zigzag. */
+)GSRT"
+R"GSRT(   varint (§3.6): ULEB128; struct/payload/offset values additionally zigzag. */
 
 static int64_t gs_uleb_read(const uint8_t *p) {
     uint64_t v = 0;
@@ -1075,8 +1081,7 @@ static int64_t gs_uleb_read(const uint8_t *p) {
     }
 }
 
-)GSRT"
-R"GSRT(static int64_t gs_uleb_size(const uint8_t *p) {
+static int64_t gs_uleb_size(const uint8_t *p) {
     const uint8_t *q = p;
     while (*q & 0x80) q++;
     return (int64_t)(q - p) + 1;

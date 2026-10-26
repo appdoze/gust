@@ -86,6 +86,23 @@ git log upstream/master..main
   match its own arguments; the names in a nested candidate's parameter
   types now resolve where it was declared. `test/typing/
   nested_fnval_generic_names.goose` (new).
+- C callbacks: `c_callback(f)`, the C address of export fn `f`'s wrapper,
+  for C to call back during an extern call (`src/builtins.h`,
+  `src/typecheck_builtins.h`, `src/typecheck.h`, `src/ast.h`). The wrapper
+  starts above every data stack its caller holds, which each call of an
+  extern outside the standard library hands on in `gs_cb_base`
+  (`src/runtime/runtime.h`, `src/codegen_calls.h`, `src/codegen_emit.h`);
+  the stack count takes such a call as one to the neediest callback
+  (`src/codegen_stacks.h`), and the wrapper refuses a thread the runtime did
+  not start and nesting past what was reserved. Such an extern counts as
+  calling every callback: it reaches their globals (`src/codegen_frames.h`)
+  and may change anything (`src/bce.h`). A callback may grow storage outside
+  it but not shrink it or rebind an optional of it, which the suspended
+  caller may rely on (`CheckCallbacks`). `docs/goose_spec.md` §7.11,
+  `docs/reference.md` §24; `test/packages/c_callbacks.goose` (C folding an
+  array through a callback, qsort with a Gust comparator, callbacks nested
+  through C six deep, a bounds check kept across a call that moves an
+  index) and three rejection fixtures in `test/errors_tc/` (new).
 - `src/bce.h`: bounds-check elimination proves three more kinds of index.
   A function whose only recursive calls are its own (quicksort) enters
   with what its other call sites prove about its parameters when, granted

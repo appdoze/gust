@@ -484,7 +484,25 @@ struct CodeGen {
     void NoteStackCall(FnSpec *callee, Line ln) {
         stackcalls[curspec].push_back({ callee, stknext, ln });
     }
-    void BoundStacks();
+    // Gust: C callbacks (§7.11). The export fns c_callback takes the address
+    // of, and whether there are any: then an extern call outside the
+    // standard library (MayCallBack) may run one of them before it returns,
+    // on stacks above what its caller holds (gs_cb_base). Such a call is an
+    // edge to `cbsentinel`, which stands for "any callback" in the stack
+    // count; what each callback needs on its own (before those edges) is
+    // what its wrapper checks at entry (cbneed).
+    bool callbacks = false;
+    vector<FnSpec *> cbspecs;
+    FnSpec *cbsentinel = reinterpret_cast<FnSpec *>(&cbsentinel);
+    unordered_map<FnSpec *, int64_t> cbneed;
+    bool MayCallBack(FnSpec *sp) {
+        if (!callbacks || !sp->sf->isextern) return false;
+        auto fi = sp->sf->line.fileidx;
+        if (fi < 0 || fi >= (int)ast.filepkg.size()) return true;
+        auto &pkg = ast.packages[ast.filepkg[fi]];
+        return !pkg.stdlib && pkg.builtin < 0;
+    }
+    void BoundStacks(bool withcallbacks = true);
     int64_t ProgramStacks(const vector<FnSpec *> &roots);
     vector<FnSpec *> MainRoots();
     vector<pair<string, FnSpec *>> WorkerEntries();
@@ -1531,6 +1549,9 @@ struct CodeGen {
                 continue;
             externs += ExternProto(sp);
         }
+        // Gust: the export wrappers, which c_callback takes the address of
+        // before they are defined (§7.11).
+        if (callbacks) externs += exportprotos;
         // The shared libraries the dynamic externs bind from and the
         // pointers each symbol fills, which gs_program_init hands to
         // gs_dl_bind (design/dynamic_externs.md §5). Only a used extern is
