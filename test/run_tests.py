@@ -93,6 +93,18 @@ sys.path.insert(0, str(HERE.parent / "scripts"))
 import toolchain as tc
 
 
+def output_difference(runs):
+    """Gust: the first lines where runs at different -O levels differ, for a
+    failure's report: a difference that happens only on some machine shows
+    what it was."""
+    import difflib
+    levels = sorted(runs)
+    a, b = runs[levels[0]], runs[levels[-1]]
+    lines = list(difflib.unified_diff(a.splitlines(), b.splitlines(), f"-O{levels[0]}",
+                                      f"-O{levels[-1]}", n=1, lineterm=""))
+    return "\n".join(lines[:24])
+
+
 def native_modules(f, native):
     """The native modules a fixture uses: its category directory's, and any
     other it imports itself."""
@@ -876,7 +888,7 @@ class Runner:
                     runs[ol] = out
                 if not bad:
                     if len(set(runs.values())) != 1:
-                        self.fail(f"cgen-output-differs-by-O {f.name}")
+                        self.fail(f"cgen-output-differs-by-O {f.name}", output_difference(runs))
                     elif self.check_stdout(name, f.name, runs["2"]):
                         self.ok(f"cgen+run {f.name}")
 
@@ -911,7 +923,7 @@ class Runner:
             if bad:
                 return
             if len(set(runs.values())) != 1:
-                self.fail(f"jit-output-differs-by-O {f.name}")
+                self.fail(f"jit-output-differs-by-O {f.name}", output_difference(runs))
             elif self.check_stdout(name, f"jit {f.name}", runs["2"]):
                 self.ok(f"jit {f.name}")
 
