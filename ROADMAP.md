@@ -112,6 +112,12 @@ criterion moves to Phase 5.
 - Emit range hints (`__builtin_assume`) from index types (`u32 in a`).
 - Close the bounds-check gaps in Goose's spec (Appendix B, 0a and 0f): indices loaded from
   arrays, disjunctive loop exits, `u64` ranges. 46 of 161 index checks remain in the `compare/` programs.
+  **(In part: a self-recursive function now enters with its call sites' facts when its own
+  calls keep them, by induction on the depth of recursion; a variable that steps one way
+  inside a loop keeps its entry value as a bound; and a second invariant round proves what
+  the first makes provable. That removes every check in quicksort's partition loop: 42 of
+  161 remain, and sort runs in 0.190 s against Rust LTO's 0.218, best of five runs each on
+  26 October, where it was level.)**
 - Find out why Lobster (same author) runs `interp` 1.24x faster than Goose under clang.
 - Bundle clang (or an LLVM toolchain) with releases, so users without it don't get MSVC's
   17–27% slower code.
@@ -123,7 +129,11 @@ bintrees, hashmap and strings; level on interp, 0.569 against 0.569, and sort, 0
 0.229, so the criterion is not met on those two. Measured flags for clang on the same C:
 `-O3` alone changed nothing; ThinLTO across the program and the runtime gained 11% on sort,
 6% on hashmap and 4% on astar in an interleaved run, through no runtime call in the hot
-loops, so most likely layout, and needs lld; not made the default.)**
+loops, so most likely layout, and needs lld; not made the default. After the bounds-check
+work, 26 October, best of five runs each, gust/clang against rust/o3-lto: sort 0.190 against
+0.218 and interp 0.506 against 0.551, ahead on both now; nbody 0.160 against 0.160 and
+raytrace 0.082 against 0.083, level, so "strictly faster on all 8" is still not met, nor
+interp at Lobster's 0.419.)**
 
 ## Phase 3: Library access (months 3–5)
 

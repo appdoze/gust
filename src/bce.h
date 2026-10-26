@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — bounds-check elimination. Runs between the optimizer and
 // codegen over every live specialization body (plus global initializers), and
 // marks Index / SliceExpr nodes whose runtime check provably cannot fire
@@ -93,7 +94,11 @@
 // parameters: `blur(&a, &b)` from a caller that knows both lengths makes
 // `src.len == W * W` a fact inside `blur`. Specializations are analyzed
 // callers first for that; a site inside a recursive cycle is not analyzed
-// yet when its callee is, and such a callee simply gets nothing.
+// yet when its callee is, and such a callee simply gets nothing, except a
+// function whose only such sites are its own calls (quicksort): it enters
+// with what its other sites prove when, granted that at entry, its own
+// calls prove it too, which by induction on the depth of recursion makes it
+// hold at every call (InductiveEntry; dry runs that mark nothing find it).
 //
 // Loops: a body is first walked in a kills-only mode to invalidate whatever
 // any earlier iteration may have changed, then walked for real; while-loop
@@ -104,7 +109,12 @@
 // classic `var i = 0; while i < a.len { ... a[i] ...; i++; }` and the
 // post-loop `a[start..i]` slice. The declaration picks c: 0, or what a start
 // above the length needs (`var j = 1` before `while j + 4 <= a.len`), and
-// also -1 where the start is below it, as a masked probe index stays.
+// also -1 where the start is below it, as a masked probe index stays. A
+// second recording round grants what the first round's grants let it prove
+// (a partition's `sp <= len` from its `ep <= len`). Per loop, a variable
+// every write of which inside the loop is a non-wrapping step one way keeps
+// its entry value as a bound across the loop's havoc (loopsteps), though
+// the body as a whole moves it both ways.
 // Growth alone never breaks `v <= len(P) + c`, so
 // only a shrink disqualifies P. Globals get the same treatment across the
 // whole program (RunAll's first phase), which is what a cursor kept in a
@@ -600,6 +610,18 @@ struct BCE {
     set<VarDef *> ge0;
     map<VarDef *, vector<pair<int, int64_t>>> lelen;   // v <= len(P) + c, as (P, c).
     map<VarDef *, int> mono;   // +1 nondecreasing / -1 nonincreasing, wrap-free.
+    // The same per loop: for each loop, the integer variables every write of
+    // which inside it (nested loops included) is a shift one way that cannot
+    // wrap, +1 up and -1 down, or 0 for anything else. A recording round
+    // finds them (nextsteps, from ShiftCore and BumpVar), and the rounds
+    // after it and the judging pass bridge such a variable's generations at
+    // that loop's havoc (StripLoop), as they do a monotone one's everywhere:
+    // a partition's `sp`, raised only inside its loop and lowered once after
+    // it, is then at least its entry value wherever the loop leaves it.
+    map<Node *, map<VarDef *, int>> loopsteps;
+    map<Node *, map<VarDef *, int>> nextsteps;   // What this recording round finds.
+    vector<Node *> loopstack;     // The loops around the recording walk.
+    Node *stripping = nullptr;    // The loop whose havoc the judging walk applies.
 
     bool Reach(VarDef *v) {
         return v && (v->isglobal || v->captured || addrof.count(v) != 0);
@@ -654,6 +676,7 @@ struct BCE {
     // precedes its callers in.
     map<FnSpec *, vector<FnSpec *>> callees;
     map<FnSpec *, int> nsites;
+    map<FnSpec *, int> selfsites;    // Of those, the ones in its own body.
     set<FnSpec *> opaquesites;
     vector<FnSpec *> calleesfirst;
 
@@ -675,6 +698,11 @@ struct BCE {
         vector<int64_t> c;
     };
     map<FnSpec *, Sites> sites;
+    // A dry run (InductiveEntry): the judging pass over dry's body marks
+    // nothing and records no call site but dry's own, into drysites.
+    FnSpec *dry = nullptr;
+    Sites drysites;
+    const Sites *seedover = nullptr;   // The entry facts to grant, in place of sites'.
 
     // ------------------------------------------------------------------
     // Index and bound types (§3.11). A value of one is below its array's
@@ -1318,7 +1346,7 @@ struct BCE {
             auto rt = TermOf(b->right);
             if (!rt.ok || !CmpAdmissible(rt) || !Query(Zero(), rt.b, SatSub(rt.off, 1))) return;
         }
-        b->nonneg = true;
+        if (!dry) b->nonneg = true;
     }
 
     // A numeric cast whose value is inside the target's range is the
@@ -1400,12 +1428,45 @@ struct BCE {
         auto old = VarBase(v);
         flow.vgen.Set(VarId(v), ++nextgen);
         if (vksum) vksum->insert(v);
+        if (mode == M_RECORD) NoteLoopWrite(v, 0);   // A new value, not a shift.
         if (!bridge) return;
         auto it = mono.find(v);
-        if (it == mono.end()) return;
-        if (it->second > 0) AddFactB(old, VarBase(v), 0);   // old <= new.
-        else AddFactB(VarBase(v), old, 0);                  // new <= old.
+        auto dir = it == mono.end() ? 0 : it->second;
+        if (!dir && stripping && !Reach(v)) {
+            auto lit = loopsteps.find(stripping);
+            if (lit != loopsteps.end()) {
+                auto vit = lit->second.find(v);
+                if (vit != lit->second.end()) dir = vit->second;
+            }
+        }
+        if (dir > 0) AddFactB(old, VarBase(v), 0);         // old <= new.
+        else if (dir < 0) AddFactB(VarBase(v), old, 0);    // new <= old.
     }
+
+    // A write of v inside every loop around the recording walk: a shift
+    // by dir's sign that cannot wrap, or (dir 0) anything else.
+    void NoteLoopWrite(VarDef *v, int dir) {
+        for (auto l : loopstack) {
+            auto [it, fresh] = nextsteps[l].emplace(v, dir);
+            if (!fresh && it->second != dir) it->second = 0;
+        }
+    }
+
+    // StripKills for a loop's havoc, with the bridges its steps allow.
+    void StripLoop(Node *loop, Node *n) {
+        auto saved = stripping;
+        stripping = mode == M_JUDGE || mode == M_RECORD ? loop : nullptr;
+        StripKills(n);
+        stripping = saved;
+    }
+
+    // The recording walk of a loop's condition and body.
+    struct LoopScope {
+        BCE &b;
+        bool on;
+        LoopScope(BCE &b, Node *loop) : b(b), on(b.mode == M_RECORD) { if (on) b.loopstack.push_back(loop); }
+        ~LoopScope() { if (on) b.loopstack.pop_back(); }
+    };
 
     bool Mentioned(const Base &b) {
         for (auto &f : flow.facts) if (f.l == b || f.r == b) return true;
@@ -2009,7 +2070,8 @@ struct BCE {
     void RecordSite(Call *c, const vector<Node *> &an, const vector<Term> &ints,
                     const vector<Term> &slens, bool moved) {
         auto record = [&](FnSpec *sp) {
-            auto &S = sites[sp];
+            if (dry && sp != dry) return;
+            auto &S = dry ? drysites : sites[sp];
             S.seen++;
             if (!S.viable) return;
             auto &bases = InterfaceOf(sp).bases;
@@ -2056,11 +2118,16 @@ struct BCE {
     // when nothing reaches it any other way.
     void SeedEntryFacts(FnSpec *sp) {
         if (opaquesites.count(sp)) return;
-        auto sit = sites.find(sp);
-        auto nit = nsites.find(sp);
-        if (sit == sites.end() || nit == nsites.end()) return;
-        auto &S = sit->second;
-        if (!S.viable || S.seen == 0 || S.seen != nit->second) return;
+        auto sv = seedover;
+        if (!sv) {
+            auto sit = sites.find(sp);
+            auto nit = nsites.find(sp);
+            if (sit == sites.end() || nit == nsites.end()) return;
+            auto &T = sit->second;
+            if (!T.viable || T.seen == 0 || T.seen != nit->second) return;
+            sv = &T;
+        }
+        auto &S = *sv;
         auto &bases = InterfaceOf(sp).bases;
         auto n = (int)bases.size();
         vector<Base> bs(n);
@@ -2177,6 +2244,7 @@ struct BCE {
         auto ok = c > 0 ? Query(VarBase(v), Zero(), SatSub(hi, c))
                         : Query(Zero(), VarBase(v), SatSub(c, lo));
         if (!ok) { BumpVar(v); return; }
+        if (mode == M_RECORD && c) NoteLoopWrite(v, c > 0 ? 1 : -1);
         Materialize(v);
         // The base keeps its generation and is reinterpreted as the new value
         // (every fact mentioning it shifts below), so any memoized term built
@@ -2444,7 +2512,7 @@ struct BCE {
             if (!proven() && !IndexInRangeByType(ix)) probefail = true;
             return;
         }
-        if (mode == M_JUDGE) {
+        if (mode == M_JUDGE && !dry) {
             idxtotal++;
             auto ok = proven();
             if (ok) { ix->nobc = true; idxelided++; }
@@ -2472,7 +2540,7 @@ struct BCE {
             if (!proven()) probefail = true;
             return;
         }
-        if (mode == M_JUDGE) {
+        if (mode == M_JUDGE && !dry) {
             idxtotal++;
             auto ok = proven();
             if (ok) { ac->nobc = true; idxelided++; }
@@ -2613,6 +2681,7 @@ struct BCE {
             probefail = true;
             return;
         }
+        if (dry) return;
         sltotal++;
         auto ok = lent.ok && lot.ok && hit.ok &&
                   Query(Zero(), lot.b, lot.off) &&
@@ -2725,7 +2794,7 @@ struct BCE {
         flow = std::move(savedflow);
         derived = std::move(savedderived);
         slicelen = savedslicelen;
-        bn->specidx = probefail || bn->specidx < 0 ? -1 : 1;
+        if (!dry) bn->specidx = probefail || bn->specidx < 0 ? -1 : 1;
     }
 
     // ------------------------------------------------------------------
@@ -3038,6 +3107,10 @@ struct BCE {
         ge0.clear();
         lelen.clear();
         mono.clear();
+        loopsteps.clear();
+        nextsteps.clear();
+        loopstack.clear();
+        stripping = nullptr;
         ownvars.clear();
         classparams.clear();
         ownclasses.clear();
@@ -3062,6 +3135,51 @@ struct BCE {
 
     void RunSpec(FnSpec *sp) {
         if (!sp->body) return;   // An extern fn (§7.10).
+        auto entry = InductiveEntry(sp);
+        seedover = entry ? &*entry : nullptr;
+        RunSpecOnce(sp);
+        seedover = nullptr;
+    }
+
+    // A specialization that calls itself (quicksort) has its own body among
+    // its call sites, which are judged only with it, so it would enter with
+    // nothing. What its other sites prove about its parameters holds at
+    // every call if, granted at entry, its own sites prove it too: by
+    // induction on the depth of recursion. From what the other sites prove,
+    // dry runs collect what its own sites prove under that; the meet of the
+    // two is the next assumption, until it is one its sites keep, or not in
+    // a few rounds, and then nothing.
+    optional<Sites> InductiveEntry(FnSpec *sp) {
+        auto self = selfsites.find(sp);
+        if (self == selfsites.end() || opaquesites.count(sp)) return {};
+        auto sit = sites.find(sp);
+        auto nit = nsites.find(sp);
+        if (sit == sites.end() || nit == nsites.end()) return {};
+        auto P = sit->second;
+        if (!P.viable || P.seen == 0 || P.seen + self->second != nit->second) return {};
+        for (auto round = 0; round < 4; round++) {
+            dry = sp;
+            drysites = Sites {};
+            seedover = &P;
+            RunSpecOnce(sp);
+            seedover = nullptr;
+            dry = nullptr;
+            auto &T = drysites;
+            if (!T.viable || T.seen != self->second || T.c.size() != P.c.size()) return {};
+            auto changed = false;
+            for (size_t i = 0; i < P.c.size(); i++) {
+                auto weaker = std::max(P.c[i], T.c[i]);
+                if (weaker != P.c[i]) {
+                    P.c[i] = weaker;
+                    changed = true;
+                }
+            }
+            if (!changed) return P;
+        }
+        return {};
+    }
+
+    void RunSpecOnce(FnSpec *sp) {
         SetupSpec(sp);
         for (auto &[v, ok] : gge0) if (ok) ge0.insert(v);
         // Whole-body kill summary: which places and variables any path can
@@ -3079,36 +3197,61 @@ struct BCE {
             return v && wdecl.count(v) && !wbad.count(v) && !v->captured && !v->isglobal &&
                    !v->isparam && !addrof.count(v) && IntBaseVar(v);
         };
-        for (auto v : wdecl) {
-            if (!eligible(v)) continue;
-            auto &c = cands[v];
-            auto rit = relpids.find(v);
-            if (rit != relpids.end())
-                for (auto pid : rit->second) {
-                    // `v <= len(P)` survives any growth of P, so only a
-                    // shrink (or a re-bound access path) rules P out.
-                    if (shrunk.count(pid) || vbumped.count(places[pid].rootv)) continue;
-                    if (c.le.size() >= 8) break;
-                    c.le.push_back({ pid, 0 });
-                }
-        }
-        if (!cands.empty()) {
+        auto candidates = [&] {
+            cands.clear();
+            for (auto v : wdecl) {
+                if (!eligible(v)) continue;
+                auto &c = cands[v];
+                auto rit = relpids.find(v);
+                if (rit != relpids.end())
+                    for (auto pid : rit->second) {
+                        // `v <= len(P)` survives any growth of P, so only a
+                        // shrink (or a re-bound access path) rules P out.
+                        if (shrunk.count(pid) || vbumped.count(places[pid].rootv)) continue;
+                        if (c.le.size() >= 8) break;
+                        c.le.push_back({ pid, 0 });
+                    }
+            }
+        };
+        candidates();
+        // The recording pass also finds the loops' one-way steps (loopsteps).
+        auto steps = false;
+        for (auto &[v, wk] : wkinds) steps = steps || wk.inc || wk.dec;
+        // A second round records with what the first proved, its loop steps
+        // included, and grants what that proves in turn: `sp <= len(a)` once
+        // `ep <= len(a)` is known, where sp steps up only while below ep, or
+        // once a step down after the loop is known not to wrap. Each round
+        // grants only what it proved from what earlier rounds proved.
+        for (auto round = 0; round < 2 && (!cands.empty() || steps); round++) {
+            if (round) candidates();
             mode = M_RECORD;
+            nextsteps.clear();
             flow = Flow {};
             SeedEntryFacts(sp);
             derived.clear();
             Walk(sp->body);
+            auto more = false;
             for (auto &[v, c] : cands) {
                 if (!c.declseen) continue;
-                if (c.ge0) ge0.insert(v);
-                if (!c.le.empty()) lelen[v] = c.le;
+                if (c.ge0 && ge0.insert(v).second) more = true;
+                auto &have = lelen[v];
+                for (auto &le : c.le)
+                    if (std::find(have.begin(), have.end(), le) == have.end()) {
+                        have.push_back(le);
+                        more = true;
+                    }
+                if (have.empty()) lelen.erase(v);
                 // Shifts are monotone by their sign; a plain assignment
                 // counts only where the recording walk proved its direction.
                 auto &wk = wkinds[v];
                 auto dec = !wk.inc && (!wk.setw || c.setdec);
                 auto inc = !wk.dec && (!wk.setw || c.setinc);
-                if (c.wrapfree && dec != inc) mono[v] = inc ? 1 : -1;
+                if (c.wrapfree && dec != inc && mono.emplace(v, inc ? 1 : -1).second) more = true;
             }
+            if (nextsteps != loopsteps) more = true;
+            loopsteps = std::move(nextsteps);
+            nextsteps.clear();
+            if (!more) break;
         }
         mode = M_JUDGE;
         flow = Flow {};
@@ -3129,6 +3272,7 @@ struct BCE {
             if (c->spec) {
                 if (c->builtin < 0) {
                     nsites[c->spec]++;
+                    if (from == c->spec) selfsites[c->spec]++;
                     uses[c->spec]++;
                     if (from) callees[from].push_back(c->spec);
                 } else {
@@ -3141,6 +3285,7 @@ struct BCE {
             }
             for (auto d : c->dispatch) {
                 nsites[d]++;
+                if (from == d) selfsites[d]++;
                 uses[d]++;
                 if (from) callees[from].push_back(d);
             }
@@ -3804,8 +3949,9 @@ inline bool While::BceWalk(BCE &b) {
         return true;
     }
     b.LoopViewRefs(body, cond, hoistrefs, hoistfields);
-    b.StripKills(cond);
-    b.StripKills(body);
+    b.StripLoop(this, cond);
+    b.StripLoop(this, body);
+    BCE::LoopScope ls(b, this);
     // A break in the condition leaves with only part of it run, where what
     // its evaluation states need not hold yet: only the state at the top of
     // an iteration does.
@@ -3823,7 +3969,7 @@ inline bool While::BceWalk(BCE &b) {
         // A break in the body leaves after any part of it ran, which may have
         // moved what the condition's evaluation stated. The loop depth still
         // counts a redeclaration in the body as a kill, as at entry.
-        if (b.HasBreaks(body)) b.StripKills(body);
+        if (b.HasBreaks(body)) b.StripLoop(this, body);
         else if (killfree) b.CondFacts(cond, false);
     }
     b.loopdepth--;
@@ -3838,7 +3984,8 @@ inline bool LoopExpr::BceWalk(BCE &b) {
         return true;
     }
     b.LoopViewRefs(body, nullptr, hoistrefs, hoistfields);
-    b.StripKills(body);
+    b.StripLoop(this, body);
+    BCE::LoopScope ls(b, this);
     auto exitf = b.flow;
     b.Walk(body);
     b.flow = std::move(exitf);
@@ -3957,13 +4104,14 @@ inline bool ForLoop::BceWalk(BCE &b) {
     // Codegen reads the views ahead of the whole loop, the iteration
     // expression included, so what that expression changes counts too.
     b.LoopViewRefs(body, iter, hoistrefs, hoistfields);
-    b.StripKills(body);
+    b.StripLoop(this, body);
+    BCE::LoopScope ls(b, this);
     if (iterkind == IK_ARRAY || iterkind == IK_SLICE) {
         lot = BCE::Term { true, BCE::Zero(), 0 };
         hit = b.LenTermOf(iter);
         // With the body's kills stripped, what bounds the length now bounds
         // it wherever an iteration tests it.
-        if (b.mode == BCE::M_JUDGE) {
+        if (b.mode == BCE::M_JUDGE && !b.dry) {
             lenbound = -1;
             lenexact = false;
             auto up = hit.ok ? b.Dist(hit.b, BCE::Zero()) : BCE::INF;

@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 """Differential fuzzing of bounds-check elimination: random programs built
 from the loop shapes the pass proves (two indices walking towards each
 other, lookaheads, branch-free partitions, min/max windows, `i + c <= len`
@@ -32,7 +33,7 @@ def shape(r, a, n):
     off = pick(0, 0, 0, 1, -1)
     off2 = pick(0, 0, 0, 1, -1, 2)
     k = r.randint(0, 4)
-    kind = r.randint(0, 21)
+    kind = r.randint(0, 22)
     if kind == 0:   # two indices towards each other
         return [f"var {i} = {max(0, off)};", f"var {j} = {a}.len - {1 - off2 if off2 <= 1 else 0};",
                 f"while {i} {pick('<', '<', '<=')} {j} {{",
@@ -120,6 +121,11 @@ def shape(r, a, n):
     if kind == 20:  # a nonzero guard before an index below
         return [f"for {i} in {a}.len {{", f"    if {i} != {pick(0, 0, 1)} {{ acc += {a}[{i} - 1]; }}", "}",
                 f"if {a}.len != {pick(0, 0, 1)} {{ acc += {a}[{a}.len - 1] + {a}[0]; }}"]
+    if kind == 22:  # steps one way inside a loop, the other way after it
+        return [f"var {i} = {pick(0, 0, 1, -1)};", f"var {j} = {a}.len{pick('', '', ' - 1', ' + 1')};",
+                f"while {i} < {j} {{", f"    acc += {a}[{i}];",
+                f"    if acc % 3 == 0 {{ {i} += 1; }} else {{ {j} -= 1; acc += {a}[{j}]; }}", "}",
+                f"{i} -= {pick(1, 1, 0, 2)};", f"if acc % 2 == 0 {{ acc += {a}[{i}]; }}"]
     if kind == 21:  # whole-struct stores through element references
         return [f"var q{n}: Pt[>..] = [];", f"for {i} in {a}.len {{ q{n}.push(Pt {{ x: {a}[{i}], y: {i} }}); }}",
                 f"for &p{n}, {i} in q{n} {{",
@@ -142,10 +148,31 @@ def program(seed):
              "fn body(a: i64[:], b: i64[:]) -> i64 {", "    var acc = 0;"]
     for n in range(r.randint(2, 5)):
         lines += ["    " + l for l in shape(r, r.choice(["a", "b"]), n)]
-    lines += ["    return acc;", "}", "fn main() {",
+    lines += ["    return acc;", "}"]
+    # A partition that recurses on its two sides, as quicksort does, its
+    # entry facts proven by induction over its own calls (BCE's
+    # InductiveEntry), with mutations at the sites that break them.
+    rec = r.random() < 0.5
+    if rec:
+        def pick(*xs):
+            return r.choice(xs)
+        lines += ["recursive fn part(a: i64[:], lo: i64, hi: i64, d: i64) -> i64 {",
+                  f"    if d == 0 || hi - lo <= {pick(1, 1, 0)} {{ return 0; }}",
+                  "    var acc = a[lo];", f"    var sp = lo + {pick(1, 1, 0)};", "    var ep = hi;",
+                  "    while sp < ep {",
+                  f"        if a[sp] {pick('<', '<=', '>')} a[lo] {{ a[sp - 1] = a[sp]; sp += 1; }}",
+                  "        else { ep -= 1; let t = a[sp]; a[sp] = a[ep]; a[ep] = t; }", "    }",
+                  f"    sp -= {pick(1, 1, 1, 0, 2)};", "    acc += a[sp];",
+                  f"    return acc + part(a, lo, sp{pick('', '', '', ' + 1', ' + 2')}, d - 1) + "
+                  f"part(a, ep{pick('', '', '', ' - 1')}, hi{pick('', '', '', ' + 1')}, d - 1);", "}"]
+    lines += ["fn main() {",
               f"    var xs: i64[>..] = [{', '.join(str(r.randint(0, 9)) for _ in range(12))}];",
               f"    var ks: i64[>..] = [{r.randint(0, 12)}, {r.randint(0, 12)}];",
-              "    print(body(xs[..ks[0]], xs[..ks[1]]));", "}"]
+              "    print(body(xs[..ks[0]], xs[..ks[1]]));"]
+    if rec:
+        lines += [f"    print(part(xs[..ks[0]], {r.choice(['0', '0', '0', '1'])}, "
+                  f"{r.choice(['ks[0]', 'ks[0]', 'ks[0]', 'ks[1]', 'ks[0] + 1'])}, 6));"]
+    lines += ["}"]
     return "\n".join(lines) + "\n"
 
 

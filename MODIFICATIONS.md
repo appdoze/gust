@@ -86,6 +86,21 @@ git log upstream/master..main
   match its own arguments; the names in a nested candidate's parameter
   types now resolve where it was declared. `test/typing/
   nested_fnval_generic_names.goose` (new).
+- `src/bce.h`: bounds-check elimination proves three more kinds of index.
+  A function whose only recursive calls are its own (quicksort) enters
+  with what its other call sites prove about its parameters when, granted
+  at entry, its own calls prove it too (induction on the depth of
+  recursion; found by dry runs that mark nothing). A variable every write
+  of which inside a loop is a non-wrapping step one way keeps its entry
+  value as a bound across the loop, though it moves the other way outside
+  it. And a second recording round proves the invariants the first
+  round's make provable. In `compare/`'s sort, every check in the
+  partition loop now goes. `test/optimizer/bce_loop_steps.goose`,
+  `test/optimizer/bce_recursive_entry.goose` (new); `bench/bce_fuzz.py`
+  generates the two shapes, with mutations that make some unsafe.
+  `test/optimizer/basecase_copied_shrink.goose` also calls `f(0)`: with
+  only `f(3)` its original base case is provably dead (1 <= n at every
+  call) and its check is now elided, while the inlined copy keeps its own.
 
 ## Safety checks
 
