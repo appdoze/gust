@@ -86,6 +86,25 @@ git log upstream/master..main
   match its own arguments; the names in a nested candidate's parameter
   types now resolve where it was declared. `test/typing/
   nested_fnval_generic_names.goose` (new).
+- Compiler faults that `bench/compiler_fuzz.py` (new) found by mutating the
+  fixtures and samples: a function value standing alone as a statement
+  (`F;`) passed the checker and crashed code generation (now an error,
+  `src/typecheck_flow.h`); a variant type of a scalar or struct
+  (`f64.Circle`) crashed the checker at a call before the signature was
+  validated (now an error in name resolution, `src/resolve.h`); a `return`
+  with a value in `main` gave it a result its C `main()` could not pass
+  (now an error, `src/typecheck.h`); and a `return`, `break` or `continue`
+  where a value was wanted, an array element or a let's initializer, failed
+  in code generation (now the statement it is, `src/codegen_construct.h`,
+  `src/codegen_nodes.h`, with the type its context wanted kept on the node:
+  `src/ast.h`, `src/typecheck_nodes.h`, `src/optimize.h`,
+  `src/codegen_values.h`); an array size past §10.4's 2^48 reached the C
+  compiler, which refused it (now an error, `src/typecheck.h`); and a data
+  stack held across a call into a recursive cycle, as a dispatch copying a
+  variant that is not fixed-size does, was reported as internal (now says
+  what to change, `src/codegen.h`). `test/errors_tc/fnval_statement.goose`,
+  `test/errors_tc/main_return_value.goose`, `test/errors_tc/array_size_bound.goose`,
+  `test/codegen/leaving_values.goose` (new).
 - C callbacks: `c_callback(f)`, the C address of export fn `f`'s wrapper,
   for C to call back during an extern call (`src/builtins.h`,
   `src/typecheck_builtins.h`, `src/typecheck.h`, `src/ast.h`). The wrapper
@@ -221,6 +240,10 @@ git log upstream/master..main
   measured baseline (`compare/results.json`).
 - `test/net_fd_limit.py` (new), `test/run_tests.py`: a server out of file
   descriptors drops what it cannot take and does not spin (Linux, macOS).
+- `bench/compiler_fuzz.py` (new): the compiler fuzzed for crashes, with the
+  fixtures and samples mutated by tokens (mostly in kind: an identifier for
+  another, a number, a type) and by lines; a program that checks clean goes
+  on through code generation at -O2 and a C compiler's -fsyntax-only.
 - Fuzzing the code that reads untrusted input:
   `test/storage/fuzz_from_bytes.goose` (from_bytes on mutated images of
   every serializable shape; whatever it accepts is walked in full and must

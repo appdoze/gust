@@ -1356,17 +1356,22 @@ NODE(Return)
     string_view ns;             // The namespace `from` resolves in first (Ident::ns).
     SFunction *target = nullptr;  // Filled by typecheck (the fn this exits; `from` or own).
     FnSpec *targetspec = nullptr; // Its concrete return contract and propagation channel.
+    // Gust: the type the context wanted, where it leaves in the middle of a
+    // value (`let r: T& = return x`); codegen's CgX builds that (CtlValX).
+    TypeExpr *leavetype = nullptr;
     Return(Line l) : Node(l, NKind) {}
 NODE_END
 
 NODE(Break)
     BCE_WALK
     Node *val;
+    TypeExpr *leavetype = nullptr;   // Gust: as Return::leavetype.
     Break(Line l, Node *_val) : Node(l, NKind), val(_val) {}
 NODE_END
 
 NODE(Continue)
     BCE_WALK
+    TypeExpr *leavetype = nullptr;   // Gust: as Return::leavetype.
     Continue(Line l) : Node(l, NKind) {}
 NODE_END
 

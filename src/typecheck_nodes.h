@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the per-node typecheck implementations (the Check virtual):
 // the pass reads top to bottom here; the shared machinery (calls, control
 // flow, literals' construction rules) is TypeCheck's, typecheck.h and the
@@ -613,18 +614,21 @@ inline Val ForLoop::Check(TypeCheck &tc, TypeExpr *) {
     return tc.VoidVal();
 }
 
-inline Val Return::Check(TypeCheck &tc, TypeExpr *) {
+inline Val Return::Check(TypeCheck &tc, TypeExpr *expected) {
     tc.CheckReturn(this);
+    leavetype = expected;
     return tc.VoidVal();
 }
 
-inline Val Break::Check(TypeCheck &tc, TypeExpr *) {
+inline Val Break::Check(TypeCheck &tc, TypeExpr *expected) {
     tc.CheckBreak(this);
+    leavetype = expected;
     return tc.VoidVal();
 }
 
-inline Val Continue::Check(TypeCheck &tc, TypeExpr *) {
+inline Val Continue::Check(TypeCheck &tc, TypeExpr *expected) {
     tc.CheckContinue(this);
+    leavetype = expected;
     return tc.VoidVal();
 }
 

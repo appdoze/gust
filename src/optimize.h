@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the optimizer: function inlining, constant folding, and
 // constant propagation, applied in place to the typechecked specialization
 // bodies that codegen consumes. The one hard rule: no rewrite may change
@@ -866,7 +867,11 @@ inline Node *StrLit::Cp1(Inliner &inl) const {
 }
 inline Node *NullLit::Cp1(Inliner &inl) const { return inl.ast.New<NullLit>(line); }
 inline Node *SelfRef::Cp1(Inliner &inl) const { return inl.ast.New<SelfRef>(line); }
-inline Node *Continue::Cp1(Inliner &inl) const { return inl.ast.New<Continue>(line); }
+inline Node *Continue::Cp1(Inliner &inl) const {
+    auto c = inl.ast.New<Continue>(line);
+    c->leavetype = leavetype;
+    return c;
+}
 
 inline Node *Ident::Cp1(Inliner &inl) const {
     if (vdef) {
@@ -1036,11 +1041,14 @@ inline Node *Return::Cp1(Inliner &inl) const {
     r->ns = ns;
     r->target = target;
     r->targetspec = targetspec;
+    r->leavetype = leavetype;
     return r;
 }
 
 inline Node *Break::Cp1(Inliner &inl) const {
-    return inl.ast.New<Break>(line, val ? inl.Cp(val) : nullptr);
+    auto b = inl.ast.New<Break>(line, val ? inl.Cp(val) : nullptr);
+    b->leavetype = leavetype;
+    return b;
 }
 
 inline Node *VarDecl::Cp1(Inliner &inl) const {

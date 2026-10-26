@@ -825,6 +825,12 @@ struct TypeCheck {
         if (a->size < 0 && a->sizeexpr) {
             auto v = ConstIntOrError(a->sizeexpr, "array size");
             if (v < 0) Error(a->sizeexpr, "array size cannot be negative");
+            // Gust: §10.4's bound, which the spec says is checked here (a
+            // capacity of 2^63 reached the C compiler, which refused it;
+            // found by bench/compiler_fuzz.py).
+            if (v > (int64_t(1) << 48))
+                Error(a->sizeexpr, cat("array size ", v, " exceeds 2^48, the most elements an array can have "
+                                       "(§10.4)"));
             a->size = v;
         }
         return a->size;
@@ -3001,6 +3007,11 @@ struct TypeCheck {
                 mainspec->sf = mainsf;
                 mainsf->specs.push_back(mainspec);
                 CheckSpecBody(mainspec, nullptr, mainsf->line);
+                // Gust: a return with a value gives main a result it was
+                // not declared with, which no C main() can pass on.
+                if (!mainspec->rets.empty())
+                    Error(mainsf->line, "fn main() takes no parameters and returns nothing: a return in it "
+                                        "has a value");
             });
         }
         // Thread entry points compile as separate programs (§11.2); check any

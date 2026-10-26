@@ -1027,7 +1027,10 @@ inline void CodeGen::FixedLitAtStk(Node *n, const string &stk) {
             ind--;
             L("}");
         } else {
-            for (auto e : al->elems) EmitF(e, elem);
+            for (auto e : al->elems) {
+                if (Leaves(e)) { GenStmt(e); break; }
+                EmitF(e, elem);
+            }
         }
         if (et->arr->akind == A_LIMITED) Gap((ArrSize(et->arr) - count) * FixedSize(elem));
         return;
@@ -1118,8 +1121,10 @@ inline void CodeGen::FixedArrayLitAt(ArrayLit *al, const string &base, bool inro
         L("}");
         return;
     }
-    for (size_t i = 0; i < al->elems.size(); i++)
+    for (size_t i = 0; i < al->elems.size(); i++) {
+        if (Leaves(al->elems[i])) { GenStmt(al->elems[i]); break; }
         emitelem(al->elems[i], cat(base, ".e[", i, "]"));
+    }
 }
 
 // `inroot` says `base` is the value's real address inside its root (see
@@ -1241,7 +1246,10 @@ inline void CodeGen::GenArrayLit(ArrayLit *al, const string &stk, const string &
         }
         return;
     }
-    for (auto e : al->elems) GenConstruct(e, stk, elem);
+    for (auto e : al->elems) {
+        if (Leaves(e)) { GenStmt(e); break; }
+        GenConstruct(e, stk, elem);
+    }
 }
 
 // Does this literal name `self` directly? Such a literal has no static

@@ -236,6 +236,12 @@ throughput compared against a Rust (tokio) server in `compare/`.
 
 - Fuzz the compiler, the type checker and `from_bytes`; sanitizer jobs in CI **(a Linux ASan
   and UBSan profile runs already; with this milestone it also covers the network examples)**.
+  **(Begun: `test/storage/fuzz_from_bytes.goose`, `test/stdlib/fuzz_json.goose` and
+  `examples/api/fuzz_http.py` fuzz what reads untrusted input, 16 million images and 12.8
+  million JSON texts under ASan and UBSan with no report, and found uninitialized enum bytes
+  that `to_bytes` wrote out; `bench/compiler_fuzz.py` mutates the fixtures through the checker,
+  code generation and a C compiler, and its first 200,000 programs found seven compiler faults,
+  two of them crashes, all fixed.)**
 - A soundness review of the memory model and the new parallel features, ideally with
   outside reviewers. "Safer than Rust" has to be earned by people trying to break it.
 - Freeze the spec; publish a stability and edition policy.

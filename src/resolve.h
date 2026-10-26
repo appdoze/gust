@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — post-parse type name resolution, possible only once every
 // file is in (top-level declarations are order-independent). Every parse-time
 // TY_UNRESOLVED is rewritten in place: struct and enum names become TY_STRUCT /
@@ -219,6 +220,19 @@ inline void ResolveTypeNames(Ast &ast) {
         auto adt = t->var->adt;
         if (adt->kind == TY_STRUCT && adt->struc->st->unknown) {
             MakeUnknown(t, t->var, cat(adt->struc->st->name, ".", t->var->name));
+            continue;
+        }
+        // Gust: a scalar or struct is never an ADT, and a variant type of
+        // one has no declaration a later pass can read (a call checked
+        // before the signature was crashed on it, found by
+        // bench/compiler_fuzz.py).
+        if (adt->kind == TY_INT || adt->kind == TY_FLT || adt->kind == TY_BOOL || adt->kind == TY_STRUCT) {
+            auto what = adt->kind == TY_STRUCT ? string(adt->struc->st->name)
+                        : adt->kind == TY_INT  ? string(IntStorageName(adt->intstorage))
+                        : adt->kind == TY_FLT  ? string(FltStorageName(adt->fltstorage))
+                                               : string("bool");
+            ErrorAt(t, t->var, cat("variant type of non-ADT type ", what, ": only an enum has variants"));
+            MakeUnknown(t, t->var, cat(what, ".", t->var->name));
             continue;
         }
         if (adt->kind != TY_ENUM) continue;  // E.g. a generic param; typecheck decides.

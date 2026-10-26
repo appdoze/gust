@@ -387,9 +387,21 @@ inline string InlineBlock::CgX(CodeGen &cg) { return cg.CtlValX(this); }
 // Statements and compile-time-only nodes have no value expression.
 inline string While::CgX(CodeGen &cg) { cg.Fail(line, "internal: While as value"); }
 inline string ForLoop::CgX(CodeGen &cg) { cg.Fail(line, "internal: ForLoop as value"); }
-inline string Return::CgX(CodeGen &cg) { cg.Fail(line, "internal: Return as value"); }
-inline string Break::CgX(CodeGen &cg) { cg.Fail(line, "internal: Break as value"); }
-inline string Continue::CgX(CodeGen &cg) { cg.Fail(line, "internal: Continue as value"); }
+// Gust: one that leaves where a value is wanted (`let r: T& = return x`,
+// found by bench/compiler_fuzz.py) is the statement it is, into a
+// temporary of the type the checker gave it, which nothing then reads.
+inline string Return::CgX(CodeGen &cg) {
+    if (!leavetype || leavetype == cg.ast.voidtype) cg.Fail(line, "internal: Return as value");
+    return cg.CtlValX(this, leavetype);
+}
+inline string Break::CgX(CodeGen &cg) {
+    if (!leavetype || leavetype == cg.ast.voidtype) cg.Fail(line, "internal: Break as value");
+    return cg.CtlValX(this, leavetype);
+}
+inline string Continue::CgX(CodeGen &cg) {
+    if (!leavetype || leavetype == cg.ast.voidtype) cg.Fail(line, "internal: Continue as value");
+    return cg.CtlValX(this, leavetype);
+}
 inline string RangeExpr::CgX(CodeGen &cg) { cg.Fail(line, "internal: RangeExpr as value"); }
 inline string FunVal::CgX(CodeGen &cg) { cg.Fail(line, "internal: FunVal as value"); }
 inline string SelfRef::CgX(CodeGen &cg) { cg.Fail(line, "internal: self as value"); }

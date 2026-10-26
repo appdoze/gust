@@ -653,9 +653,13 @@ struct CodeGen {
         if (!curspec || !curspec->incycle || !callee->incycle || !stknext) return;
         auto cycle = [](FnSpec *s) { while (s->cyclelink) s = s->cyclelink; return s; };
         if (cycle(callee) != cycle(curspec)) return;
-        Fail(ln, cat("internal: ", curspec->sf->name, " holds ", stknext, " data stack(s) "
-                     "across its call into the recursive cycle through ", callee->sf->name,
-                     " (§7.8)"));
+        // Gust: what the checker's rules do not catch (a dispatch copying a
+        // variant that is not fixed-size, say; found by bench/compiler_fuzz.py)
+        // is the program's to change, so it says what.
+        Fail(ln, cat(curspec->sf->name, " holds ", stknext, " data stack(s) across its call into the "
+                     "recursive cycle through ", callee->sf->name, ", which a call into a cycle may not "
+                     "(§7.8): a value that is not fixed-size is passed, bound or built by value here; "
+                     "take it by reference, or make it fixed-size"));
     }
     // Whether a fixed value above NATIVE_VALUE_LIMIT is held on a data
     // stack here (FixedLocal). Inside a function of a recursive cycle it is
@@ -1035,7 +1039,7 @@ struct CodeGen {
     }
     void GenStmt2(Node *n) { n->CgStmt(*this); }
 
-    string CtlValX(Node *n);
+    string CtlValX(Node *n, TypeExpr *as = nullptr);
     void LeafAny(Node *n, const Dst &d);
     string GenFixedArrayLit(ArrayLit *al);
     string GenPtr(Node *n, string *stkout = nullptr);
@@ -1106,6 +1110,10 @@ struct CodeGen {
     bool HasSelfRelRef(TypeExpr *t);
     void NoSelfRelCopy(Node *val);
     bool HasUninitSlots(TypeExpr *t);
+    // Gust: an element of an array literal that leaves (`return`, `break`,
+    // `continue`) is emitted as the statement it is, as a struct literal's
+    // field is: nothing after it in the literal runs, and it has no value.
+    static bool Leaves(Node *n) { return Is<Return>(n) || Is<Break>(n) || Is<Continue>(n); }
     void ZeroVariantTail(const string &base, EnumInst *ei, int vi, TypeExpr *et);
 
     // Byte span of the largest fixed value that can be a relative

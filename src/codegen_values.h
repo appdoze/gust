@@ -1469,9 +1469,9 @@ inline bool CodeGen::SpeculatablePlace(Node *n, bool idxok, int &budget) {
 // and a relative-reference-typed one (an `if` choosing a relative field's
 // target) as the plain reference every relative load gives and every
 // relative store encodes (§3.9).
-inline string CodeGen::CtlValX(Node *n) {
+inline string CodeGen::CtlValX(Node *n, TypeExpr *as) {
     auto t = T();
-    auto vt = n->exprtype;
+    auto vt = as ? as : n->exprtype;
     if (vt->kind == TY_INT && vt->intstorage == IS_VARINT) vt = ast.inttypes[IS_I64];
     if (IsRelRef(vt))
         vt = ast.RefTo(vt->ref->sub, n->line, vt->ref->optional);

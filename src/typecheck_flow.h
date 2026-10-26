@@ -1,3 +1,4 @@
+// Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
 // Goose compiler — the typechecker's flow (definitions of TypeCheck members,
 // typecheck.h): scopes, variables and their bindings, flow state (definite
 // assignment and optional narrowing, merged at joins), the control
@@ -2162,7 +2163,12 @@ inline void TypeCheck::CheckStmtExpr(Node *n) {
     if (auto x = Is<MatchExpr>(n)) { CheckMatch(x, nullptr, false); n->exprtype = ast.voidtype; return; }
     if (auto x = Is<EarlyBlock>(n)) { CheckEarlyBlock(x, nullptr, false); n->exprtype = ast.voidtype; return; }
     if (auto x = Is<LoopExpr>(n)) { CheckLoop(x, nullptr, false); n->exprtype = ast.voidtype; return; }
-    NoUntypedEmptyArray(CheckValue(n, nullptr), n, "a statement");
+    auto v = CheckValue(n, nullptr);
+    // Gust: a function value is compile-time only (§7.6): called or passed
+    // on, never a value of its own, which code generation has no form for.
+    if (v.type == fntype)
+        Error(n, "a function value can be called or passed on, but not stand as a statement (§7.6)");
+    NoUntypedEmptyArray(v, n, "a statement");
 }
 
 inline void TypeCheck::CheckVarDecl(VarDecl *vd, bool global) {
