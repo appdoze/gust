@@ -887,8 +887,17 @@ GS_API void gs_net_catch_signals(void) { SetConsoleCtrlHandler(gs_net_on_console
 #else
 #include <signal.h>
 static int gs_net_stop;
-GS_API void gs_net_request_stop(void) { __atomic_store_n(&gs_net_stop, 1, __ATOMIC_RELEASE); }
-GS_API uint8_t gs_net_stop_requested(void) { return __atomic_load_n(&gs_net_stop, __ATOMIC_ACQUIRE) != 0; }
+/* The generic builtins, which TinyCC has as gcc and clang do (its _n forms
+   are macros of its stdatomic.h), in the order runtime_impl.h names for it. */
+GS_API void gs_net_request_stop(void) {
+    int one = 1;
+    __atomic_store(&gs_net_stop, &one, __ATOMIC_SEQ_CST);
+}
+GS_API uint8_t gs_net_stop_requested(void) {
+    int v;
+    __atomic_load(&gs_net_stop, &v, __ATOMIC_SEQ_CST);
+    return v != 0;
+}
 static void gs_net_on_signal(int sig) {
     (void)sig;
     gs_net_request_stop();
