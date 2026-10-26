@@ -51,6 +51,11 @@ struct Request {
     body: const u8[:],
     keep_alive: bool,
     http11: bool,                // HTTP/1.1, which can take a chunked response
+    // The loop's: when the request should be done (0.0 for no limit), and
+    // whether the server is stopping, for a handler doing long work to cut
+    // it short (net::Ctl).
+    deadline: f64 = 0.0,
+    stopping: bool = false,
 }
 
 // What a handler sets besides the body it writes.
@@ -274,6 +279,8 @@ fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn
         if input.len < end + length { return 0; }
         let done = end + length;
         req.body = input[end..done];
+        req.deadline = ctl.deadline;
+        req.stopping = ctl.stopping;
         c.app.conn = ctl.conn;
         var res = Response { .. };
         var body: u8[>..] = [];

@@ -34,6 +34,10 @@ fn lines_d(st: Lines&, ctl: net::Ctl&, input: const u8[:], out: u8[>..]&) -> i64
         ctl.close = true;
     } else if line == "room" {
         format(out, ctl.room, "\n");
+    } else if line == "deadline" {
+        // What a handler doing long work would look at (net::Ctl).
+        out.append(if ctl.deadline == 0.0 { "none\n" } else if ctl.deadline > ctl.now { "ahead\n" }
+                   else { "passed\n" });
     } else {
         out.append("what?\n");
     }
@@ -157,7 +161,7 @@ fn main() {
     let l, ls = net::listen(0, 128, true);
     let port = net::port(l);
     var limits = net::Limits { in_size: 256, out_queue: 65536, out_total: 1048576, idle_ms: 3000,
-                               grace_ms: 1000, .. };
+                               grace_ms: 1000, request_ms: 60000, .. };
     let srv = thread_spawn(server, l, limits);
     let p, ps = net::poller();
     print("listen ", ls, ", poller ", ps);
@@ -207,7 +211,8 @@ fn main() {
     send_all(p, d, long);
     print("input past in_size closed ", closes(p, d));
     let alive = open(p, port);
-    print("still serving: ", ask(p, alive, "echo alive\n", 6), "closing ", net::close(p, alive));
+    print("still serving: ", ask(p, alive, "echo alive\n", 6), "a request's deadline ",
+          ask_line(p, alive, "deadline\n"), "closing ", net::close(p, alive));
 
     // Churn: connections opened, used and closed one after another.
     var answered = 0;
@@ -284,6 +289,16 @@ fn main() {
     assert(send_all(p, busy_conn, "big 50000000\n"));
     sleep(0.1);
     net::request_stop();
+    // A stop wakes a wait at once (epoll, kqueue, AFD), once: the next one
+    // waits its time.
+    let wp, wps = net::poller();
+    let t0 = clock();
+    let wn = net::wait(wp, 3000, hs, evs);
+    let woke = clock() - t0 < 1.0;
+    let t1 = clock();
+    net::wait(wp, 200, hs, evs);
+    print("a wait woke at the stop ", wn == 0 && woke, ", the next waited ", clock() - t1 >= 0.15);
+    net::close(wp);
     print("idle closed at the stop ", closes(p, idle, 3000));
     print("busy closed within the grace ", closes(p, busy_conn, 5000));
     // The first connection, idle since the slow reader: its idle timeout or

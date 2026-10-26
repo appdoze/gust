@@ -820,6 +820,14 @@ fn catch_signals()                         // Ctrl-C, SIGINT and SIGTERM set the
 fn request_stop()   fn stop_requested() -> bool
 ```
 
+A stop (`request_stop()`, or Ctrl-C, SIGINT or SIGTERM after
+`catch_signals()`) wakes every poller's `wait` at once, each once, which
+then returns 0, rather than at its timeout: through a pipe in each epoll or
+kqueue set, which the stop writes a byte to, and an empty completion posted
+to each AFD poller's port. A poller made after the stop wakes on its first
+wait. With `GUST_NET_POLL=1` (`poll`, `WSAPoll`) a stop is seen at the
+wait's timeout.
+
 A result of 0 or a count is success; a negative one is `ERROR` (the OS
 failed it; the connection is no good), `AGAIN` (it would have to wait),
 `BAD_HANDLE`, `LIMIT` (a table or memory ran out), `ADDRESS` (not an IPv4
@@ -866,7 +874,12 @@ may set `ctl.close` (end the connection once its output is sent) or
 `ctl.produce`, after which `P` is called with `room` (at least 16 KB, or
 `out_queue` if less) whenever none of the connection's output is waiting,
 until `P` clears it: a response of any size, in bounded memory, as fast as
-the client takes it. `state` is a copy of `proto` per connection.
+the client takes it. `state` is a copy of `proto` per connection. `D` and
+`P` also see `ctl.stopping`, once a stop is requested, and
+`ctl.deadline`, when the request should be done (its first byte plus
+`limits.request_ms`, as `clock()` reads; 0.0 for no limit), which the loop
+does not enforce: a handler doing long work looks at them and cuts it
+short, as one in Go looks at its context.
 
 Order and backpressure: `D` is not called while output is waiting or `P`
 is producing, so replies go out in the order their requests came, and a
@@ -888,6 +901,7 @@ the one connection it adopted, is the other way to serve, where they may.
 | `write_ms` | 5000 | output waiting and none of it taken: closed |
 | `grace_ms` | 10000 | after a stop, connections still busy are closed |
 | `wait_ms` | 50 | the longest wait, so timeouts and the stop flag are looked at |
+| `request_ms` | 0 (none) | nothing: it sets `ctl.deadline`, for `D` and `P` to keep to |
 
 At a stop (`stop_requested()`), `serve` stops accepting, closes idle
 connections, lets busy ones finish within `grace_ms`, and returns its

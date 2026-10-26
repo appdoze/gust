@@ -12,6 +12,7 @@ quit: bye
 closed true
 input past in_size closed true
 still serving: alive
+a request's deadline ahead
 closing 0
 churn: 200 of 200 answered, poller holds 3
 second server: first
@@ -26,6 +27,7 @@ the other connection's room 0
 starved worker: 33554432 and 1000000 bytes, intact true
 before the stop: idle
 
+a wait woke at the stop true, the next waited true
 idle closed at the stop true
 busy closed within the grace true
 first closed true

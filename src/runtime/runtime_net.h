@@ -394,6 +394,39 @@ static void gs_net_lst_unref(gs_net_lst *l) {
     }
 }
 
+/* Waking the pollers at a stop (gs_net_request_stop), so that a wait
+   returns at the stop rather than at its timeout: on Linux and the BSDs,
+   the read end of a pipe in every epoll or kqueue set, which the stop (a
+   signal handler, which may write) puts a byte in and nothing reads. A
+   poller wakes on it once and then drops it, so that waits after the stop
+   block again. On Windows a completion is posted to each AFD poller's port
+   instead (gs_net_port_add). The portable poll path has neither and sees a
+   stop at its timeout. */
+#define GS_NET_WAKEPAY ((uint64_t)1 << 62)
+#ifndef _WIN32
+static int gs_net_wakefd[2] = { -1, -1 };
+static int gs_net_stopping(void);
+/* Under the lock. */
+static void gs_net_wake_init(void) {
+    if (gs_net_wakefd[0] >= 0) return;
+    int fds[2];
+    if (pipe(fds) != 0) return;
+    for (int i = 0; i < 2; i++) {
+        fcntl(fds[i], F_SETFL, fcntl(fds[i], F_GETFL) | O_NONBLOCK);
+        fcntl(fds[i], F_SETFD, FD_CLOEXEC);
+    }
+    gs_net_wakefd[0] = fds[0];
+    gs_net_wakefd[1] = fds[1];
+    /* A stop requested before there was a pipe wakes the pollers made
+       after it, once each, as one requested later would. */
+    if (gs_net_stopping()) {
+        char c = 1;
+        ssize_t r = write(fds[1], &c, 1);
+        (void)r;
+    }
+}
+#endif
+
 /* Pollers and their connections: in their thread's own table. */
 typedef struct {
     gs_sock sock;
@@ -504,6 +537,7 @@ typedef gs_ntstatus (WINAPI *gs_NtDeviceIoControlFile)(HANDLE, HANDLE, void *, v
 typedef gs_ntstatus (WINAPI *gs_NtCancelIoFileEx)(HANDLE, gs_iosb *, gs_iosb *);
 typedef HANDLE (WINAPI *gs_CreateIoCompletionPort)(HANDLE, HANDLE, ULONG_PTR, DWORD);
 typedef BOOL (WINAPI *gs_GetQueuedCompletionStatusEx)(HANDLE, gs_ovl_entry *, ULONG, ULONG *, DWORD, BOOL);
+typedef BOOL (WINAPI *gs_PostQueuedCompletionStatus)(HANDLE, DWORD, ULONG_PTR, LPOVERLAPPED);
 typedef BOOL (WINAPI *gs_SetFileCompletionNotificationModes)(HANDLE, UCHAR);
 static struct {
     gs_NtCreateFile NtCreateFile;
@@ -512,7 +546,31 @@ static struct {
     gs_CreateIoCompletionPort CreateIoCompletionPort;
     gs_GetQueuedCompletionStatusEx GetQueuedCompletionStatusEx;
     gs_SetFileCompletionNotificationModes SetFileCompletionNotificationModes;
+    gs_PostQueuedCompletionStatus PostQueuedCompletionStatus;
 } gs_afd;
+
+/* Waking the pollers at a stop (gs_net_request_stop): every AFD poller's
+   completion port, which a stop posts an empty completion to. Under the
+   lock. */
+static HANDLE *gs_net_ports;
+static int64_t gs_net_nports, gs_net_capports;
+static void gs_net_port_add(HANDLE h) {
+    if (gs_net_nports == gs_net_capports) {
+        int64_t cap = gs_net_capports ? gs_net_capports * 2 : 16;
+        HANDLE *ps = (HANDLE *)realloc(gs_net_ports, (size_t)cap * sizeof *ps);
+        if (!ps) return;   /* this poller then sees a stop at its timeout */
+        gs_net_ports = ps;
+        gs_net_capports = cap;
+    }
+    gs_net_ports[gs_net_nports++] = h;
+}
+static void gs_net_port_drop(HANDLE h) {
+    for (int64_t i = 0; i < gs_net_nports; i++)
+        if (gs_net_ports[i] == h) {
+            gs_net_ports[i] = gs_net_ports[--gs_net_nports];
+            return;
+        }
+}
 static volatile LONG gs_afd_state;   /* 0 not tried, 1 ready, 2 unavailable */
 
 #define GS_AFD_POLL_RECEIVE      0x0001
@@ -535,7 +593,7 @@ static int gs_afd_start(void) {
 #define GS_AFD_LOAD(m, f) if (ok && !(*(FARPROC *)&gs_afd.f = GetProcAddress(m, #f))) ok = 0
     GS_AFD_LOAD(nt, NtCreateFile); GS_AFD_LOAD(nt, NtDeviceIoControlFile); GS_AFD_LOAD(nt, NtCancelIoFileEx);
     GS_AFD_LOAD(k32, CreateIoCompletionPort); GS_AFD_LOAD(k32, GetQueuedCompletionStatusEx);
-    GS_AFD_LOAD(k32, SetFileCompletionNotificationModes);
+    GS_AFD_LOAD(k32, SetFileCompletionNotificationModes); GS_AFD_LOAD(k32, PostQueuedCompletionStatus);
 #undef GS_AFD_LOAD
     InterlockedExchange(&gs_afd_state, ok ? 1 : 2);
     return ok;
@@ -573,6 +631,12 @@ static int gs_afd_open(gs_net_pl *p) {
     }
     p->iocp = iocp;
     p->afd = afd;
+    GS_NET_LOCK();
+    gs_net_port_add(iocp);
+    GS_NET_UNLOCK();
+    /* A stop requested before it existed wakes it once, as the pipe that
+       epoll and kqueue pollers wait on does. */
+    if (gs_net_stop_requested()) gs_afd.PostQueuedCompletionStatus(iocp, 0, 0, NULL);
     return 1;
 }
 
@@ -904,10 +968,28 @@ GS_API int64_t gs_net_poller(void) {
     p->kfd = -1;
 #if GS_NET_EPOLL
     if (!gs_net_force_poll()) p->kfd = epoll_create1(EPOLL_CLOEXEC);
+    if (p->kfd >= 0) {
+        GS_NET_LOCK();
+        gs_net_wake_init();
+        GS_NET_UNLOCK();
+        struct epoll_event e;
+        memset(&e, 0, sizeof e);
+        e.events = EPOLLIN;
+        e.data.u64 = GS_NET_WAKEPAY;
+        if (gs_net_wakefd[0] >= 0) epoll_ctl(p->kfd, EPOLL_CTL_ADD, gs_net_wakefd[0], &e);
+    }
 #elif GS_NET_KQUEUE
     if (!gs_net_force_poll()) {
         p->kfd = kqueue();
         if (p->kfd >= 0) fcntl(p->kfd, F_SETFD, FD_CLOEXEC);
+    }
+    if (p->kfd >= 0) {
+        GS_NET_LOCK();
+        gs_net_wake_init();
+        GS_NET_UNLOCK();
+        struct kevent ch;
+        EV_SET(&ch, (uintptr_t)gs_net_wakefd[0], EVFILT_READ, EV_ADD, 0, 0, (void *)(uintptr_t)GS_NET_WAKEPAY);
+        if (gs_net_wakefd[0] >= 0) kevent(p->kfd, &ch, 1, NULL, 0, NULL);
     }
 #elif defined(_WIN32)
     if (!gs_net_force_poll() && gs_afd_open(p)) p->kfd = 1;
@@ -936,6 +1018,9 @@ static void gs_net_unwatch_at(gs_net_pl *p, int64_t w) {
    (a second at most; past that the states are left, not freed), then the
    states, the device and the port. */
 static void gs_afd_close(gs_net_pl *p) {
+    GS_NET_LOCK();
+    gs_net_port_drop(p->iocp);
+    GS_NET_UNLOCK();
     for (int64_t f = 0; f < p->nfds; f++) {
         struct gs_net_ks *k = p->kst[f];
         if (!k) continue;
@@ -957,6 +1042,7 @@ static void gs_afd_close(gs_net_pl *p) {
         if (!gs_afd.GetQueuedCompletionStatusEx(p->iocp, es, 64, &n, 100, FALSE)) continue;
         for (ULONG j = 0; j < n; j++) {
             struct gs_net_ks *k = (struct gs_net_ks *)es[j].ovl;
+            if (!k) continue;   /* a stop's wake */
             k->pending = 0;
             p->kpending--;
             k->deleted = 1;
@@ -1235,6 +1321,10 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
         return errno == EINTR ? 0 : GS_NET_ERROR;
     }
     for (int j = 0; j < n; j++) {
+        if (evs[j].data.u64 == GS_NET_WAKEPAY) {
+            epoll_ctl(p->kfd, EPOLL_CTL_DEL, gs_net_wakefd[0], NULL);
+            continue;
+        }
         int64_t h = gs_net_unpayload(p, evs[j].data.u64);
         if (!h) continue;
         int64_t ev = 0;
@@ -1258,6 +1348,12 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
         return errno == EINTR ? 0 : GS_NET_ERROR;
     }
     for (int j = 0; j < n; j++) {
+        if ((uint64_t)(uintptr_t)evs[j].udata == GS_NET_WAKEPAY) {
+            struct kevent ch;
+            EV_SET(&ch, (uintptr_t)gs_net_wakefd[0], EVFILT_READ, EV_DELETE, 0, 0, NULL);
+            kevent(p->kfd, &ch, 1, NULL, 0, NULL);
+            continue;
+        }
         int64_t h = gs_net_unpayload(p, (uint64_t)(uintptr_t)evs[j].udata);
         if (!h) continue;
         int64_t ev = evs[j].filter == EVFILT_WRITE ? GS_NET_WRITE : GS_NET_READ;
@@ -1276,6 +1372,7 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
        what is waited for) is waited past, until ms are up, so that a wait
        returns 0 only at its timeout, as poll does. */
     DWORD start = GetTickCount();
+    int woke = 0;
     for (;;) {
     /* What completed or changed since the last wait goes back to the kernel. */
     int64_t nq = p->nkq;
@@ -1300,6 +1397,10 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
     }
     for (ULONG j = 0; j < n; j++) {
         struct gs_net_ks *s = (struct gs_net_ks *)es[j].ovl;
+        if (!s) {   /* a stop's wake: this wait returns */
+            woke = 1;
+            continue;
+        }
         s->pending = 0;
         p->kpending--;
         if (s->deleted) {
@@ -1325,7 +1426,7 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
         handles[k] = h;
         events[k++] = ev;
     }
-    if (k || (ms >= 0 && (int64_t)(GetTickCount() - start) >= ms)) break;
+    if (k || woke || (ms >= 0 && (int64_t)(GetTickCount() - start) >= ms)) break;
     }
 #else
     (void)p; (void)ms; (void)handles; (void)events; (void)cap;
@@ -1479,7 +1580,14 @@ static void gs_net_thread_end(void) {
    but C11 makes it a data race between threads. */
 #ifdef _WIN32
 static volatile LONG gs_net_stop;
-GS_API void gs_net_request_stop(void) { InterlockedExchange(&gs_net_stop, 1); }
+GS_API void gs_net_request_stop(void) {
+    InterlockedExchange(&gs_net_stop, 1);
+    /* Every AFD poller's wait returns. The console's handler runs on a
+       thread of its own, which may take the lock. */
+    GS_NET_LOCK();
+    for (int64_t i = 0; i < gs_net_nports; i++) gs_afd.PostQueuedCompletionStatus(gs_net_ports[i], 0, 0, NULL);
+    GS_NET_UNLOCK();
+}
 GS_API uint8_t gs_net_stop_requested(void) { return InterlockedCompareExchange(&gs_net_stop, 0, 0) != 0; }
 static BOOL WINAPI gs_net_on_console(DWORD type) {
     (void)type;
@@ -1495,7 +1603,16 @@ static int gs_net_stop;
 GS_API void gs_net_request_stop(void) {
     int one = 1;
     __atomic_store(&gs_net_stop, &one, __ATOMIC_SEQ_CST);
+    /* Every epoll and kqueue poller's wait returns: a write, which a
+       signal handler may make. */
+    int w = gs_net_wakefd[1];
+    if (w >= 0) {
+        char c = 1;
+        ssize_t r = write(w, &c, 1);
+        (void)r;
+    }
 }
+static int gs_net_stopping(void) { return gs_net_stop_requested(); }
 GS_API uint8_t gs_net_stop_requested(void) {
     int v;
     __atomic_load(&gs_net_stop, &v, __ATOMIC_SEQ_CST);

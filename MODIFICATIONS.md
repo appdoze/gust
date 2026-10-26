@@ -196,6 +196,13 @@ git log upstream/master..main
   most 32 connections a turn and honours `Limits.pool_conns`, a limit over
   every worker on the listener, which `examples/api/http.gust` uses in
   place of an even split of the pool's limit.
+- `src/runtime/runtime_net.h`, `stdlib/net.goose`, `examples/api/http.gust`:
+  a stop wakes every poller's wait at once, through a pipe in each epoll or
+  kqueue set that the stop (a signal handler may) writes a byte to, and an
+  empty completion posted to each AFD poller's port; each poller wakes once.
+  `net::Ctl` has `stopping` and `deadline` (`Limits.request_ms` from a
+  request's first byte), and HTTP's `Request` hands both to handlers.
+  `test/threads/net_serve.goose` checks both.
 - `src/runtime/runtime_threads.h`: a hook a thread program runs at its end
   however it ends, which `runtime_net.h` sets at first use to close the
   network handles the thread still owns.

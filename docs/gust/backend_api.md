@@ -731,7 +731,12 @@ Ranked by measured impact against effort; each names its evidence. The
    `thread_wait` and the `net` waits return on, and a deadline per request
    a handler can see (Go's `context`, Zig 0.16's `cancel`). Today a stop
    reaches a loop within 50 ms but cannot interrupt a handler. Effort:
-   runtime and compiler (new builtins).
+   runtime and compiler (new builtins). **(In part: a stop now wakes every
+   epoll, kqueue and AFD poller's wait at once; `net::Ctl` carries
+   `stopping` and a per-request `deadline` from `Limits.request_ms`, which
+   HTTP hands its handlers as `Request.deadline` and `Request.stopping`, for
+   them to keep to; nothing interrupts a handler that does not look, and
+   `qget` and `thread_wait` still return at their timeouts.)**
 3. **M:N workers on the data stacks**, so handlers may block at event-loop
    cost. A worker's data lives on its data stacks, so switching workers in
    user space moves no data. This is what would retire the thread-per-

@@ -202,6 +202,12 @@ struct Ctl {
     room: i64 = 0,           // what the connection may queue now (read only)
     close: bool = false,     // end the connection once its output is sent
     produce: bool = false,   // call P when there is room, until P clears it
+    stopping: bool = false,  // a stop was requested: finish what is under way (read only)
+    // When the request should be done, its input's first byte plus
+    // limits.request_ms, as clock() reads; 0.0 for no limit (read only).
+    // The loop enforces nothing: D and P look at it, as a handler in Go
+    // looks at its context's deadline.
+    deadline: f64 = 0.0,
 }
 
 // One worker's limits, and what each costs when broken.
@@ -215,6 +221,7 @@ struct Limits {
     read_ms: i64 = 5000,         // from the first byte of input D has not consumed; replies.timeout, closed
     write_ms: i64 = 5000,        // output waiting and none of it taken; closed
     grace_ms: i64 = 10000,       // after a stop, for connections still busy
+    request_ms: i64 = 0,         // what a request may take from its first byte: ctl.deadline (0: none)
     wait_ms: i64 = 50,           // the longest wait, so timeouts and the stop flag are looked at
 }
 
@@ -436,6 +443,7 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
             var out: u8[>..] = [];
             recs[i].ctl.now = now;
             recs[i].ctl.room = r;
+            recs[i].ctl.stopping = stop_at > 0.0;
             P(recs[i].state, recs[i].ctl, out, r);
             if out.len > r || (out.len == 0 && recs[i].ctl.produce) {
                 stats.protocol += 1;
@@ -449,12 +457,16 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
 
     // Hands D the input waiting in buf, while it consumes some and nothing
     // holds it back: the bytes consumed, or -1 when the connection ended.
-    fn feed(i: i64, buf: const u8[:], now: f64) -> i64 {
+    // `since` is when that input began to arrive, which a request's deadline
+    // counts from.
+    fn feed(i: i64, buf: const u8[:], now: f64, since: f64) -> i64 {
         var used = 0;
         while used < buf.len && recs[i].queued == 0 && !recs[i].ctl.produce && !recs[i].ctl.close {
             var out: u8[>..] = [];
             recs[i].ctl.now = now;
             recs[i].ctl.room = room(i);
+            recs[i].ctl.stopping = stop_at > 0.0;
+            recs[i].ctl.deadline = if limits.request_ms > 0 { since + limits.request_ms / 1000.0 } else { 0.0 };
             let n = D(recs[i].state, recs[i].ctl, buf[used..], out);
             if n < 0 || n > buf.len - used { stats.protocol += 1; end(i); return -1; }
             if out.len > 0 && !emit(i, out, now) { return -1; }
@@ -479,7 +491,7 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
     fn drain_slot(i: i64, now: f64) {
         let slot = recs[i].in_slot;
         let base = slot * limits.in_size;
-        let used = feed(i, ins[base..base + recs[i].have], now);
+        let used = feed(i, ins[base..base + recs[i].have], now, recs[i].started);
         if used < 0 { return; }
         let left = recs[i].have - used;
         for k in left { ins[base + k] = ins[base + used + k]; }
@@ -521,7 +533,7 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
         }
         stats.bytes_in += n;
         recs[i].last = now;
-        let used = feed(i, scratch[0..n], now);
+        let used = feed(i, scratch[0..n], now, now);
         if used < 0 { return; }
         if used < n {
             let slot = take_slot(ins, free_ins, limits.in_size);
