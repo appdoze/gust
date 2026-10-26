@@ -8,7 +8,10 @@ its request, one that resets mid-response, connection churn, responses
 built whole past 16 KB and streamed ones of megabytes, a slow reader of a
 stream, fragmented requests, that every socket is closed once its
 connection ends, an aborting handler contained to its worker, and a
-graceful shutdown with a request and a stream in flight.
+graceful shutdown with a request and a stream in flight. Then
+examples/api/fuzz_http.py sends each build a few thousand mutated
+requests: every response must be well formed, no worker may abort, and
+the server must still serve.
 
 In the baseline profile the example is built with `gust build`; in the
 sanitize profile its C (`gust -o`) is built with the suite's compiler and
@@ -75,4 +78,11 @@ def check_api_example(exe, base, cc=None, extra=(), runtime=None):
                 failed = [line for line in r.stdout.splitlines() if line.startswith("FAIL")]
                 raise RuntimeError(f"api example {key or '(normal build)'} {server_args}:\n"
                                    + "\n".join(failed or r.stdout.splitlines()[-12:]) + r.stderr[-800:])
+        for key, app in built.items():
+            r = subprocess.run([sys.executable, str(EXAMPLE / "fuzz_http.py"), "--exe", str(app), "--cases", "3000",
+                                "--threads", "8", "--server-args=--workers 2"],
+                               capture_output=True, text=True, errors="replace", timeout=600)
+            if r.returncode != 0:
+                raise RuntimeError(f"api example fuzz {key or '(normal build)'}:\n" + r.stdout[-2000:]
+                                   + r.stderr[-800:])
     return None

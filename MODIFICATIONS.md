@@ -189,6 +189,16 @@ git log upstream/master..main
   measured baseline (`compare/results.json`).
 - `test/net_fd_limit.py` (new), `test/run_tests.py`: a server out of file
   descriptors drops what it cannot take and does not spin (Linux, macOS).
+- Fuzzing the code that reads untrusted input:
+  `test/storage/fuzz_from_bytes.goose` (from_bytes on mutated images of
+  every serializable shape; whatever it accepts is walked in full and must
+  serialize back), `test/stdlib/fuzz_json.goose` (the JSON parser and the
+  streaming reader must agree, and a parsed tree must write out and parse
+  back the same), each run briefly with a fixed seed as a fixture, and
+  `examples/api/fuzz_http.py` (mutated requests against the API server,
+  which must answer every one well formed without a worker aborting), run
+  by `test/api_example.py` against each build; `test/fuzz_untrusted.py`
+  (new) runs all three for millions of inputs under ASan and UBSan.
 - `test/api_example.py` (new), `test/echo_example.py` (new),
   `test/run_tests.py`, `docs/testing.md`: the suite builds the API and echo
   examples normally and with `--checked` and runs their behaviour tests over

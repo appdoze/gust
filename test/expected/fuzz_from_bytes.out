@@ -1,0 +1,10 @@
+tree: 4000 images, 410 accepted, 410 of those as they serialize again
+ring: 4000 images, 248 accepted, 248 of those as they serialize again
+knot: 4000 images, 635 accepted, 635 of those as they serialize again
+shape: 4000 images, 1471 accepted, 1471 of those as they serialize again
+cell: 4000 images, 975 accepted, 975 of those as they serialize again
+sexp: 4000 images, 582 accepted, 582 of those as they serialize again
+item: 4000 images, 244 accepted, 244 of those as they serialize again
+rec: 4000 images, 531 accepted, 531 of those as they serialize again
+pad: 4000 images, 1186 accepted, 1186 of those as they serialize again
+varint: 4000 images, 1354 accepted, 1354 of those as they serialize again

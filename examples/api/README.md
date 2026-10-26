@@ -14,6 +14,7 @@ the language and the library can be compared apart.
 | `go/rawserver` | the Go twin with the same minimal HTTP as `http.gust` |
 | `go/loadgen` | the load generator all of them are measured with |
 | `test_api.py` | the behaviour tests, run against any of the servers |
+| `fuzz_http.py` | mutated requests against a server: every answer well formed, no worker aborted, still serving |
 | `bench.py`, `tables.py` | the benchmark and its tables |
 | `memory_profile.py` | reserved, committed and resident memory per idle connection, at several counts |
 | `scale.py` | the pool beside thousands of idle connections, with the platform's readiness backend and with `poll`/`WSAPoll` |
