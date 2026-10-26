@@ -37,7 +37,8 @@ git log upstream/master..main
   scripts (`gust completion`) complete `gust` and both `.gust` and `.goose`
   files; the man page is `GUST(1)`; `gust format` on a directory formats its
   `.gust` files as well as its `.goose` ones; the help and messages name
-  `gust`.
+  `gust`. `.github/workflows/ci.yml`: Goose's format check runs
+  `build/gust`.
 - `README.md` is Gust's; Goose's is kept as `GOOSE.md`. `ROADMAP.md` and this
   file are new.
 
