@@ -452,7 +452,7 @@ what a slow or hostile client costs the server is bounded.
 
 | limit (`net::Limits`, HTTP's setting) | when it is reached |
 |---|---|
-| `max_conns` (65536 / workers) | a new connection gets `replies.busy` (HTTP: a 503) and is closed |
+| `max_conns`, and `pool_conns` over every worker on the listener (HTTP: both 65536) | a new connection gets `replies.busy` (HTTP: a 503) and is closed |
 | `in_size` (8 KB head + 8 KB body) | input not consumed fills it: closed (HTTP refuses earlier with 431 or 413) |
 | `out_queue` (1 MB + 64 KB) | a connection's unsent output past it: closed; HTTP answers a body past 1 MB with 500 (stream it instead) |
 | `out_total` (16 MB per worker, in 16 KB chunks) | a producer waits, out of the poll set, until another connection frees some; HTTP answers a body larger than what is left with 503 |
@@ -499,28 +499,141 @@ contained thread adopts it and runs the same loop over it alone, so its
 handler may block and an abort ends only that connection, at about
 130 KB resident and two threads per connection (section 2).
 
-### Readiness, completion, and the next backends
+### Readiness backends: epoll, kqueue and AFD
 
-`poll` and `WSAPoll` report readiness: the loop calls `recv` or `send`
-when a socket is ready and the call finishes at once, so a buffer belongs
-to the OS only during that call, cancelling is closing, and a connection's
-memory can go back to the free lists the moment it closes. epoll and
-kqueue are readiness interfaces too, and fit behind `wait` and `want`
-unchanged, level-triggered as the loop expects (it reads once per report
-and asks again); a connection waiting for nothing would be removed from
-the set, as it is from the `poll` array now. IOCP reports completion: a
-read or write is submitted with its buffer, which the OS owns until the
-completion arrives, cancelling (`CancelIoEx`) is itself asynchronous, and
-a connection's buffers cannot be reused until every operation on it has
-completed, even after it is closed. That moves buffer ownership into the
-runtime, with `serve`'s slots and chunks lent to the OS per operation and
-returned on completion, a different contract for `recv` and `send`. The
-readiness route on Windows that fits the current interface is the AFD
-poll that wepoll and Rust's mio use. None of these was added: `poll`
-scans every socket of a worker on each wait, which at the connection
-counts measured here (up to 256 busy and 500 idle in all, a few dozen per
-worker) did not show as a cost; nothing was measured at tens of
-thousands of connections, where it would (section 7).
+`poll` and `WSAPoll` scan every socket of a poller on each wait, so a
+worker's wait costs what is open, not what is ready. A poller now waits
+with the platform's own readiness interface, behind the same `wait` and
+`want`, level-triggered as the loop expects (it reads once per report and
+asks again):
+
+- **Linux: epoll**, one instance per poller (`epoll_create1`), a socket
+  added, changed or removed (`EPOLL_CTL_*`) when what the loop waits for
+  on it changes.
+- **macOS and the BSDs: kqueue**, a read and a write filter per socket,
+  their reports for one socket merged into one event.
+- **Windows: the AFD poll** that Windows' own sockets are built on
+  (`IOCTL_AFD_POLL` on `\Device\Afd`, reached through `NtCreateFile` and
+  `NtDeviceIoControlFile` in ntdll, on the socket's base handle from
+  `SIO_BASE_HANDLE`), each socket's poll completing on one I/O completion
+  port per poller: the technique of wepoll and of Rust's mio, which tokio
+  is built on. A completed poll is resubmitted at the next wait, and a
+  change of what is waited for cancels the one outstanding, so the reports
+  are level-triggered as `WSAPoll`'s are. Closing a poller cancels its
+  polls and waits up to a second for their completions before it frees
+  their state, which the kernel writes into until then.
+
+The poller's array stays the registry either way (an entry per socket with
+what it waits for), mirrored in the kernel; a kernel report carries the
+connection's index, or a watched listener's handle with a flag bit, which
+the wait maps back to a checked handle, so a report for a connection closed
+earlier in the same batch reaches nothing. A `want` for what the socket
+already waits for makes no system call, which the loop does after most
+requests. A wait looks for closed listeners it watches only when one has
+closed since it last looked (a process-wide counter), not on every wait.
+`GUST_NET_POLL=1` keeps `poll` and `WSAPoll` for a process, which is how
+the portable path is still tested (`net_serve` passes either way).
+
+Two findings on the way, both about workers sharing a listener:
+
+- **Accepts were not shared.** Every worker is woken for a waiting
+  connection and the first takes it; a busy worker reaches the listener
+  less often, so at 50,000 connections, with the example's limit split
+  evenly (65,536 / 6 workers), two workers filled up and turned away 27,364
+  connections while others held a few hundred (per-worker counts from a
+  debug build: one worker took 1,061, the rest 7,800 to 10,922). `serve`
+  now takes at most 32 connections a turn, and `Limits.pool_conns` is a
+  limit over every worker on the listener, counted by the runtime: each
+  listener keeps an atomic tally of its connections still open, wherever
+  they are (`net::accepted_open`), which `examples/api/http.gust` uses in
+  place of the split. The 50,000-connection runs below turned none away.
+- **The tally must count only connections.** A first version added to
+  the tally before each `accept` and took it back when there was none, so
+  a worker's accept that found nothing made another worker's count look
+  one higher for a moment, and `net_serve`'s pool check failed: now only an
+  accepted connection is counted, while the listener is held.
+
+IOCP proper (completion of each read and write, not readiness) is still
+not used: the OS owns a buffer until its operation completes, which would
+move `serve`'s slots and chunks into the runtime, lent per operation.
+Readiness through AFD gets what IOCP was wanted for here, a wait whose
+cost is what is ready.
+
+### At scale: idle connections
+
+`examples/api/scale.py` (Windows) and an equivalent driver on Linux run the
+pool under the mixed load on 64 keep-alive connections beside N idle
+keep-alive connections, each sending a request every 2 s
+(`loadgen -idle N`), with the platform's backend and with `poll`/`WSAPoll`
+(`GUST_NET_POLL=1`). Three reps of 10 s per cell, medians; the range is the
+lowest and highest rep; latency is the 64 measured connections'.
+
+**Linux** (WSL2, kernel 6.6, on the Windows machine of section 5; 6
+workers on CPUs 0–5, the load generator on CPUs 6–11; the server built
+from gust's C with gcc 15.2 at `-O2`; 26 October 2026,
+`examples/api/results/2026-10-26-scale-linux.json`):
+
+| idle connections | backend | req/s (range) | p50 µs | p99 µs | p99.9 µs | server CPU µs/request | peak RSS MB |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 0 | epoll | 440,983 (420,954–450,847) | 118 | 507 | 1,250 | 9.2 | 3.4 |
+| 0 | poll | 465,849 (456,835–474,746) | 111 | 497 | 1,343 | 9.7 | 3.4 |
+| 1,000 | epoll | 447,761 (444,196–465,870) | 118 | 488 | 1,127 | 9.2 | 3.6 |
+| 1,000 | poll | 389,119 (377,513–405,442) | 133 | 546 | 1,152 | 14.4 | 3.6 |
+| 10,000 | epoll | 420,719 (412,921–447,834) | 122 | 543 | 1,345 | 10.0 | 5.7 |
+| 10,000 | poll | 50,590 (49,035–56,563) | 1,241 | 2,292 | 3,649 | 121.3 | 5.6 |
+| 50,000 | epoll | 381,545 (364,459–388,938) | 140 | 574 | 1,119 | 12.4 | 13.5 |
+| 50,000 | poll | 13,288 (12,551–13,469) | 4,691 | 8,606 | 15,425 | 1,309.4 | 14.8 |
+
+**Windows** (11 Pro, the machine of section 5; the server on CPUs 0–7 with
+its default workers, the load generator on 8–15; `gust build --cc clang`,
+clang 22.1.8; the same day,
+`examples/api/results/2026-10-26-scale-windows.json`). 12,000 is the top:
+loopback clients there share Windows' 16,384 ephemeral ports, and no
+system setting was changed to raise that.
+
+| idle connections | backend | req/s (range) | p50 µs | p99 µs | p99.9 µs | server CPU µs/request | peak RSS MB |
+|---:|---|---:|---:|---:|---:|---:|---:|
+| 0 | AFD | 160,194 (143,333–172,939) | 315 | 2,352 | 5,307 | 36.1 | 6.0 |
+| 0 | WSAPoll | 160,920 (159,589–179,706) | 288 | 2,449 | 5,319 | 36.1 | 6.1 |
+| 1,000 | AFD | 156,687 (140,801–169,318) | 316 | 2,406 | 4,957 | 37.3 | 6.8 |
+| 1,000 | WSAPoll | 144,173 (125,033–150,908) | 346 | 2,161 | 4,496 | 44.7 | 7.9 |
+| 5,000 | AFD | 157,021 (153,450–159,663) | 315 | 2,345 | 4,821 | 38.5 | 10.4 |
+| 5,000 | WSAPoll | 50,334 (45,314–54,708) | 1,111 | 3,616 | 6,028 | 157.6 | 13.5 |
+| 10,000 | AFD | 150,405 (146,821–166,980) | 328 | 2,344 | 4,700 | 40.3 | 13.8 |
+| 10,000 | WSAPoll | 19,295 (17,744–20,979) | 2,986 | 7,748 | 13,052 | 512.1 | 18.7 |
+| 12,000 | AFD | 134,054 (132,307–150,182) | 325 | 2,846 | 5,768 | 41.3 | 14.9 |
+| 12,000 | WSAPoll | 13,602 (12,764–14,007) | 4,190 | 10,949 | 24,841 | 885.3 | 20.7 |
+
+Other programs used 6–50% of the machine's CPU in the second before a run
+(nothing was closed for these runs), which is most of the spread of the
+ranges.
+
+What the runs show:
+
+- **The wait no longer costs what is open.** With epoll, 50,000 idle
+  connections cost the measured load 13% of its throughput (441,000 to
+  382,000 requests a second) and p99 stays under 0.6 ms; with `poll` the
+  same load falls to 13,300 a second, 29 times less, every wait scanning
+  about 8,300 sockets per worker, and the server spends 1.3 ms of CPU per
+  request. At 10,000 the difference is 8.3 times.
+  On Windows, AFD keeps 94% of the throughput at 10,000 idle connections (160,000 to 150,000 a second, p99 unchanged at 2.3 ms) where WSAPoll keeps 12%, 7.8 times less; at 12,000, 134,000 against 13,600.
+- **Memory per idle connection** in the server is about 0.2 KB on Linux
+  (13.5 MB peak at 50,000 against 3.4 MB at none): the loop's record and
+  the poller's entries; on Windows about 0.85 KB of private memory, the
+  AFD poll's state per socket included, against 1.4 KB with WSAPoll. The kernel's socket buffers are not in that and
+  are most of what an idle connection costs.
+- **With no idle connections `poll` is ahead on Linux**, by 5% (466,000
+  against 441,000; the ranges do not overlap): over a dozen sockets per
+  worker its scan is cheap, and epoll's bookkeeping is not. On Windows the
+  two are level there (160,194 against 160,920, ranges overlapping). A hybrid that
+  waits with `poll` below some count was not built; nothing here measures
+  where the two cross but that it is below 1,000.
+- **Nothing refused, nothing failed**: no request errors and no idle
+  connection's ping failed in any run; every connection was accepted.
+- Criterion (b) of section 7 asked for 1,000 active connections; these
+  runs have 64 active, the load of section 5, so that the idle ones are
+  the only change. The share of the server's CPU in the wait was not
+  profiled; CPU per request, the same work otherwise, says it instead.
 
 ### Before and after
 
@@ -601,11 +714,19 @@ Ranked by measured impact against effort; each names its evidence. The
    scaling run of the pool at 1,000, 10,000 and 50,000 mostly idle
    connections with 1,000 active, reporting throughput, p99 and p99.9,
    memory per connection and the share of server CPU in `poll`/`WSAPoll`
-   from a profiler; (c) epoll, kqueue or Windows' AFD poll added behind
-   `wait` and `want` only where (b) shows the wait taking more than a
-   fifth of the server's CPU at 10,000 connections, the same tests
-   passing with it, and section 6's scenarios no slower beyond their
-   run-to-run range.
+   from a profiler **(met with two differences, section 6: 64 active
+   connections, the load of section 5, so that the idle ones are the only
+   change; and the wait's cost read from the server's CPU per request, 13
+   times higher with `poll` at 10,000 on Linux, not from a profiler; on
+   Windows to 12,000, loopback's port limit there)**; (c) epoll, kqueue or
+   Windows' AFD poll added behind `wait` and `want` only where (b) shows
+   the wait taking more than a fifth of the server's CPU at 10,000
+   connections, the same tests passing with it, and section 6's scenarios
+   no slower beyond their run-to-run range **(met: all three added, the
+   `net` fixtures passing with them and with `GUST_NET_POLL=1`; at no idle
+   connections AFD is level with WSAPoll, and epoll 5% behind `poll` on
+   Linux, outside its range; kqueue is built and tested only by CI's
+   macOS job, which has not run it yet)**.
 2. **Cancellation the runtime owns**: a stop token that `qget`,
    `thread_wait` and the `net` waits return on, and a deadline per request
    a handler can see (Go's `context`, Zig 0.16's `cancel`). Today a stop
@@ -658,8 +779,8 @@ Ranked by measured impact against effort; each names its evidence. The
   and Linux in WSL2 (kernel 6.6, gcc 15.2, not native Linux), where the
   C gust wrote for the fixtures and both examples was built with the
   sanitizers and run, and the vendored TinyCC was built to reproduce and
-  check the JIT fault. Nothing was benchmarked on Linux or macOS, whose
-  schedulers and loopback paths are not Windows'.
+  check the JIT fault. The scale runs of section 6 are the only Linux
+  benchmark, in WSL2, not native Linux; nothing was benchmarked on macOS.
 - **One machine, loopback.** A network between client and server adds
   latency that hides some of these differences.
 - **Gust's allocation count is established from the generated C, not
@@ -676,7 +797,8 @@ Ranked by measured impact against effort; each names its evidence. The
 - **Untested paths.** The HTTP 503s for `max_conns` and for a worker out
   of output memory are not reached by `test_api.py` (the loop's busy reply
   and its parking are, in `net_serve.goose`); nothing exercises IPv6
-  (unsupported) or a platform poller other than `poll` and `WSAPoll`.
+  (unsupported); the kqueue backend (macOS) has not run at all until CI's
+  macOS job runs it, and has never been under load.
 - **Out of file descriptors.** On Linux and macOS the runtime holds one
   descriptor in reserve: an accept refused for want of descriptors spends
   it to take the waiting connection off the queue and drop it, so its
@@ -690,7 +812,7 @@ Ranked by measured impact against effort; each names its evidence. The
   listener rests the same way; that path is not tested.
 - **Not production-ready.** The module is new: its tests pass on three
   platforms in CI and under the sanitizers, but it has no TLS, no IPv6,
-  no scale testing past a few hundred connections, has served no traffic
-  but these tests' and benchmarks', and was measured on one Windows
-  machine only; the comparisons with Go and Rust say how these programs
+  has been run at scale only on loopback (50,000 idle connections in WSL2,
+  12,000 on Windows), has served no traffic but these tests' and
+  benchmarks', and was measured on one machine only; the comparisons with Go and Rust say how these programs
   did on these workloads, not that Gust is faster or as safe in general.

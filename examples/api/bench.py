@@ -55,22 +55,30 @@ def free_port():
 class Server:
     def __init__(self, kind, extra=()):
         self.kind = kind
-        self.port = free_port()
         exe = EXES[kind] if os.path.isabs(EXES[kind]) else os.path.join(OUT, EXES[kind] + EXE)
         env = dict(os.environ, GOMAXPROCS="8")
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
-        self.proc = subprocess.Popen([exe, str(self.port), *SERVER_ARGS.get(kind, ()), *extra],
-                                     stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env, creationflags=flags)
-        self.ps = psutil.Process(self.proc.pid)
-        self.ps.cpu_affinity(SERVER_CPUS)
-        deadline = time.time() + 10
-        while time.time() < deadline:
-            try:
-                socket.create_connection(("127.0.0.1", self.port), timeout=0.2).close()
-                return
-            except OSError:
-                time.sleep(0.05)
-        raise RuntimeError(f"{kind} server did not start")
+        # A port picked free can be taken again before the server binds it:
+        # after a run with thousands of connections, their closed client
+        # ends hold ephemeral ports for a while. So a few tries.
+        said = []
+        for attempt in range(5):
+            self.port = free_port()
+            self.proc = subprocess.Popen([exe, str(self.port), *SERVER_ARGS.get(kind, ()), *extra],
+                                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env,
+                                         creationflags=flags)
+            self.ps = psutil.Process(self.proc.pid)
+            self.ps.cpu_affinity(SERVER_CPUS)
+            deadline = time.time() + 10
+            while time.time() < deadline and self.proc.poll() is None:
+                try:
+                    socket.create_connection(("127.0.0.1", self.port), timeout=0.2).close()
+                    return
+                except OSError:
+                    time.sleep(0.05)
+            self.proc.kill()
+            said.append(self.proc.communicate()[1].decode(errors="replace")[-200:])
+        raise RuntimeError(f"{kind} server did not start: {said}")
 
     def memory(self):
         m = self.ps.memory_info()

@@ -16,6 +16,7 @@ the language and the library can be compared apart.
 | `test_api.py` | the behaviour tests, run against any of the servers |
 | `bench.py`, `tables.py` | the benchmark and its tables |
 | `memory_profile.py` | reserved, committed and resident memory per idle connection, at several counts |
+| `scale.py` | the pool beside thousands of idle connections, with the platform's readiness backend and with `poll`/`WSAPoll` |
 | `switches.py`, `loadgen_check.py`, `contention.py` | context switches per request; whether the load generator is the bottleneck; tails under CPU contention from another process |
 | `results/` | raw results of the runs `docs/gust/backend_api.md` reports |
 

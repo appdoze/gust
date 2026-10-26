@@ -18,6 +18,12 @@
 // the cost of accepting and setting up a connection, for clients that do
 // not keep theirs.
 //
+// With -idle N, N more connections are opened first and kept open beside
+// the measured ones, each sending a health request every -idle-every
+// (spread over it), as idle keep-alive clients do; past 10,000 they come
+// from 127.0.0.2 onwards, so that one source address's ephemeral ports do
+// not run out. Their requests are not measured.
+//
 // Prints one JSON object: requests, rps, latency percentiles in
 // microseconds, and errors.
 package main
@@ -179,6 +185,65 @@ type result struct {
 	// pauses would add to every server's latencies alike.
 	OwnGCs       uint32  `json:"loadgen_gcs"`
 	OwnGCPauseMs float64 `json:"loadgen_gc_pause_ms"`
+	// With -idle: how many idle connections were open when the measured
+	// window began, and how many of their pings failed.
+	Idle       int   `json:"idle_connections,omitempty"`
+	IdleErrors int64 `json:"idle_errors,omitempty"`
+}
+
+// Opens n idle keep-alive connections that each send a health request every
+// period, until stop; returns how many opened. Past 10,000 they dial from
+// 127.0.0.2, .3, ... so that no source address runs out of ports.
+func openIdle(addr string, n int, period time.Duration, stop *atomic.Bool, errs *atomic.Int64,
+	wg *sync.WaitGroup) int {
+	opened := 0
+	req := []byte("GET /health HTTP/1.1\r\nHost: api\r\n\r\n")
+	for i := 0; i < n; i++ {
+		d := net.Dialer{Timeout: 5 * time.Second, Control: idleControl}
+		if i >= 10000 {
+			src := 2 + (i-10000)/10000
+			d.LocalAddr = &net.TCPAddr{IP: net.IPv4(127, 0, 0, byte(src))}
+		}
+		conn, err := d.Dial("tcp", addr)
+		if err != nil {
+			errs.Add(1)
+			continue
+		}
+		opened++
+		wg.Add(1)
+		go func(i int, conn net.Conn) {
+			defer wg.Done()
+			defer func() {
+				// A reset, not a close: a close would leave the client's end
+				// in TIME_WAIT, holding for minutes one of the 16,384
+				// ephemeral ports Windows has, and the next run could not
+				// connect.
+				if tc, ok := conn.(*net.TCPConn); ok {
+					tc.SetLinger(0)
+				}
+				conn.Close()
+			}()
+			br := bufio.NewReaderSize(conn, 4096)
+			// Spread over the period, so that the pings do not all land at once.
+			next := time.Now().Add(time.Duration(int64(period) * int64(i%997) / 997))
+			for !stop.Load() {
+				if wait := time.Until(next); wait > 0 {
+					time.Sleep(min(wait, 200*time.Millisecond))
+					continue
+				}
+				next = next.Add(period)
+				if _, err := conn.Write(req); err != nil {
+					errs.Add(1)
+					return
+				}
+				if _, err := readResponse(br); err != nil {
+					errs.Add(1)
+					return
+				}
+			}
+		}(i, conn)
+	}
+	return opened
 }
 
 func main() {
@@ -189,8 +254,17 @@ func main() {
 	rate := flag.Int("rate", 0, "requests per second in all (0: closed loop)")
 	mixName := flag.String("mix", "mixed", "health, item, order, mixed, large or stream")
 	churn := flag.Bool("churn", false, "a new connection for every request")
+	idle := flag.Int("idle", 0, "idle keep-alive connections held open beside the measured ones")
+	idleEvery := flag.Duration("idle-every", 2*time.Second, "how often each idle connection pings")
 	flag.Parse()
 	rot := mix(*mixName)
+	var idleStop atomic.Bool
+	var idleErrs atomic.Int64
+	var idleWg sync.WaitGroup
+	idleOpen := 0
+	if *idle > 0 {
+		idleOpen = openIdle(*addr, *idle, *idleEvery, &idleStop, &idleErrs, &idleWg)
+	}
 
 	var recording, stopping atomic.Bool
 	var errs, mismatches, total atomic.Int64
@@ -321,6 +395,11 @@ func main() {
 	}
 	if e, ok := firstErr.Load().(string); ok {
 		res.FirstError = e
+	}
+	if *idle > 0 {
+		idleStop.Store(true)
+		idleWg.Wait()
+		res.Idle, res.IdleErrors = idleOpen, idleErrs.Load()
 	}
 	out, _ := json.Marshal(res)
 	fmt.Println(string(out))

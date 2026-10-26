@@ -162,8 +162,10 @@ git log upstream/master..main
   event-loop workers or a thread per connection, with responses built
   whole up to 1 MB and streamed (chunked) past that; its Go twins
   (`go/server` on net/http, `go/rawserver` with the same minimal HTTP), a
-  load generator (`go/loadgen`), behaviour tests (`test_api.py`), the
-  benchmark and its measurement scripts, and raw results; see
+  load generator (`go/loadgen`, with idle keep-alive connections beside
+  the measured ones), behaviour tests (`test_api.py`), the benchmark and
+  its measurement scripts (`scale.py` for idle connections), and raw
+  results; see
   `docs/gust/backend_api.md`. Its first version had its own sockets in C
   (`net.c`, `net.h`, `net.gust`, `api.build`), now removed.
 - `examples/echo/` (new): a TCP echo server on `net::serve`, with no HTTP,

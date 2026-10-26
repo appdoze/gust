@@ -207,9 +207,12 @@ the plain function.
   now stands on `net`, with responses of any size, and `examples/echo/` is a second,
   HTTP-free user of the loop. The backend roadmap there orders what follows; its next
   milestone is the network in hosted CI on three platforms (that criterion met, run
-  40341927278) and measured at tens of thousands of connections (not started), with
-  epoll / kqueue / Windows AFD only where that shows `poll` costing, then runtime-owned
-  cancellation. M:N workers, work stealing and freeze-then-share stay milestones of
+  40341927278) and measured at tens of thousands of connections, with epoll / kqueue /
+  Windows AFD only where that shows `poll` costing **(both met locally: with 10,000 idle
+  connections `poll` cut the measured load to a ninth on Linux and WSAPoll to an eighth
+  on Windows; with epoll, kqueue and AFD polling the pool keeps 87% of its throughput at
+  50,000 idle connections in WSL2 and 94% at 10,000 on Windows; kqueue awaits CI)**, then
+  runtime-owned cancellation. M:N workers, work stealing and freeze-then-share stay milestones of
   their own.
 
 **Exit:** an HTTP server and a callback-heavy GUI program written idiomatically; HTTP
