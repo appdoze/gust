@@ -522,10 +522,11 @@ package. gfx, audio, physics and ui all set it.
 The C compiler is chosen in this order: `--cc`, then `GOOSE_CC`, then
 `cc = "…";` in `GOOSE_HOME/config` (the sidecar format), then discovery:
 
-* **Windows**: `cl` if it is already on PATH (a developer prompt); else
-  `clang-cl` or `clang` from the Visual Studio LLVM directory or PATH (both
-  find the MSVC headers and the Windows SDK by themselves, with no
-  environment needed); else `cl` through vswhere and `vcvars64.bat`. That
+* **Windows**: `clang-cl` or `clang` from the Visual Studio LLVM directory,
+  PATH or `Program Files\LLVM` (both find the MSVC headers and the Windows
+  SDK by themselves, with no environment needed); else `cl` on PATH (a
+  developer prompt); else `cl` through vswhere and `vcvars64.bat`. (Gust:
+  clang before `cl` on PATH; Goose takes `cl` first.) That
   environment is imported the way `toolchain.py` does it, and cached in
   `GOOSE_HOME` keyed on the installation's path and version, since
   importing it takes a second or two.

@@ -400,12 +400,8 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
     if (name == "cl") name = "msvc";
     auto wanted = [&](const char *n) { return name.empty() || name == n; };
     #ifdef _WIN32
-        if (wanted("msvc")) {
-            if (auto cl = FindOnPath("cl", InheritedPath()); !cl.empty()) {
-                out = MsvcStyle("msvc", cl, "on PATH");
-                return true;
-            }
-        }
+        // Gust: the clang family first, also in a developer prompt with cl
+        // on PATH: MSVC's code is the slower one (compare/results.json).
         if (wanted("clang-cl")) {
             if (auto p = VsLlvmTool("clang-cl"); !p.empty()) {
                 out = MsvcStyle("clang-cl", p, "in Visual Studio");
@@ -435,6 +431,10 @@ inline bool FindToolchain(string request, Toolchain &out, string &why,
             }
         }
         if (wanted("msvc")) {
+            if (auto cl = FindOnPath("cl", InheritedPath()); !cl.empty()) {
+                out = MsvcStyle("msvc", cl, "on PATH");
+                return true;
+            }
             // cl through vcvars64.bat, which also brings link, the headers
             // and the libraries: the one path that takes a second to find.
             if (ImportVcvars(refresh)) {

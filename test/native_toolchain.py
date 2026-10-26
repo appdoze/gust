@@ -109,17 +109,13 @@ def check_cmake_response_files(exe, base):
 
 def check_default_prefers_clang(exe, base):
     """Gust: with no --cc, GOOSE_CC or configured compiler, discovery takes
-    clang wherever it is installed (on Windows, once cl is off PATH, as in a
-    plain shell). Returns why it was skipped, or None."""
+    clang wherever it is installed, on Windows also with cl on PATH (a
+    developer prompt). Returns why it was skipped, or None."""
     base = Path(base).resolve()
     base.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix="toolchain-default-", dir=base) as tmp:
         env = {k: v for k, v in os.environ.items() if k != "GOOSE_CC"}
         env["GOOSE_HOME"] = str(Path(tmp) / "home")
-        if tc.IS_WINDOWS:
-            env["PATH"] = os.pathsep.join(
-                d for d in env.get("PATH", "").split(os.pathsep)
-                if not d or not (Path(d) / "cl.exe").is_file())
         r = subprocess.run([str(exe), "toolchain", "--json"], env=env, capture_output=True, text=True,
                            errors="replace", timeout=600)
         try:
@@ -131,7 +127,10 @@ def check_default_prefers_clang(exe, base):
             return "no C compiler"
         if tc.IS_WINDOWS:
             if cc["name"] not in ("clang", "clang-cl"):
-                found = shutil.which("clang", path=env["PATH"]) or shutil.which("clang-cl", path=env["PATH"])
+                llvm = Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "LLVM" / "bin" / "clang.exe"
+                found = (shutil.which("clang", path=env.get("PATH")) or
+                         shutil.which("clang-cl", path=env.get("PATH")) or
+                         (str(llvm) if llvm.is_file() else None))
                 if found:
                     raise RuntimeError(f"default toolchain: {cc['desc']} chosen where clang is at {found}")
                 return "no clang"
