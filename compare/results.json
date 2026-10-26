@@ -1,0 +1,496 @@
+{
+  "machine": "11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz, 32 GB RAM; Windows-11-10.0.26200-SP0",
+  "runs": 5,
+  "repeats": 5,
+  "tools": {
+    "gust": "gust v2026.3-143-g671d700e-dirty (runtime bfb0885cb25b)",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "toolchain": "C compiler:   clang 22.1.8, found in Program Files\\LLVM\n              C:\\Program Files\\LLVM\\bin\\clang.exe\nC++ compiler: C:\\Program Files\\LLVM\\bin\\clang++.exe\nstyle:        cc\nid:           clang-22.1.8-1c2d96b4\ncmake:       C:\\Program Files\\CMake\\bin\\cmake.exe (4.2.0)\ngit:         C:\\Program Files\\Git\\mingw64\\bin\\git.exe (2.51.2.windows.1)\nbuilt in:     no packages\nGOOSE_HOME:   ~/.gust"
+  },
+  "generated": "2026-10-26 15:41",
+  "configs": [
+    {
+      "name": "gust/clang",
+      "lang": "gust",
+      "note": "gust build --cc clang: Gust -O2 to C, then clang -O2",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.16618339996784925,
+        "raytrace": 0.08344400010537356,
+        "interp": 0.5691183999879286,
+        "sort": 0.2296517000067979,
+        "astar": 0.22620910010300577,
+        "bintrees": 0.03561490005813539,
+        "hashmap": 0.1561483999248594,
+        "strings": 0.04876359994523227
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "build_seconds": 1.0061441999860108,
+      "binary_bytes": 242688,
+      "startup_seconds": 0.05454839998856187,
+      "startup_peak_bytes": 4034560,
+      "peak_bytes": {
+        "nbody": 4075520,
+        "raytrace": 4059136,
+        "interp": 4378624,
+        "sort": 16896000,
+        "astar": 10539008,
+        "bintrees": 7200768,
+        "hashmap": 9297920,
+        "strings": 5500928
+      }
+    },
+    {
+      "name": "gust/clang-checked",
+      "lang": "gust",
+      "note": "gust build --checked --cc clang: the same with overflow, range and tag checks",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.16439309995621443,
+        "raytrace": 0.08466509997379035,
+        "interp": 0.5316134999739006,
+        "sort": 0.2373158000409603,
+        "astar": 0.24403980001807213,
+        "bintrees": 0.03930150007363409,
+        "hashmap": 0.17103969992604107,
+        "strings": 0.04908070003148168
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "build_seconds": 1.0392789000179619,
+      "binary_bytes": 247296,
+      "startup_seconds": 0.0558471999829635,
+      "startup_peak_bytes": 4018176,
+      "peak_bytes": {
+        "nbody": 4067328,
+        "raytrace": 4055040,
+        "interp": 4382720,
+        "sort": 16896000,
+        "astar": 10539008,
+        "bintrees": 7200768,
+        "hashmap": 9297920,
+        "strings": 5492736
+      }
+    },
+    {
+      "name": "gust/msvc",
+      "lang": "gust",
+      "note": "gust build --cc msvc: Gust -O2 to C, then cl /O2",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.19238549994770437,
+        "raytrace": 0.11614320008084178,
+        "interp": 0.5179395999293774,
+        "sort": 0.20783209998626262,
+        "astar": 0.21143509994726628,
+        "bintrees": 0.03606169996783137,
+        "hashmap": 0.15686429990455508,
+        "strings": 0.06387780001387
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "build_seconds": 1.0168352000182495,
+      "binary_bytes": 187904,
+      "startup_seconds": 0.06851880007889122,
+      "startup_peak_bytes": 4009984,
+      "peak_bytes": {
+        "nbody": 4050944,
+        "raytrace": 4038656,
+        "interp": 4358144,
+        "sort": 16859136,
+        "astar": 10514432,
+        "bintrees": 7168000,
+        "hashmap": 9269248,
+        "strings": 5468160
+      }
+    },
+    {
+      "name": "gust/tcc",
+      "lang": "gust",
+      "note": "gust run: Gust to C compiled in-process by TinyCC (no build step)",
+      "status": "ok",
+      "seconds": {
+        "nbody": 1.8439364000223577,
+        "raytrace": 1.207075700047426,
+        "interp": 0.7266048999736086,
+        "sort": 1.0274355999426916,
+        "astar": 1.0380279999226332,
+        "bintrees": 0.13670429994817823,
+        "hashmap": 0.3831279999576509,
+        "strings": 0.14457460003904998
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "startup_seconds": 0.14576110010966659,
+      "startup_peak_bytes": 22061056,
+      "peak_bytes": {
+        "nbody": 22069248,
+        "raytrace": 22065152,
+        "interp": 22061056,
+        "sort": 28815360,
+        "astar": 22454272,
+        "bintrees": 22065152,
+        "hashmap": 22065152,
+        "strings": 22065152
+      }
+    },
+    {
+      "name": "rust/o3",
+      "lang": "rust",
+      "note": "rustc -C opt-level=3",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.1674294,
+        "raytrace": 0.0943294,
+        "interp": 0.5520251,
+        "sort": 0.2322698,
+        "astar": 0.2556033,
+        "bintrees": 0.6008209,
+        "hashmap": 0.3148637,
+        "strings": 0.1028381
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "build_seconds": 0.9823121000081301,
+      "binary_bytes": 199168,
+      "startup_seconds": 0.05910219997167587,
+      "startup_peak_bytes": 4542464,
+      "peak_bytes": {
+        "nbody": 4620288,
+        "raytrace": 4603904,
+        "interp": 5521408,
+        "sort": 23322624,
+        "astar": 10846208,
+        "bintrees": 12759040,
+        "hashmap": 8585216,
+        "strings": 7344128
+      }
+    },
+    {
+      "name": "rust/o3-lto",
+      "lang": "rust",
+      "note": "rustc -C opt-level=3 -C lto=fat -C codegen-units=1",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.1741325,
+        "raytrace": 0.0875548,
+        "interp": 0.5694889,
+        "sort": 0.2288873,
+        "astar": 0.2462412,
+        "bintrees": 0.5683307,
+        "hashmap": 0.2258412,
+        "strings": 0.0897112
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "build_seconds": 3.0512708000605926,
+      "binary_bytes": 188928,
+      "startup_seconds": 0.050323399947956204,
+      "startup_peak_bytes": 4521984,
+      "peak_bytes": {
+        "nbody": 4575232,
+        "raytrace": 4579328,
+        "interp": 5496832,
+        "sort": 23289856,
+        "astar": 10805248,
+        "bintrees": 12771328,
+        "hashmap": 8560640,
+        "strings": 7307264
+      }
+    },
+    {
+      "name": "lobster/libtcc",
+      "lang": "lobster",
+      "note": "lobster (default): C compiled in-process by libtcc",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.7439278999999996,
+        "raytrace": 0.6898150000000003,
+        "interp": 0.6168709000000003,
+        "sort": 0.7542941999999986,
+        "astar": 0.7141955999999983,
+        "bintrees": 0.2983645999999993,
+        "hashmap": 0.564832599999999,
+        "strings": 0.32825809999999933
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "startup_seconds": 0.09012309997342527,
+      "startup_peak_bytes": 12455936,
+      "peak_bytes": {
+        "nbody": 12562432,
+        "raytrace": 12611584,
+        "interp": 13127680,
+        "sort": 31473664,
+        "astar": 18919424,
+        "bintrees": 25157632,
+        "hashmap": 20148224,
+        "strings": 39800832
+      }
+    },
+    {
+      "name": "lobster/mir2",
+      "lang": "lobster",
+      "note": "lobster --mir 2: MIR optimising JIT",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.25041260000000004,
+        "raytrace": 0.2907416999999999,
+        "interp": 0.527641,
+        "sort": 0.3736404999999996,
+        "astar": 0.40477010000000035,
+        "bintrees": 0.27591300000000096,
+        "hashmap": 0.4093076,
+        "strings": 0.3164536999999985
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "startup_seconds": 0.1864452000008896,
+      "startup_peak_bytes": 33562624,
+      "peak_bytes": {
+        "nbody": 33464320,
+        "raytrace": 33669120,
+        "interp": 34545664,
+        "sort": 52965376,
+        "astar": 40050688,
+        "bintrees": 46292992,
+        "hashmap": 41672704,
+        "strings": 60825600
+      }
+    },
+    {
+      "name": "lobster/cpp-msvc",
+      "lang": "lobster",
+      "note": "lobster --cpp, then MSVC /O2 (the shipped project)",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.2178647,
+        "raytrace": 0.16117170000000014,
+        "interp": 0.6747924999999997,
+        "sort": 0.24089729999999943,
+        "astar": 0.2903266999999996,
+        "bintrees": 0.24341669999999915,
+        "hashmap": 0.3644116000000004,
+        "strings": 0.28576089999999965
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "interp": 34261.55440963025,
+        "sort": 3921154570766.0,
+        "astar": 20442634156.0,
+        "bintrees": 14985902.0,
+        "hashmap": 655421551704.0,
+        "strings": 143554830.0
+      },
+      "build_seconds": 54.87719410005957,
+      "binary_bytes": 7903232,
+      "startup_seconds": 0.17042800004128367,
+      "startup_peak_bytes": 11120640,
+      "peak_bytes": {
+        "nbody": 10371072,
+        "raytrace": 10350592,
+        "interp": 10719232,
+        "sort": 28962816,
+        "astar": 16470016,
+        "bintrees": 22736896,
+        "hashmap": 17616896,
+        "strings": 37249024
+      }
+    }
+  ],
+  "checksum_problems": [],
+  "source": {
+    "rust": {
+      "shared": {
+        "lines": 71,
+        "bytes": 1742
+      },
+      "nbody": {
+        "lines": 55,
+        "bytes": 1715
+      },
+      "raytrace": {
+        "lines": 121,
+        "bytes": 3797
+      },
+      "interp": {
+        "lines": 51,
+        "bytes": 1747
+      },
+      "sort": {
+        "lines": 56,
+        "bytes": 1746
+      },
+      "astar": {
+        "lines": 117,
+        "bytes": 3432
+      },
+      "bintrees": {
+        "lines": 32,
+        "bytes": 1132
+      },
+      "hashmap": {
+        "lines": 23,
+        "bytes": 810
+      },
+      "strings": {
+        "lines": 35,
+        "bytes": 1208
+      },
+      "driver": {
+        "lines": 38,
+        "bytes": 1222
+      }
+    },
+    "gust": {
+      "shared": {
+        "lines": 15,
+        "bytes": 852
+      },
+      "nbody": {
+        "lines": 46,
+        "bytes": 1484
+      },
+      "raytrace": {
+        "lines": 85,
+        "bytes": 3409
+      },
+      "interp": {
+        "lines": 48,
+        "bytes": 2061
+      },
+      "sort": {
+        "lines": 45,
+        "bytes": 1569
+      },
+      "astar": {
+        "lines": 101,
+        "bytes": 3082
+      },
+      "bintrees": {
+        "lines": 33,
+        "bytes": 1246
+      },
+      "hashmap": {
+        "lines": 20,
+        "bytes": 692
+      },
+      "strings": {
+        "lines": 31,
+        "bytes": 1018
+      },
+      "driver": {
+        "lines": 29,
+        "bytes": 1001
+      }
+    },
+    "lobster": {
+      "shared": {
+        "lines": 11,
+        "bytes": 506
+      },
+      "nbody": {
+        "lines": 42,
+        "bytes": 1603
+      },
+      "raytrace": {
+        "lines": 85,
+        "bytes": 3627
+      },
+      "interp": {
+        "lines": 52,
+        "bytes": 1704
+      },
+      "sort": {
+        "lines": 46,
+        "bytes": 1800
+      },
+      "astar": {
+        "lines": 90,
+        "bytes": 3456
+      },
+      "bintrees": {
+        "lines": 24,
+        "bytes": 885
+      },
+      "hashmap": {
+        "lines": 23,
+        "bytes": 917
+      },
+      "strings": {
+        "lines": 27,
+        "bytes": 968
+      },
+      "driver": {
+        "lines": 41,
+        "bytes": 1808
+      }
+    }
+  }
+}

@@ -1,0 +1,363 @@
+{
+  "p01_oob_read": {
+    "gust/release": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: index 10 out of bounds (length 5) (<repo>/compare/safety/gust/p01_oob_read.goose:6)"
+    },
+    "gust/checked": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: index 10 out of bounds (length 5) (<repo>/compare/safety/gust/p01_oob_read.goose:6)"
+    },
+    "gust/debug": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: index 10 out of bounds (length 5) (<repo>/compare/safety/gust/p01_oob_read.goose:6)"
+    },
+    "rust/release": {
+      "stage": "run",
+      "exit": 101,
+      "stdout": "",
+      "stderr": "thread 'main' (43392) panicked at <repo>\\compare\\safety\\rust\\p01_oob_read.rs:5:21:\nindex out of bounds: the len is 5 but the index is 10\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+    },
+    "rust/debug": {
+      "stage": "run",
+      "exit": 101,
+      "stdout": "",
+      "stderr": "thread 'main' (30132) panicked at <repo>\\compare\\safety\\rust\\p01_oob_read.rs:5:21:\nindex out of bounds: the len is 5 but the index is 10\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 1,
+      "output": "VM error (p01_oob_read.lobster): index 10 out of range 5 of: [1, 2, 3, 4, 5]"
+    }
+  },
+  "p02_dangling_ref": {
+    "gust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p02_dangling_ref.goose:4: error: returning a reference rooted in x, which dies with this function (\u00a79.2)"
+    },
+    "gust/checked": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p02_dangling_ref.goose:4: error: returning a reference rooted in x, which dies with this function (\u00a79.2)"
+    },
+    "gust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p02_dangling_ref.goose:4: error: returning a reference rooted in x, which dies with this function (\u00a79.2)"
+    },
+    "rust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0515]: cannot return reference to local variable `x`"
+    },
+    "rust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0515]: cannot return reference to local variable `x`"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 0,
+      "output": "5"
+    }
+  },
+  "p03_ref_after_grow": {
+    "gust/release": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "99",
+      "stderr": ""
+    },
+    "gust/checked": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "99",
+      "stderr": ""
+    },
+    "gust/debug": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "99",
+      "stderr": ""
+    },
+    "rust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0499]: cannot borrow `v` as mutable more than once at a time"
+    },
+    "rust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0499]: cannot borrow `v` as mutable more than once at a time"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 0,
+      "output": "99"
+    }
+  },
+  "p03b_ref_after_shrink": {
+    "gust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p03b_ref_after_shrink.goose:5: error: cannot pop v while r (bound at <repo>\\compare\\safety\\gust\\p03b_ref_after_shrink.goose:4) is still used: it may refer into v (\u00a75.2)"
+    },
+    "gust/checked": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p03b_ref_after_shrink.goose:5: error: cannot pop v while r (bound at <repo>\\compare\\safety\\gust\\p03b_ref_after_shrink.goose:4) is still used: it may refer into v (\u00a75.2)"
+    },
+    "gust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p03b_ref_after_shrink.goose:5: error: cannot pop v while r (bound at <repo>\\compare\\safety\\gust\\p03b_ref_after_shrink.goose:4) is still used: it may refer into v (\u00a75.2)"
+    }
+  },
+  "p04_null_deref": {
+    "gust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p04_null_deref.goose:5: error: optional value must be narrowed (if/guard/assert) before use"
+    },
+    "gust/checked": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p04_null_deref.goose:5: error: optional value must be narrowed (if/guard/assert) before use"
+    },
+    "gust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p04_null_deref.goose:5: error: optional value must be narrowed (if/guard/assert) before use"
+    },
+    "rust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0609]: no field `v` on type `Option<Box<Node>>`"
+    },
+    "rust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0609]: no field `v` on type `Option<Box<Node>>`"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 1,
+      "output": "p04_null_deref.lobster(6): error: dereferencing nillable type: `Node?`"
+    }
+  },
+  "p05_int_overflow": {
+    "gust/release": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "-9223372036854775808",
+      "stderr": ""
+    },
+    "gust/checked": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: integer overflow (debug): 9223372036854775807 + 1 at i64 (<repo>/compare/safety/gust/p05_int_overflow.goose:5)"
+    },
+    "gust/debug": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: integer overflow (debug): 9223372036854775807 + 1 at i64 (<repo>/compare/safety/gust/p05_int_overflow.goose:5)"
+    },
+    "rust/release": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "-9223372036854775808",
+      "stderr": ""
+    },
+    "rust/debug": {
+      "stage": "run",
+      "exit": 101,
+      "stdout": "",
+      "stderr": "thread 'main' (34464) panicked at <repo>\\compare\\safety\\rust\\p05_int_overflow.rs:4:18:\nattempt to add with overflow\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 0,
+      "output": "-9223372036854775808"
+    }
+  },
+  "p06_div_zero": {
+    "gust/release": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: division by zero (<repo>/compare/safety/gust/p06_div_zero.goose:5)"
+    },
+    "gust/checked": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: division by zero (<repo>/compare/safety/gust/p06_div_zero.goose:5)"
+    },
+    "gust/debug": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: division by zero (<repo>/compare/safety/gust/p06_div_zero.goose:5)"
+    },
+    "rust/release": {
+      "stage": "run",
+      "exit": 101,
+      "stdout": "",
+      "stderr": "thread 'main' (26924) panicked at <repo>\\compare\\safety\\rust\\p06_div_zero.rs:4:20:\nattempt to divide by zero\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+    },
+    "rust/debug": {
+      "stage": "run",
+      "exit": 101,
+      "stdout": "",
+      "stderr": "thread 'main' (17464) panicked at <repo>\\compare\\safety\\rust\\p06_div_zero.rs:4:20:\nattempt to divide by zero\nnote: run with `RUST_BACKTRACE=1` environment variable to display a backtrace"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 1,
+      "output": "VM error (p06_div_zero.lobster): division by zero"
+    }
+  },
+  "p07_data_race": {
+    "gust/release": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "main sees 1000000, worker saw 1000000",
+      "stderr": ""
+    },
+    "gust/checked": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "main sees 1000000, worker saw 1000000",
+      "stderr": ""
+    },
+    "gust/debug": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "main sees 1000000, worker saw 1000000",
+      "stderr": ""
+    },
+    "rust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0373]: closure may outlive the current function, but it borrows `count`, which is owned by the current function"
+    },
+    "rust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0373]: closure may outlive the current function, but it borrows `count`, which is owned by the current function"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 0,
+      "output": "main sees 1000000, worker saw 1000000"
+    }
+  },
+  "p08_unbounded_recursion": {
+    "gust/release": {
+      "stage": "run",
+      "exit": "timeout",
+      "stdout": "",
+      "stderr": ""
+    },
+    "gust/checked": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: native call stack overflow"
+    },
+    "gust/debug": {
+      "stage": "run",
+      "exit": 1,
+      "stdout": "",
+      "stderr": "goose runtime error: native call stack overflow"
+    },
+    "rust/release": {
+      "stage": "run",
+      "exit": 3221225725,
+      "stdout": "",
+      "stderr": "thread 'main' (12060) has overflowed its stack"
+    },
+    "rust/debug": {
+      "stage": "run",
+      "exit": 3221225725,
+      "stdout": "",
+      "stderr": "thread 'main' (35900) has overflowed its stack"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 3221225477,
+      "output": ""
+    }
+  },
+  "p09_use_after_free": {
+    "gust/release": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "old reference reads id 2 (slot reused: true)",
+      "stderr": ""
+    },
+    "gust/checked": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "old reference reads id 2 (slot reused: true)",
+      "stderr": ""
+    },
+    "gust/debug": {
+      "stage": "run",
+      "exit": 0,
+      "stdout": "old reference reads id 2 (slot reused: true)",
+      "stderr": ""
+    },
+    "rust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0382]: borrow of moved value: `v`"
+    },
+    "rust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0382]: borrow of moved value: `v`"
+    }
+  },
+  "p10_uninit_read": {
+    "gust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p10_uninit_read.goose:4: error: variable x may be used before it is assigned"
+    },
+    "gust/checked": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p10_uninit_read.goose:4: error: variable x may be used before it is assigned"
+    },
+    "gust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "<repo>\\compare\\safety\\gust\\p10_uninit_read.goose:4: error: variable x may be used before it is assigned"
+    },
+    "rust/release": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0381]: used binding `x` isn't initialized"
+    },
+    "rust/debug": {
+      "stage": "compile",
+      "exit": 1,
+      "message": "error[E0381]: used binding `x` isn't initialized"
+    },
+    "lobster/default": {
+      "stage": "compile+run",
+      "exit": 1,
+      "output": "p10_uninit_read.lobster(2): error: missing declaration for x"
+    }
+  }
+}

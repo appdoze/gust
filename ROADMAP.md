@@ -14,7 +14,7 @@ marked done only with the test or run that shows it.
 checked by three suites: Goose's own tests (`python test/run_tests.py`, 3,551 files), the
 cross-language benchmark harness (`python compare/run_bench.py`: checksums must stay identical
 and nothing may get slower) and the safety probes (`python compare/safety/run_safety.py`).
-Both move into `compare/` in Phase 0.
+Both are in `compare/` since Phase 0, and CI runs both with `--check`.
 
 ## Overview
 
@@ -42,18 +42,24 @@ Both move into `compare/` in Phase 0.
   notices to changed files, credit Goose in the README, rename the binary. **(done; the docs
   keep Goose's name until the hard fork)**
 - Move the cross-language benchmarks and safety probes into `compare/` (Lobster's suite is
-  Apache-2.0 too). **(not started: there is no `compare/` in the repository yet)**
+  Apache-2.0 too). **(done: `compare/`, with its provenance in `compare/README.md`; both
+  harnesses run on Windows, Linux and macOS, and `--check` makes each a pass or fail: every
+  Gust and Rust build agrees on every checksum, and every Gust probe does what
+  `compare/safety/expected.json` says in release, `--checked` and `--debug`)**
 - Commit the clang-discovery fix as the first change. **(done)**
 - CI on Windows, Linux and macOS running Goose's tests plus `compare/` and `compare/safety/`.
   **(partly done: Goose's suite, the samples under `--checked` and a Linux ASan and UBSan
   profile run on ubuntu-latest, macos-latest and windows-latest; green at commit `420714c5`,
-  run 40341927278, which includes the `net` tests and the network examples; `compare/` is
-  not part of it)**
+  run 40341927278, which includes the `net` tests and the network examples; `compare/`'s
+  checks are added to it with the commit that adds `compare/`, not yet run there)**
 - Record today's numbers (`compare/results.json`) as the baseline every later phase is
-  measured against. **(not done)**
+  measured against. **(done: `compare/results.json`, 26 October 2026, Windows 11 on an
+  i7-11700F with clang 22.1.8, MSVC 19.50, rustc 1.96.0 and Lobster, nine configurations, 5
+  launches each, best of 5 repeats, every checksum agreeing; other programs kept the
+  machine 18-35% busy. `compare/safety/results.json` beside it)**
 
 **Exit:** CI green on three platforms **(met for the suite, last at `420714c5`, run
-40341927278; to be met again for each pushed milestone)**; baseline stored **(not met)**.
+40341927278; to be met again for each pushed milestone)**; baseline stored **(met)**.
 
 ## Phase 1: Quick wins (weeks 2–4)
 
@@ -91,7 +97,8 @@ Both move into `compare/` in Phase 0.
   requests while the fork is still close to Goose.
 
 **Exit:** a test shows `--checked` catching overflow in an optimized build **(done)**; no
-benchmark regresses **(not measured: no `compare/` baseline yet)**; generation checks for
+benchmark regresses **(measurable from now: `compare/results.json` is the baseline)**;
+generation checks for
 pools land **(opt-in handles landed; checked plain references did not)**. The `simd fn`
 criterion moves to Phase 5.
 
@@ -106,8 +113,14 @@ criterion moves to Phase 5.
 - Bundle clang (or an LLVM toolchain) with releases, so users without it don't get MSVC's
   17–27% slower code.
 
-**Exit:** goose/clang strictly faster than Rust LTO on all 8 benchmarks (nbody and raytrace
-are ties today); `interp` at or below Lobster's 0.419 s.
+**Exit:** goose/clang strictly faster than Rust LTO on all 8 benchmarks; `interp` at or below
+Lobster's 0.419 s. **(Baseline, `compare/results.json`: gust/clang 0.166 against 0.174 s on
+nbody, 0.083 against 0.088 on raytrace, 0.226 against 0.246 on astar, and 1.4-16x faster on
+bintrees, hashmap and strings; level on interp, 0.569 against 0.569, and sort, 0.230 against
+0.229, so the criterion is not met on those two. Measured flags for clang on the same C:
+`-O3` alone changed nothing; ThinLTO across the program and the runtime gained 11% on sort,
+6% on hashmap and 4% on astar in an interleaved run, through no runtime call in the hot
+loops, so most likely layout, and needs lld; not made the default.)**
 
 ## Phase 3: Library access (months 3–5)
 

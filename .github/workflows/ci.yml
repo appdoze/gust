@@ -84,6 +84,17 @@ jobs:
       - name: Samples, checked
         run: python samples/run_samples.py --exe build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }} --checked --no-jit --cc native
 
+      # Gust: the cross-language suite (compare/). Every Gust build of the
+      # benchmarks and Rust's agree on every checksum, and every safety probe
+      # does what compare/safety/expected.json says. Timings from CI mean
+      # nothing; compare/results.json is a measured run on one machine.
+      - name: Compare (checksums and safety probes)
+        env:
+          GUST: build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }}
+        run: |
+          python compare/run_bench.py --check
+          python compare/safety/run_safety.py --check
+
       - uses: actions/setup-node@v7
         with:
           node-version: '22'

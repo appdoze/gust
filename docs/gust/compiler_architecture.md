@@ -179,3 +179,21 @@ What these say for the choice:
 These are one machine's numbers, on one program of about 550 lines; a
 program ten times the size has not been measured, and C compile time grows
 with the C, which grows with specializations.
+
+**Which compiler, and which flags, for the generated C** (26 October 2026,
+same machine; `compare/results.json` for the first two rows, an
+interleaved run of 10 launches for the flag variants, with other programs
+keeping the machine 24-41% busy):
+
+- clang against MSVC on the eight benchmarks: clang is faster on nbody,
+  raytrace and strings by 17-39%; on interp, sort and astar the baseline
+  had MSVC ahead by 7-10%, but in the interleaved run the two were level on
+  interp and within 4% on sort and astar. clang is the default.
+- clang `-O3` against `-O2`: no difference beyond noise on any benchmark.
+- ThinLTO over the program and the runtime object (`-O3 -flto=thin`,
+  linked by lld): 11% faster on sort, 6% on hashmap, 4% on astar, the rest
+  level. No runtime function is called in those loops, so the gain is not
+  cross-module inlining; most likely code layout, which moves with any
+  change. It needs lld beside clang, which not every Linux clang has. Not
+  the default; a candidate to measure again with `restrict` and range
+  facts in the C.

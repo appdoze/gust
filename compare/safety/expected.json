@@ -1,0 +1,207 @@
+{
+  "p01_oob_read": {
+    "release": {
+      "outcome": "abort",
+      "contains": [
+        "index 10 out of bounds"
+      ]
+    },
+    "checked": {
+      "outcome": "abort",
+      "contains": [
+        "index 10 out of bounds"
+      ]
+    },
+    "debug": {
+      "outcome": "abort",
+      "contains": [
+        "index 10 out of bounds"
+      ]
+    }
+  },
+  "p02_dangling_ref": {
+    "release": {
+      "outcome": "compile_error"
+    },
+    "checked": {
+      "outcome": "compile_error"
+    },
+    "debug": {
+      "outcome": "compile_error"
+    }
+  },
+  "p03_ref_after_grow": {
+    "note": "Defined: a growing array keeps its elements where they are, so the reference stays valid.",
+    "release": {
+      "outcome": "ok",
+      "contains": [
+        "99"
+      ]
+    },
+    "checked": {
+      "outcome": "ok",
+      "contains": [
+        "99"
+      ]
+    },
+    "debug": {
+      "outcome": "ok",
+      "contains": [
+        "99"
+      ]
+    }
+  },
+  "p03b_ref_after_shrink": {
+    "release": {
+      "outcome": "compile_error",
+      "contains": [
+        "cannot pop v while r"
+      ]
+    },
+    "checked": {
+      "outcome": "compile_error",
+      "contains": [
+        "cannot pop v while r"
+      ]
+    },
+    "debug": {
+      "outcome": "compile_error",
+      "contains": [
+        "cannot pop v while r"
+      ]
+    }
+  },
+  "p04_null_deref": {
+    "release": {
+      "outcome": "compile_error"
+    },
+    "checked": {
+      "outcome": "compile_error"
+    },
+    "debug": {
+      "outcome": "compile_error"
+    }
+  },
+  "p05_int_overflow": {
+    "note": "Release wraps, as C and Rust release builds do; --checked and --debug abort.",
+    "release": {
+      "outcome": "ok",
+      "contains": [
+        "-9223372036854775808"
+      ]
+    },
+    "checked": {
+      "outcome": "abort",
+      "contains": [
+        "integer overflow"
+      ]
+    },
+    "debug": {
+      "outcome": "abort",
+      "contains": [
+        "integer overflow"
+      ]
+    }
+  },
+  "p06_div_zero": {
+    "release": {
+      "outcome": "abort",
+      "contains": [
+        "division by zero"
+      ]
+    },
+    "checked": {
+      "outcome": "abort",
+      "contains": [
+        "division by zero"
+      ]
+    },
+    "debug": {
+      "outcome": "abort",
+      "contains": [
+        "division by zero"
+      ]
+    }
+  },
+  "p07_data_race": {
+    "note": "No race to have: each thread program has its own globals.",
+    "release": {
+      "outcome": "ok",
+      "contains": [
+        "main sees 1000000, worker saw 1000000"
+      ]
+    },
+    "checked": {
+      "outcome": "ok",
+      "contains": [
+        "main sees 1000000, worker saw 1000000"
+      ]
+    },
+    "debug": {
+      "outcome": "ok",
+      "contains": [
+        "main sees 1000000, worker saw 1000000"
+      ]
+    }
+  },
+  "p08_unbounded_recursion": {
+    "note": "Release may never overflow: clang turns f(n + 1) + 1 into a loop with an accumulator, which then runs for about 2^63 steps, well defined but endless; MSVC's build overflows the native stack and aborts. --checked and --debug keep the recursion and abort.",
+    "timeout": 10,
+    "release": {
+      "outcome": [
+        "abort",
+        "timeout"
+      ],
+      "contains": [
+        "native call stack overflow"
+      ]
+    },
+    "checked": {
+      "outcome": "abort",
+      "contains": [
+        "native call stack overflow"
+      ]
+    },
+    "debug": {
+      "outcome": "abort",
+      "contains": [
+        "native call stack overflow"
+      ]
+    }
+  },
+  "p09_use_after_free": {
+    "note": "Not caught: a reference to a freed and reused slot of a reusable pool reads the slot's new value (a value of the right type, never memory corruption; spec 5.4). slots handles (stdlib/slots.goose) catch it for handles, not for references.",
+    "release": {
+      "outcome": "ok",
+      "contains": [
+        "old reference reads id 2",
+        "slot reused: true"
+      ]
+    },
+    "checked": {
+      "outcome": "ok",
+      "contains": [
+        "old reference reads id 2",
+        "slot reused: true"
+      ]
+    },
+    "debug": {
+      "outcome": "ok",
+      "contains": [
+        "old reference reads id 2",
+        "slot reused: true"
+      ]
+    }
+  },
+  "p10_uninit_read": {
+    "release": {
+      "outcome": "compile_error"
+    },
+    "checked": {
+      "outcome": "compile_error"
+    },
+    "debug": {
+      "outcome": "compile_error"
+    }
+  }
+}

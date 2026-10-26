@@ -134,6 +134,12 @@ git log upstream/master..main
 
 ## Scripts and tests
 
+- `compare/` (new): the cross-language benchmarks (Gust, Rust, Lobster;
+  Lobster's suite and code under its Apache-2.0 licence, provenance in
+  `compare/README.md`) and safety probes, with portable harnesses whose
+  `--check` mode `.github/workflows/ci.yml` runs on every platform, the
+  probes' expected outcomes (`compare/safety/expected.json`), and a
+  measured baseline (`compare/results.json`).
 - `test/api_example.py` (new), `test/echo_example.py` (new),
   `test/run_tests.py`, `docs/testing.md`: the suite builds the API and echo
   examples normally and with `--checked` and runs their behaviour tests over
