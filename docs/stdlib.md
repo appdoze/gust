@@ -1,3 +1,4 @@
+<!-- Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md. -->
 # The Goose standard library
 
 <details>
@@ -6,6 +7,7 @@
 - [std](#std)
 - [exception](#exception)
 - [dictionary](#dictionary)
+- [slots](#slots)
 - [vec](#vec)
 - [math](#math)
 - [os](#os)
@@ -22,8 +24,8 @@
 
 </details>
 
-The standard library has sixteen modules under `stdlib/`: `std`,
-`dictionary`, `vec`, `math`, `os`, `ffi`, `binary`, `base64`, `csv`, `json`,
+The standard library has seventeen modules under `stdlib/`: `std`,
+`dictionary`, `slots`, `vec`, `math`, `os`, `ffi`, `binary`, `base64`, `csv`, `json`,
 `regex`, `audio`, `gfx`, `physics`, `ui`, and `exception`. Import each module by name,
 for example `import std;`. The compiler locates the library in its source
 tree; use `--stdlib <dir>` or `GOOSE_STDLIB` to select another location.
@@ -103,7 +105,7 @@ The library uses these conventions:
   but its temporary array cannot hold copies of self-relative links (spec
   §3.9).
 * The `std`, `dictionary`, `vec`, `math`, and `os` names are global;
-  `ffi`, `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`,
+  `slots`, `ffi`, `binary`, `base64`, `csv`, `json`, `regex`, `audio`, `gfx`,
   `physics`, `ui` and `exception` use their own namespaces. A local named
   `fill` or `count` shadows the global function of that name, so a call to
   that function is an error. A global variable of such a name does not
@@ -531,6 +533,43 @@ owner.insert(7, cells[4]);       // cells[3] is unchanged, and c still refers to
 if c { c.v += 1; }
 ```
 
+## slots
+
+*Gust.* Generation-checked handles over a `reusable` pool (spec §5.4). A
+reusable pool hands a freed slot to the next allocation, so an index or a
+reference kept from before reads the slot's new owner: a value of the right
+type, but the wrong one (spec §9.4). A `slots::Handle` names one allocation
+instead, by its index and a serial number no other allocation has, and
+using it after that allocation is released aborts, in every build:
+
+```goose
+import slots;
+
+struct Item { id: i64, count: i64 = 0 }
+
+fn main() {
+    reusable var items: slots::Slot<Item>[>..] = [];
+    let h = slots::alloc(items, Item { id: 1, .. });
+    slots::get(items, h).count += 1;
+    slots::release(items, h);
+    // slots::get(items, h) would abort here: the handle is stale.
+}
+```
+
+| function | does |
+|---|---|
+| `alloc(pool, v) -> Handle` | a slot holding `v`, a freed one when the pool has any |
+| `get(pool, h) -> T&` | the value `h` names; aborts when `h` has been released |
+| `valid(pool, h) -> bool` | whether `h` names an allocation the pool still holds |
+| `release(pool, h)` | gives the slot back; aborts when `h` has been released already |
+| `handle_at(pool, i) -> Handle` | the handle of the allocation at index `i`, or the default (invalid) handle for a free slot |
+
+The pool's element type is `slots::Slot<T>`: the value and the serial
+number of the allocation holding it, 0 while free. What is checked is the
+handle: a reference that `get` returns is an ordinary reference into the
+pool, not checked after a release, so code holds handles rather than
+references across anything that may release. Serial numbers count per
+thread program, as pools never cross threads.
 ## vec
 
 ```goose

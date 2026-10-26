@@ -1,0 +1,4 @@
+a 1 5
+reused true, a valid false, c valid true, b 2
+default handle valid false
+live ids sum 5

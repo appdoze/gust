@@ -66,6 +66,13 @@ git log upstream/master..main
   defines such a function in the generated file itself (`--include`) takes
   `const T *` (`test/extern_types.py` follows).
 
+## Standard library
+
+- `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
+  over a `reusable` pool: a handle names one allocation by index and serial
+  number, and using it after the allocation is released, or releasing it
+  twice, aborts in every build. `test/runtime/slots_*.goose` (new).
+
 ## Runtime
 
 - `src/runtime/runtime_impl.h` (and `src/runtime_inline.h`, regenerated):

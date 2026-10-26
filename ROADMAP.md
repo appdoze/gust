@@ -68,8 +68,12 @@ Both move into `compare/` in Phase 0.
   and only did in the plain version after inlining it into its caller. Writing the lanes
   as explicit vector types fixed it (0.077 s), so the fix belongs with Phase 5's lane
   pass. Until then, put `simd` on the function the hot loop is inlined into.
-- **Generation checks for `reusable` pools** in debug builds, so a stale reference aborts
-  instead of reading another value (safety probe 9).
+- **Generation checks for `reusable` pools**, so a stale reference aborts instead of
+  reading another value (safety probe 9). **(partly done: generation-checked handles,
+  `stdlib/slots.goose`, abort on a stale or doubly released handle in every build, tested
+  by `test/runtime/slots_*.goose`; a plain index or reference into a reusable pool is still
+  unchecked, which needs a generation carried by each reference, a change to their
+  representation, not attempted)**
 - Send the general fixes (clang discovery, CMake packages under clang) upstream as pull
   requests while the fork is still close to Goose.
 
