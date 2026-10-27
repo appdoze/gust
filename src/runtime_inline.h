@@ -2069,14 +2069,23 @@ static GS_NORETURN void gs_end(int code) {
     _Exit(code);
 }
 
-/* Gust: freeze(a)'s copy, never freed: it is static data to the program
-   (§11.2), which any thread may hold a view of at any time. One byte at
-   least, so that an empty array's view points at something. */
+/* Gust: freeze(a)'s copies, never freed: they are static data to the
+   program (§11.2), which any thread may hold a view of at any time. Each
+   follows a link to the one before, so that all stay reachable until the
+   program ends, as static data is, and a leak checker counts none lost.
+   One byte at least, so that an empty array's view points at something. */
+static void **gs_frozen;
+#if GS_NEED_THREADS
+static void gs_freeze_keep(void **q);   /* under a lock: runtime_threads.h */
+#else
+static void gs_freeze_keep(void **q) { q[0] = (void *)gs_frozen; gs_frozen = q; }
+#endif
 GS_API void *gs_freeze(const void *p, int64_t n) {
-    void *q = malloc(n > 0 ? (size_t)n : 1);
+    void **q = (void **)malloc(sizeof(void *) + (n > 0 ? (size_t)n : 1));
     if (!q) gs_panic("out of memory in freeze");
-    if (n > 0) memcpy(q, p, (size_t)n);
-    return q;
+    if (n > 0) memcpy(q + 1, p, (size_t)n);
+    gs_freeze_keep(q);
+    return q + 1;
 }
 
 /* The smallest a region gets before a refusal is fatal. */
@@ -2150,7 +2159,8 @@ GS_API uint8_t gs_trim_memory(void) {
         if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
 #endif
         if (start >= end) continue;
-        size_t len = (size_t)(end - start);
+)GSRT"
+R"GSRT(        size_t len = (size_t)(end - start);
 #ifdef _WIN32
         /* The access-fault handler commits the pages again on growth. */
         if (VirtualFree((void *)start, len, MEM_DECOMMIT))
@@ -2159,8 +2169,7 @@ GS_API uint8_t gs_trim_memory(void) {
             ok = 0;
 #elif defined(GS_POSIX_COMMIT_ON_FAULT)
         /* Reusable while writable, which XNU requires; then closed, so that
-)GSRT"
-R"GSRT(           growth faults and gs_commit_chunk declares them reused. A growth
+           growth faults and gs_commit_chunk declares them reused. A growth
            that skipped pages can leave a closed stretch below the mark, so
            the range is opened first (which commits nothing). */
         if (mprotect((void *)start, len, PROT_READ | PROT_WRITE) ||
@@ -2357,7 +2366,8 @@ static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     gs_spinner *rn = GS_SPINNER(p, r);
     rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
-    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
+)GSRT"
+R"GSRT(    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
     rn->child[0] = a;
     rn->key[1] = gs_sp_key(p, b, leaf);
     rn->max[1] = gs_sp_max(p, b, leaf, INT64_MAX);
@@ -2368,8 +2378,7 @@ static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
 
 /* Puts the entry for node `child` at position k of the inner node at level
    l of the path, splitting full nodes on the way up. */
-)GSRT"
-R"GSRT(static void gs_sp_addchild(gs_sppath *p, int64_t l, int64_t k, int64_t child, int leaf) {
+static void gs_sp_addchild(gs_sppath *p, int64_t l, int64_t k, int64_t child, int leaf) {
     for (;;) {
         gs_spinner *in = GS_SPINNER(p, p->node[l]), *o = in;
         int64_t key = gs_sp_key(p, child, leaf), max = gs_sp_max(p, child, leaf, INT64_MAX);
@@ -2587,7 +2596,8 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
    to it is only made where its first span touches the run. */
 typedef struct {
     gs_spleaf *lf, *nl;
-    int64_t k, nk;
+)GSRT"
+R"GSRT(    int64_t k, nk;
     gs_sppath *np;
 } gs_spnear;
 
@@ -2603,8 +2613,7 @@ static void gs_sp_near(gs_sppath *p, gs_sppath *q, int64_t idx, int64_t end, gs_
         s->nk = s->k + 1;
         return;
     }
-)GSRT"
-R"GSRT(    for (l = p->h - 1; l >= 0 && p->pos[l] + 1 >= GS_SPINNER(p, p->node[l])->n; l--) {}
+    for (l = p->h - 1; l >= 0 && p->pos[l] + 1 >= GS_SPINNER(p, p->node[l])->n; l--) {}
     if (l < 0 || GS_SPINNER(p, p->node[l])->key[p->pos[l] + 1] != end) return;
     q->base = p->base;
     q->n = p->n;
@@ -2805,7 +2814,8 @@ static GS_INLINE void gs_bsm_init(gs_bsm *m, const gs_byteset *s, int tables) {
 
 /* The members among the 16 bytes of x, as 0xff bytes, for a set of kind k
    from 1 to 4, a constant wherever this is inlined. A range holds x where
-   x - lo, wrapping, is at most its width. */
+)GSRT"
+R"GSRT(   x - lo, wrapping, is at most its width. */
 static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
     __m128i r, t;
     if (k == 1) {
@@ -2813,8 +2823,7 @@ static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
     } else if (k == 2) {
         r = _mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b));
     } else if (k == 3) {
-)GSRT"
-R"GSRT(        r = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b)),
+        r = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b)),
                          _mm_cmpeq_epi8(x, m->c));
     } else {
         t = _mm_sub_epi8(x, m->a);
@@ -2971,14 +2980,14 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     /* The workers the budget holds beside the main program, each at the
        most regions one can take: what hardware_threads() reports at most.
        At least one, so a program sized by it still runs; the regions the
-       platform then refuses are retried smaller (gs_reserve_region). */
+)GSRT"
+R"GSRT(       platform then refuses are retried smaller (gs_reserve_region). */
     if (workerregions > 0) {
         uint64_t per = reserve + gap;
         uint64_t total = per ? budget / per : 0;
         int64_t spare = total > (uint64_t)INT64_MAX ? INT64_MAX : (int64_t)total;
         spare -= mainregions;
-)GSRT"
-R"GSRT(        gs_thread_cap = spare > workerregions ? spare / workerregions : 1;
+        gs_thread_cap = spare > workerregions ? spare / workerregions : 1;
     }
     // Unbuffered stdout: output is never lost to an abort or a killed run,
     // and interleaves correctly with stderr diagnostics. Revisit if print
@@ -3184,7 +3193,8 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
             c = gs_big_cmp(&t, &s);
             high = c > 0 || (c == 0 && (d & 1));
         }
-        dig[n++] = (char)('0' + d + high);
+)GSRT"
+R"GSRT(        dig[n++] = (char)('0' + d + high);
         return n;
     }
 }
@@ -3192,8 +3202,7 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
 /* The text of a finite float from its fields: the sign, the significand
    without its implicit bit and the biased exponent, for a type of `bits`
    significant bits and least exponent emin. The digits are laid out as C's
-)GSRT"
-R"GSRT(   %g lays them out at a precision of max(15, digits): in exponent form, with
+   %g lays them out at a precision of max(15, digits): in exponent form, with
    at least two exponent digits, below 1e-4 or from that power of ten up. */
 static int64_t gs_fmt_float(uint8_t *dst, int neg, uint64_t frac, int bexp, int bits,
                             int emin) {
@@ -3426,6 +3435,15 @@ static int64_t gs_numthreads;
 static gs_mutex gs_threads_mutex = GS_MUTEX_INIT;
 static gs_cond gs_threads_done = GS_COND_INIT;
 
+/* Gust: a frozen copy into the list that keeps them all reachable
+   (gs_freeze), which any thread may extend. */
+static void gs_freeze_keep(void **q) {
+    gs_mutex_lock(&gs_threads_mutex);
+    q[0] = (void *)gs_frozen;
+    gs_frozen = q;
+    gs_mutex_unlock(&gs_threads_mutex);
+}
+
 /* The contained workers that aborted, from which thread_wait answers: a bit
    for each one's id, and the messages of their aborts (gs_fail) that no
    wait has taken yet, the first wait that asks for one taking it. Under
@@ -3489,7 +3507,8 @@ static void gs_set_thread_end_hook(void (*f)(void)) {
 #ifdef _WIN32
 static DWORD WINAPI gs_thread_main(LPVOID p)
 #else
-static void *gs_thread_main(void *p)
+)GSRT"
+R"GSRT(static void *gs_thread_main(void *p)
 #endif
 {
     gs_thread *t = (gs_thread *)p;
@@ -3499,8 +3518,7 @@ static void *gs_thread_main(void *p)
     int aborted = 0;
     gs_contained contain;
     if (t->contained) aborted = gs_run_contained(t, &contain);
-)GSRT"
-R"GSRT(    else t->run(t->entry, t->args);
+    else t->run(t->entry, t->args);
     gs_mutex_lock(&gs_threads_mutex);
     void (*end)(void) = gs_thread_end_hook;
     gs_mutex_unlock(&gs_threads_mutex);
@@ -3707,15 +3725,15 @@ static void gs_pfor_worker(uint8_t *p) {
 }
 
 GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_t *),
-                         void (*release)(void)) {
+)GSRT"
+R"GSRT(                         void (*release)(void)) {
     j->nworkers = 0;
     int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
     int64_t want = gs_hardware_threads() - 1;
     if (want > chunks - 1) want = chunks - 1;
     if (want > GS_PFOR_MAXW) want = GS_PFOR_MAXW;
     if (want <= 0) return;
-)GSRT"
-R"GSRT(    gs_mutex_lock(&gs_pf_mutex);
+    gs_mutex_lock(&gs_pf_mutex);
     if (gs_pf_busy) {
         gs_mutex_unlock(&gs_pf_mutex);
         return;

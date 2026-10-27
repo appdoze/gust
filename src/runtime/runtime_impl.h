@@ -693,14 +693,23 @@ static GS_NORETURN void gs_end(int code) {
     _Exit(code);
 }
 
-/* Gust: freeze(a)'s copy, never freed: it is static data to the program
-   (§11.2), which any thread may hold a view of at any time. One byte at
-   least, so that an empty array's view points at something. */
+/* Gust: freeze(a)'s copies, never freed: they are static data to the
+   program (§11.2), which any thread may hold a view of at any time. Each
+   follows a link to the one before, so that all stay reachable until the
+   program ends, as static data is, and a leak checker counts none lost.
+   One byte at least, so that an empty array's view points at something. */
+static void **gs_frozen;
+#if GS_NEED_THREADS
+static void gs_freeze_keep(void **q);   /* under a lock: runtime_threads.h */
+#else
+static void gs_freeze_keep(void **q) { q[0] = (void *)gs_frozen; gs_frozen = q; }
+#endif
 GS_API void *gs_freeze(const void *p, int64_t n) {
-    void *q = malloc(n > 0 ? (size_t)n : 1);
+    void **q = (void **)malloc(sizeof(void *) + (n > 0 ? (size_t)n : 1));
     if (!q) gs_panic("out of memory in freeze");
-    if (n > 0) memcpy(q, p, (size_t)n);
-    return q;
+    if (n > 0) memcpy(q + 1, p, (size_t)n);
+    gs_freeze_keep(q);
+    return q + 1;
 }
 
 /* The smallest a region gets before a refusal is fatal. */

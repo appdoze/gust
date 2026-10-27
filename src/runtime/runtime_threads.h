@@ -134,6 +134,15 @@ static int64_t gs_numthreads;
 static gs_mutex gs_threads_mutex = GS_MUTEX_INIT;
 static gs_cond gs_threads_done = GS_COND_INIT;
 
+/* Gust: a frozen copy into the list that keeps them all reachable
+   (gs_freeze), which any thread may extend. */
+static void gs_freeze_keep(void **q) {
+    gs_mutex_lock(&gs_threads_mutex);
+    q[0] = (void *)gs_frozen;
+    gs_frozen = q;
+    gs_mutex_unlock(&gs_threads_mutex);
+}
+
 /* The contained workers that aborted, from which thread_wait answers: a bit
    for each one's id, and the messages of their aborts (gs_fail) that no
    wait has taken yet, the first wait that asks for one taking it. Under

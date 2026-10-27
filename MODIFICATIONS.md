@@ -135,6 +135,9 @@ git log upstream/master..main
   `test/errors_tc/thread_view_not_static.goose`,
   `test/errors_tc/freeze_references.goose` and
   `test/errors_tc/freeze_write.goose` (new); the editor grammars name it.
+  Each copy is linked to the one before (`gs_frozen`, under the threads'
+  mutex where there are threads), so that all stay reachable until the
+  program ends and LeakSanitizer counts none lost.
 - `a.move()` (`src/builtins.h`, `src/typecheck_builtins.h`,
   `src/codegen_builtins.h`, `src/bce.h`), Goose's open item 3: a member
   of the arrays that shrink, checked as `clear()` for its receiver and as
