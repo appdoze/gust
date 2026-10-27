@@ -3532,18 +3532,29 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
 /* Gust: the parallel for pool (§6.5): workers started as the first jobs
    want them, which wait between jobs. A job wakes them all; each runs its
    thunk, which takes chunks until none is left, then reports that it is
-   done. One job holds the pool at a time, from its post to its wait. */
+   done. One job holds the pool at a time, from its post to its wait.
+
+   A worker awake between jobs sees the next one by its epoch and reports
+   it done by the count of those still running, without the mutex, which
+   only a sleeper and the last of a job's workers take: a job's start and
+   end cost no queue of workers on one lock (an n-body step is 256
+   iterations, a thousand steps a run). */
 static gs_mutex gs_pf_mutex = GS_MUTEX_INIT;
 static gs_cond gs_pf_wake = GS_COND_INIT;
 static gs_cond gs_pf_idle = GS_COND_INIT;
 static gs_pfor_job *gs_pf_job;
 static int64_t gs_pf_epoch, gs_pf_workers, gs_pf_running;
-static int gs_pf_busy;
+static int64_t gs_pf_base;       /* The epoch a worker started at, before the job it starts for. */
+static int64_t gs_pf_sleepers;   /* Under the mutex: workers waiting on gs_pf_wake. */
+static int gs_pf_busy, gs_pf_waiting;   /* Under the mutex; waiting: the poster on gs_pf_idle. */
 
 /* A short spin before a sleep: jobs that follow each other closely (an
    n-body step's) find the workers awake, and the caller finds them done,
    without the cost of a wake. Bounded, so an idle program sleeps. */
-#define GS_PF_SPIN 20000
+#define GS_PF_SPIN 2000
+#if defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
 static int64_t gs_pf_load(int64_t *v) {
 #if defined(_MSC_VER) && !defined(__clang__)
     return *(volatile int64_t *)v;
@@ -3551,21 +3562,61 @@ static int64_t gs_pf_load(int64_t *v) {
     return __atomic_load_n(v, __ATOMIC_ACQUIRE);
 #endif
 }
+static void gs_pf_store(int64_t *v, int64_t x) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    _InterlockedExchange64((volatile __int64 *)v, x);
+#else
+    __atomic_store_n(v, x, __ATOMIC_SEQ_CST);
+#endif
+}
+/* The count after one less. */
+static int64_t gs_pf_dec(int64_t *v) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return _InterlockedDecrement64((volatile __int64 *)v);
+#else
+    return __atomic_fetch_add(v, -1, __ATOMIC_SEQ_CST) - 1;
+#endif
+}
+/* A spinning thread's hint to the core, which a hyperthread sibling (the
+   caller, running its own chunks) gets the time of. */
+static void gs_pf_relax(void) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    _mm_pause();
+#elif defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
 
 static void gs_pfor_worker(uint8_t *p) {
     (void)p;
-    int64_t seen = 0;
+    gs_mutex_lock(&gs_pf_mutex);
+    int64_t seen = gs_pf_base;
+    gs_mutex_unlock(&gs_pf_mutex);
     for (;;) {
-        for (int s = 0; s < GS_PF_SPIN && gs_pf_load(&gs_pf_epoch) == seen; s++) {}
-        gs_mutex_lock(&gs_pf_mutex);
-        while (gs_pf_epoch == seen) gs_cond_wait(&gs_pf_wake, &gs_pf_mutex);
-        seen = gs_pf_epoch;
+        int64_t e = gs_pf_load(&gs_pf_epoch);
+        for (int s = 0; s < GS_PF_SPIN && e == seen; s++) {
+            gs_pf_relax();
+            e = gs_pf_load(&gs_pf_epoch);
+        }
+        if (e == seen) {
+            gs_mutex_lock(&gs_pf_mutex);
+            gs_pf_sleepers++;
+            while ((e = gs_pf_epoch) == seen) gs_cond_wait(&gs_pf_wake, &gs_pf_mutex);
+            gs_pf_sleepers--;
+            gs_mutex_unlock(&gs_pf_mutex);
+        }
+        /* The job was set before its epoch, which this read saw: it stays
+           until this worker reports it done, which its wait waits for. */
+        seen = e;
         gs_pfor_job *j = gs_pf_job;
-        gs_mutex_unlock(&gs_pf_mutex);
         j->thunk((uint8_t *)&j);
-        gs_mutex_lock(&gs_pf_mutex);
-        if (--gs_pf_running == 0) gs_cond_broadcast(&gs_pf_idle);
-        gs_mutex_unlock(&gs_pf_mutex);
+        if (gs_pf_dec(&gs_pf_running) == 0) {
+            gs_mutex_lock(&gs_pf_mutex);
+            if (gs_pf_waiting) gs_cond_broadcast(&gs_pf_idle);
+            gs_mutex_unlock(&gs_pf_mutex);
+        }
     }
 }
 
@@ -3577,29 +3628,41 @@ GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_
     if (want > chunks - 1) want = chunks - 1;
     if (want > GS_PFOR_MAXW) want = GS_PFOR_MAXW;
     if (want <= 0) return;
-    gs_mutex_lock(&gs_pf_mutex);
+)GSRT"
+R"GSRT(    gs_mutex_lock(&gs_pf_mutex);
     if (gs_pf_busy) {
         gs_mutex_unlock(&gs_pf_mutex);
         return;
     }
     gs_pf_busy = 1;
+    gs_pf_base = gs_pf_epoch;
     while (gs_pf_workers < want) {
         gs_pf_workers++;
         gs_thread_start(run, release, gs_pfor_worker, NULL, 0, 0);
     }
     gs_pf_job = j;
-    gs_pf_running = gs_pf_workers;
-    gs_pf_epoch++;
+    gs_pf_store(&gs_pf_running, gs_pf_workers);
     j->nworkers = gs_pf_workers;
-    gs_cond_broadcast(&gs_pf_wake);
+    gs_pf_store(&gs_pf_epoch, gs_pf_epoch + 1);
+    if (gs_pf_sleepers) gs_cond_broadcast(&gs_pf_wake);
     gs_mutex_unlock(&gs_pf_mutex);
 }
 
 GS_API void gs_pfor_wait(gs_pfor_job *j) {
     if (!j->nworkers) return;
-    for (int s = 0; s < GS_PF_SPIN && gs_pf_load(&gs_pf_running) > 0; s++) {}
+    int64_t r = gs_pf_load(&gs_pf_running);
+    for (int s = 0; s < GS_PF_SPIN && r > 0; s++) {
+        gs_pf_relax();
+        r = gs_pf_load(&gs_pf_running);
+    }
     gs_mutex_lock(&gs_pf_mutex);
-    while (gs_pf_running > 0) gs_cond_wait(&gs_pf_idle, &gs_pf_mutex);
+    if (r > 0) {
+        /* The last worker takes the mutex to see this, so it cannot be
+           missed: it counts down first and looks after this is set. */
+        gs_pf_waiting = 1;
+        while (gs_pf_load(&gs_pf_running) > 0) gs_cond_wait(&gs_pf_idle, &gs_pf_mutex);
+        gs_pf_waiting = 0;
+    }
     gs_pf_job = NULL;
     gs_pf_busy = 0;
     gs_mutex_unlock(&gs_pf_mutex);
@@ -3640,8 +3703,7 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
         int64_t ms = (left + 999999) / 1000000;
         SleepConditionVariableSRW(c, m, ms < INFINITE ? (DWORD)ms : INFINITE - 1, 0);
     #elif defined(__APPLE__)
-)GSRT"
-R"GSRT(        struct timespec ts = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
+        struct timespec ts = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
         pthread_cond_timedwait_relative_np(c, m, &ts);
     #else
         struct timespec ts = { (time_t)(deadline / 1000000000), (long)(deadline % 1000000000) };

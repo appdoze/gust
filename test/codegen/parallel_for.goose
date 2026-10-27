@@ -18,6 +18,14 @@ recursive fn total_of(xs: i64[:], from: i64) -> i64 {
     return xs[from] + total_of(xs, from + 1);
 }
 
+// It walks what it is handed by reference, as a tracer walks its spheres,
+// and writes nothing through it.
+fn farthest(ps: P[:], from: f64) -> f64 {
+    var m = 0.0;
+    for &p in ps { m = max(m, max(p.x - from, from - p.x)); }
+    return m;
+}
+
 fn main() {
     for k in 64 { table.push(k * k % 97); }
     let n = 200000;
@@ -80,4 +88,10 @@ fn main() {
     sums.push_n(0, 100);
     parallel for i in 100 { sums[i] = total_of(table, i % 64) + i; }
     print("read-only callee ", sums[0], " ", sums[63], " ", sums[99]);
+
+    // A callee reading the enclosing code's storage through references.
+    var far: f64[>..] = [];
+    far.push_n(0.0, 50);
+    parallel for i in 50 { far[i] = farthest(pts, i * 1.0); }
+    print("by-reference reads ", far[0], " ", far[49]);
 }

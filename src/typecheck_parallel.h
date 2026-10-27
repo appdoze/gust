@@ -88,10 +88,28 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
             passes[{ k, j }];
         }
         if (!k->body) return;
+        // A by-reference loop's element stands for the parameter the loop
+        // runs over (`for &s in spheres`): written through, or handed on to
+        // a callee that writes it, it writes that parameter; only read, not.
+        map<VarDef *, Node *> elems;   // The element, and what its loop runs over.
+        // The variable a place is storage of, through by-reference loops'
+        // elements and the body's own references into them.
+        auto storage = [&](Node *place) -> VarDef * {
+            auto v = base(place);
+            for (int hops = 0; v && hops < 64; hops++) {
+                auto it = elems.find(v);
+                if (it == elems.end())
+                    for (auto &a : v->ref.alts)
+                        if ((it = elems.find(a.root)) != elems.end()) break;
+                if (it == elems.end()) break;
+                v = base(it->second);
+            }
+            return v;
+        };
         // The parameter a place names: itself, or a reference of the body's
         // own that points into it.
         auto param = [&](Node *place) -> int {
-            auto v = base(place);
+            auto v = storage(place);
             for (size_t j = 0; v && j < k->params.size(); j++) {
                 if (v == k->params[j]) return (int)j;
                 for (auto &a : v->ref.alts) if (a.root == k->params[j]) return (int)j;
@@ -101,11 +119,18 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
         function<void(Node *)> walk = [&](Node *n) {
             if (!n) return;
             auto direct = [&](Node *place) {
-                if (auto j = param(place); j >= 0) pwrites[{ k, (size_t)j }] = true;
+                if (auto j = param(place); j >= 0) {
+                    pwrites[{ k, (size_t)j }] = true;
+                } else if (auto v = storage(place); v && v->type && IsRefOrSlice(v->type) && v->ref.Unknown()) {
+                    // Through a reference that may point anywhere: into any
+                    // of them.
+                    for (size_t m = 0; m < k->params.size(); m++)
+                        if (m < k->argtypes.size() && mutparam(k->argtypes[m])) pwrites[{ k, m }] = true;
+                }
             };
             if (auto a = Is<Assign>(n)) direct(a->lval);
             else if (auto inc = Is<IncDec>(n)) direct(inc->lval);
-            else if (auto fl = Is<ForLoop>(n); fl && fl->byref) direct(fl->iter);
+            else if (auto fl = Is<ForLoop>(n); fl && fl->byref && fl->vdef) elems[fl->vdef] = fl->iter;
             else if (auto cl = Is<Call>(n)) {
                 auto an = cl->ArgNodes();
                 if (cl->builtin >= 0) {
@@ -116,9 +141,16 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
                     for (auto d : cl->dispatch) ts.push_back(d);
                     for (auto t : ts) {
                         scan(t);
-                        for (size_t m = 0; m < an.size() && m < t->argtypes.size(); m++)
-                            if (mutparam(t->argtypes[m]))
-                                if (auto j = param(an[m]); j >= 0) passes[{ k, (size_t)j }].push_back({ t, m });
+                        for (size_t m = 0; m < an.size() && m < t->argtypes.size(); m++) {
+                            if (!mutparam(t->argtypes[m])) continue;
+                            if (auto j = param(an[m]); j >= 0) {
+                                passes[{ k, (size_t)j }].push_back({ t, m });
+                            } else if (auto v = storage(an[m]); v && v->type && IsRefOrSlice(v->type) &&
+                                                                v->ref.Unknown()) {
+                                for (size_t q = 0; q < k->params.size() && q < k->argtypes.size(); q++)
+                                    if (mutparam(k->argtypes[q])) passes[{ k, q }].push_back({ t, m });
+                            }
+                        }
                     }
                 }
             }

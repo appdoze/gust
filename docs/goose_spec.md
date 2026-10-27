@@ -2394,7 +2394,11 @@ what another writes. The checker proves it of the body:
 * It writes no global and no other variable around the loop, resizes
   nothing outside itself, writes through no reference or slice that may
   point outside it, and hands the enclosing code's storage to a callee for
-  writing only as `out[i]`.
+  writing only as `out[i]`. A callee takes it for writing where it writes
+  through the parameter, through a reference into it or the element of a
+  `for &x` loop over it, or hands any of those on to a callee that does; a
+  tracer walking `for &s in spheres` and only reading `s` takes the
+  spheres to read.
 * What it calls writes no global and no variable of the enclosing code,
   and calls no `extern fn` outside the standard library.
 * It uses no threads or queues. `return` and a `break` out of the body are
