@@ -48,18 +48,17 @@ Both are in `compare/` since Phase 0, and CI runs both with `--check`.
   `compare/safety/expected.json` says in release, `--checked` and `--debug`)**
 - Commit the clang-discovery fix as the first change. **(done)**
 - CI on Windows, Linux and macOS running Goose's tests plus `compare/` and `compare/safety/`.
-  **(partly done: Goose's suite, the samples under `--checked` and a Linux ASan and UBSan
-  profile run on ubuntu-latest, macos-latest and windows-latest; green at commit `420714c5`,
-  run 40341927278, which includes the `net` tests and the network examples; `compare/`'s
-  checks are added to it with the commit that adds `compare/`, not yet run there)**
+  **(done: Goose's suite, the samples under `--checked`, `compare/run_bench.py --check` and
+  `compare/safety/run_safety.py --check` on ubuntu-latest, macos-latest and windows-latest,
+  and a Linux ASan and UBSan profile; green at commit `2d46dd3c`, run 40404260948)**
 - Record today's numbers (`compare/results.json`) as the baseline every later phase is
   measured against. **(done: `compare/results.json`, 26 October 2026, Windows 11 on an
   i7-11700F with clang 22.1.8, MSVC 19.50, rustc 1.96.0 and Lobster, nine configurations, 5
   launches each, best of 5 repeats, every checksum agreeing; other programs kept the
   machine 18-35% busy. `compare/safety/results.json` beside it)**
 
-**Exit:** CI green on three platforms **(met for the suite, last at `420714c5`, run
-40341927278; to be met again for each pushed milestone)**; baseline stored **(met)**.
+**Exit:** CI green on three platforms **(met, last at `2d46dd3c`, run 40404260948; to be met
+again for each pushed milestone)**; baseline stored **(met)**.
 
 ## Phase 1: Quick wins (weeks 2–4)
 
@@ -108,8 +107,15 @@ criterion moves to Phase 5.
 ## Phase 2: Code quality (months 2–3)
 
 - Emit **`restrict`** where the compiler has proved two references have different roots:
-  Rust's no-alias advantage without its borrowing rules.
-- Emit range hints (`__builtin_assume`) from index types (`u32 in a`).
+  Rust's no-alias advantage without its borrowing rules. **(Not done: a slice crosses a
+  call as a `{data, len}` struct, and clang derives no-alias only from a `restrict`
+  pointer parameter, so this needs slices passed as two parameters, a calling-convention
+  change; clang already versions the loops it vectorizes with a run-time overlap check.)**
+- Emit range hints (`__builtin_assume`) from index types (`u32 in a`). **(Tried and not
+  kept, 26 October: every index whose check the bounds-check pass elides, 68 in
+  `compare/`, handed to clang as `__builtin_assume(i < len)`. In interleaved runs, best of
+  30 each, the first moved hashmap 11% faster and nbody 4% slower, and the second, in the
+  other order, put all eight within 2% (strings 4%): noise on this machine, no gain.)**
 - Close the bounds-check gaps in Goose's spec (Appendix B, 0a and 0f): indices loaded from
   arrays, disjunctive loop exits, `u64` ranges. 46 of 161 index checks remain in the `compare/` programs.
   **(In part: a self-recursive function now enters with its call sites' facts when its own
@@ -229,8 +235,9 @@ the plain function.
   Windows AFD only where that shows `poll` costing **(both met locally: with 10,000 idle
   connections `poll` cut the measured load to a ninth on Linux and WSAPoll to an eighth
   on Windows; with epoll, kqueue and AFD polling the pool keeps 87% of its throughput at
-  50,000 idle connections in WSL2 and 94% at 10,000 on Windows; kqueue awaits CI)**, then
-  runtime-owned cancellation. M:N workers, work stealing and freeze-then-share stay milestones of
+  50,000 idle connections in WSL2 and 94% at 10,000 on Windows; kqueue tested in macOS CI
+  since run 40388485069)**, then runtime-owned cancellation **(begun: a stop wakes every
+  waiting loop at once, and a handler sees its request's deadline)**. M:N workers, work stealing and freeze-then-share stay milestones of
   their own.
 
 **Exit:** an HTTP server and a callback-heavy GUI program written idiomatically; HTTP
