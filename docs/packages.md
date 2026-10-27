@@ -111,6 +111,35 @@ where the major is 0), `@~1.2.3` a 1.2.y from 1.2.3, `@>=1.2` any from
 import mylib from "joe/mylib@^2.1";                // the newest 2.x from 2.1.0
 ```
 
+Gust: a package can also be named from a *registry*, which says where its
+repository is: a source of `@` and the ref or range alone takes the
+repository from the first registry `GUST_REGISTRY` names that lists the
+package.
+
+```goose
+import mylib from "@^2.1";                         // the registry's mylib, newest 2.x from 2.1.0
+```
+
+`GUST_REGISTRY` is a comma-separated list of registries, each a directory
+or a git repository (written as a root file writes a source, without a
+ref). A registry is a file, `index.txt`, with a line per package: its name
+and its source as a root file writes it, without a ref; `#` starts a
+comment.
+
+```
+# index.txt
+mylib     github.com/joe/mylib
+mathx     https://git.example.com/math/mathx.git
+devlib    ./packages/devlib            # a directory, relative to the registry
+```
+
+A git registry is cloned into `GOOSE_HOME/registry/` the first time and
+fetched again by `gust fetch --update`; `--offline` uses the clone it has. A
+directory the index lists is used in place, as a path source is, and takes
+no ref (`import devlib from "@";`). What a name resolves to goes through the
+lockfile as any git source does, so the lock pins the repository and the
+commit, not the registry's word for them.
+
 What each git package resolved to is kept in the program's lockfile,
 `program.lock` beside the root file: its source, the ref it was fetched at
 and the commit that was. Later builds take those, so a range resolves once
@@ -295,8 +324,11 @@ Push the repository, tag a version, and tell users the line to write:
 import mylib from "github.com/you/mylib@v1";
 ```
 
-There is no registry to register with. A tag can move and a branch always
-does, so users who need a build to be reproducible pin a commit. Code from
+Gust: or add it to a registry, a line `mylib github.com/you/mylib` in its
+`index.txt`, for users who set `GUST_REGISTRY` to it to write
+`import mylib from "@^1";`. A tag can move and a branch always does, so
+users who need a build to be reproducible pin a commit, or keep the
+lockfile. Code from
 a fetched package runs on the user's machine when its C is built, as with
 any build script; pinning a version expresses trust in that code.
 

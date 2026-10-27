@@ -2520,6 +2520,20 @@ def main():
             r.fail("package versions", str(e))
     r.show_task(package_versions)
 
+    # Gust: registries, a package's repository by its name.
+    def package_registry():
+        from package_registry import check_package_registry
+        try:
+            skipped = check_package_registry(exe, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip package registry ({skipped})")
+            else:
+                r.ok("package registry: a directory and a git registry, a range through the lock, a "
+                     "directory listed, a list of two, none set, none listing the name")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("package registry", str(e))
+    r.show_task(package_registry)
+
     def runtime_cache():
         from runtime_cache import check_runtime_cache
         try:

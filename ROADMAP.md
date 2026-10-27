@@ -284,8 +284,10 @@ the plain function.
   **(The formatter (`gust format`) and the docs site (`docs/site/`) came with Goose.
   Version resolution and a lockfile done: `@^1.2`, `@~1.2.3`, `@>=1.2` and `@1.x` ranges
   resolve to the highest tag they allow, and `<program>.lock` keeps each git package's
-  ref and commit until `gust fetch --update`. A registry beyond the compiler's blessed
-  table is not done.)**
+  ref and commit until `gust fetch --update`. A registry beyond the blessed table too:
+  `import name from "@^1.2";` takes the repository from the first registry `GUST_REGISTRY`
+  names (a directory or a git repository with an `index.txt` of names and sources) that
+  lists it, through the lockfile as any git source; `test/package_registry.py`.)**
 - Keep error output agent-friendly (`--diagnostics json` exists) and ship a compact
   language guide AI agents can load in one go.
 

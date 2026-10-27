@@ -171,7 +171,13 @@ git log upstream/master..main
   program at its commit, fetched by itself where needed) until `gust fetch
   --update` resolves them again. Written atomically, and only for packages
   the root declares, not the blessed ones the compiler pins.
-  `test/package_versions.py` (new).
+  `test/package_versions.py` (new). Then registries: a source of `@ref`
+  alone takes the package's repository from the first registry
+  `GUST_REGISTRY` names whose `index.txt` lists it (`RegistrySource`), a
+  directory read in place or a git repository cloned into
+  `GOOSE_HOME/registry/` and fetched again by `--update`; the source it
+  makes goes through the lockfile as any other. `test/package_registry.py`
+  (new).
 - Labeled `break` and `continue` (spec §6.4, Goose's open item 13): `name:`
   on a loop or `block`, and `break :name e?` / `continue :name` from inside
   it at any depth (`src/lexer.h`, `src/parser.h`, `src/ast.h`). The checker

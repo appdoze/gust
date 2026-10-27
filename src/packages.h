@@ -533,6 +533,110 @@ inline string LockedCheckout(const PackageSource &source, const string &name) {
     return dir;
 }
 
+// Gust: a registry (docs/packages.md): `import name from "@^1.2";` takes the
+// repository of the package `name` from the first registry GUST_REGISTRY
+// names that lists it, with the ref or range written after the `@`.
+// GUST_REGISTRY is a comma-separated list of registries, each a directory
+// or a git repository (as a root file writes one, without a ref) whose
+// `index.txt` has a line `name source` per package, the source as a root
+// file writes it, without a ref; `#` starts a comment. A git registry is
+// cloned into GOOSE_HOME/registry/ once, and fetched again by `gust fetch
+// --update`. What a name resolves to goes through the lockfile as any git
+// source does, so the lock pins the repository and commit, not the
+// registry's word for them.
+inline string RegistryRepoUrl(const string &reg) {
+    if (reg.find("://") != string::npos || reg.find('@') != string::npos) return reg;
+    auto slashes = (int)std::count(reg.begin(), reg.end(), '/');
+    if (slashes == 1) return cat("https://github.com/", reg);
+    if (slashes >= 2) return cat("https://", reg);
+    throw CompileError { cat("the registry ", reg, " is not a directory, owner/repo, host/owner/repo or a URL") };
+}
+
+// The directory a registry's index.txt is in: the registry itself, or its
+// clone in the cache.
+inline string RegistryDir(const string &reg) {
+    std::error_code ec;
+    if (IsPathSource(reg) || filesystem::is_directory(filesystem::path(reg), ec)) return PackageDir(reg);
+    auto url = RegistryRepoUrl(reg);
+    // The repository's last name and a hash of the URL, short, as a
+    // package's checkout is named where its URL is long.
+    auto key = url;
+    while (!key.empty() && (key.back() == '/' || key.back() == '\\')) key.pop_back();
+    if (key.size() > 4 && key.compare(key.size() - 4, 4, ".git") == 0) key.resize(key.size() - 4);
+    key = key.substr(key.find_last_of("/\\:") + 1);
+    for (auto &c : key)
+        if (!(isalnum((unsigned char)c) || c == '.' || c == '_' || c == '-')) c = '_';
+    auto dir = cat(GooseHome(), "/registry/", key.empty() ? string("registry") : key.substr(0, 24), "-",
+                   Hex8(url));
+    auto have = filesystem::is_directory(filesystem::path(dir), ec);
+    if (have && !package_update) return dir + "/";
+    if (!have && package_nofetch)
+        throw CompileError { cat("the registry ", reg, " is not fetched, and --offline fetches nothing: "
+                                 "`gust fetch` fetches it") };
+    if (have && package_nofetch) return dir + "/";
+    auto git = FindOnPath("git");
+    if (git.empty()) throw CompileError { cat("cannot find `git` on PATH, needed to fetch the registry ", reg) };
+    filesystem::create_directories(filesystem::path(dir).parent_path(), ec);
+    FileLock lock(dir + ".lock", cat("waiting for another gust fetching the registry ", reg));
+    ProgressStep step(cat(have ? "updating" : "fetching", " the registry ", reg), true);
+    if (have) {
+        RunGit(git, { "-C", dir, "fetch", "-q", "--depth", "1", url, "HEAD" });
+        RunGit(git, { "-C", dir, "checkout", "-q", "--detach", "FETCH_HEAD" });
+    } else {
+        auto tmp = dir + ".tmp";
+        RemoveTree(tmp);
+        RunGit(git, { "clone", "-q", "--depth", "1", url, tmp });
+        filesystem::rename(filesystem::path(tmp), filesystem::path(dir), ec);
+        if (ec) throw CompileError { cat("cannot move the registry's clone to ", dir, ": ", ec.message()) };
+    }
+    return dir + "/";
+}
+
+// The source `import name from "@ref"` means: the registry's for name, then
+// the ref (range) as written. An index that gives a directory gives it
+// without a ref, relative to the registry where it is relative.
+inline string RegistrySource(const string &name, const string &text) {
+    auto env = getenv("GUST_REGISTRY");
+    if (!env || !*env)
+        throw CompileError { cat("the source ", text, " takes the package ", name, "'s repository from a "
+                                 "registry, and GUST_REGISTRY names none: set it to a registry's directory or "
+                                 "git repository (docs/packages.md)") };
+    auto split = [](const string &all, char sep) {
+        vector<string> parts;
+        for (size_t at = 0;;) {
+            auto p = all.find(sep, at);
+            parts.push_back(all.substr(at, p == string::npos ? string::npos : p - at));
+            if (p == string::npos) return parts;
+            at = p + 1;
+        }
+    };
+    auto trim = [](string t) {
+        while (!t.empty() && isspace((unsigned char)t.back())) t.pop_back();
+        size_t i = 0;
+        while (i < t.size() && isspace((unsigned char)t[i])) i++;
+        return t.substr(i);
+    };
+    for (auto &raw : split(env, ',')) {
+        auto reg = trim(raw);
+        if (reg.empty()) continue;
+        auto dir = RegistryDir(reg);
+        string index;
+        if (!LoadFile(cat(dir, "index.txt"), index))
+            throw CompileError { cat("the registry ", reg, " has no index.txt") };
+        for (auto &line : split(index, '\n')) {
+            auto l = line;
+            if (auto h = l.find('#'); h != string::npos) l.resize(h);
+            auto t = trim(l);
+            auto sp = t.find_first_of(" \t");
+            if (sp == string::npos || t.substr(0, sp) != name) continue;
+            auto source = trim(t.substr(sp));
+            if (IsPathSource(source)) return IsAbsoluteSource(source) ? source : cat(dir, source);
+            return source + text;
+        }
+    }
+    throw CompileError { cat("no registry GUST_REGISTRY names (", env, ") lists the package ", name) };
+}
+
 // The root directory of the package `name` from `source`: the directory
 // itself for a path, the checkout in the cache for a git source; either
 // must hold `<name>.goose`. Gust: a declared git package is the lockfile's

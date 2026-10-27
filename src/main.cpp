@@ -295,7 +295,9 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                     pkgname = imp.path;
                     PackageSource src;
                     try {
-                        src = ParsePackageSource(imp.source, DirOf(path));
+                        // Gust: `@ref` alone, the registry's source for the name.
+                        auto text = imp.source[0] == '@' ? RegistrySource(imp.path, imp.source) : imp.source;
+                        src = ParsePackageSource(text, DirOf(path));
                     } catch (CompileError &e) {
                         ImportError(filename, imp, e.msg);
                     }
