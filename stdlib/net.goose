@@ -167,7 +167,7 @@ fn adopt(p: Poller, d: Detached) -> Conn, i64 {
 // them, reads what they send, hands it to the protocol's D, sends what D and
 // the producer P write, and enforces the limits below. Nothing in it knows a
 // protocol. A server is a worker per CPU, each in serve over the same
-// listener (examples/api/http.gust's serve_pool), or a thread per
+// listener (stdlib/http.goose's serve), or a thread per
 // connection, each in serve over the one connection it adopted.
 //
 // D(state, ctl, input, out) -> consumed: input is what the connection has

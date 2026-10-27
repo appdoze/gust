@@ -105,7 +105,7 @@ official documentation and source:
   truncation.
 - *Slices are views with bounds checks, as in Zig and Rust*, and a
   request's method, path and body are slices of the connection's buffer
-  (`examples/api/http.gust`): parsing copies nothing. Gust's lifetime rules
+  (`stdlib/http.goose`'s server): parsing copies nothing. Gust's lifetime rules
   prove the views die before the buffer is reused, which Zig leaves to the
   programmer and Go to the collector.
 - *Bytes, not checked UTF-8*, as Go's `string`: the JSON reader validates

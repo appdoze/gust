@@ -1,5 +1,5 @@
 // The Go twin without net/http: the same minimal HTTP/1.1 as
-// examples/api/http.gust (a goroutine per connection, the request parsed in
+// the standard library's http server (stdlib/http.goose) (a goroutine per connection, the request parsed in
 // place in one buffer, keep-alive and pipelining, the same limits and
 // refusals, one write per response), with the same encoding/json handlers
 // as ../server. It separates what the language and its runtime cost from
@@ -211,7 +211,7 @@ func hasToken(v []byte, tok string) bool {
 }
 
 // parseHead: the request (body still empty), the body's length, and a
-// status to refuse it with (0 when fine), as http.gust's parse_head.
+// status to refuse it with (0 when fine), as stdlib/http.goose's parse_head.
 func parseHead(head []byte) (request, int, int) {
 	var req request
 	eol := bytes.IndexByte(head, '\r')
@@ -312,7 +312,7 @@ func send(c net.Conn, out []byte, res *response, keep bool) ([]byte, bool) {
 }
 
 // fill: more bytes into buf[have:limit], or 0 when the connection should
-// end, as http.gust's fill (closed, failed, idle, or stopping with nothing read).
+// end, as the http server's fill (closed, failed, idle, or stopping with nothing read).
 func fill(c net.Conn, buf []byte, have, limit int) int {
 	deadline := time.Now().Add(idle)
 	for {

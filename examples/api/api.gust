@@ -15,7 +15,7 @@
 //
 // How the parts fit Gust's model:
 // - Networking. The standard library's net (stdlib/net.goose) holds the
-//   sockets, the poller and the event loop; http.gust is a protocol over
+//   sockets, the poller and the event loop; the standard library's http (stdlib/http.goose) is a protocol over
 //   it, and this file the routes.
 // - Concurrency. By default a pool of workers, one per hardware thread
 //   (--workers), each an event loop over the connections it accepts;
@@ -26,7 +26,7 @@
 // - Memory. Buffers and responses live on data stacks, released when their
 //   scope ends, and in the loop's buffers while a request is partly read or
 //   a response partly sent: no heap allocation per request, and no
-//   collector. A response past what is built whole (http.gust's
+//   collector. A response past what is built whole (http's
 //   MAX_RESPONSE) is streamed, so its size costs no memory.
 // - Identity without shared state. An order's id is its connection's
 //   number and its count on that connection, unique with no counter shared
@@ -91,12 +91,12 @@ const ITEM_JSON_MAX = 512;
 // and the export it is streaming, as items from export_at to export_end.
 struct Session { conn: i64, orders: i64 = 0, crash_route: bool = false, export_at: i64 = 0, export_end: i64 = 0 }
 
-fn not_found(res: Response&, out: u8[>..]&) {
+fn not_found(res: http::Response&, out: u8[>..]&) {
     res.status = 404;
     out.append("{\"detail\":\"Not Found\"}");
 }
 
-fn not_allowed(res: Response&, out: u8[>..]&, allow: const u8[:]) {
+fn not_allowed(res: http::Response&, out: u8[>..]&, allow: const u8[:]) {
     res.status = 405;
     res.allow = allow;
     out.append("{\"detail\":\"Method Not Allowed\"}");
@@ -120,7 +120,7 @@ fn query_int(query: const u8[:], name: const u8[:], def: i64) -> i64, bool {
 }
 
 // ?repeat=N within 1..most, or a 422 naming it.
-fn repeat_of(req: Request&, res: Response&, out: u8[>..]&, most: i64) -> i64 {
+fn repeat_of(req: http::Request&, res: http::Response&, out: u8[>..]&, most: i64) -> i64 {
     let n, ok = query_int(req.query, "repeat", 1);
     if ok && n >= 1 && n <= most { return n; }
     var p = Problems { .. };
@@ -139,7 +139,7 @@ fn item_at(k: i64) -> Item {
 
 // The routes. A path that names a resource but not this method is a 405
 // naming the ones it has, as Go 1.22's ServeMux answers.
-fn handle(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
+fn handle(s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
     let path = req.path;
     if path == "/health" {
         if req.method != "GET" { not_allowed(res, out, "GET"); return; }
@@ -203,7 +203,7 @@ fn export_more(s: Session&, out: u8[>..]&, limit: i64) -> bool {
     return true;
 }
 
-fn create_order(s: Session&, req: Request&, res: Response&, out: u8[>..]&) {
+fn create_order(s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
     var r = json::reader(req.body);
     var o = OrderIn { item_id: 0, quantity: 0, note: "" };
     let d = decode_fields(r, o);
@@ -247,7 +247,7 @@ thread_fn connection(d: net::Detached, conn: i64, crash_route: bool) {
     let p, ps = net::poller();
     let c, status = net::adopt(p, d);
     if ps != 0 || status != 0 { return; }
-    qput(serve(net::Listener { .. }, p, c, Session { conn: conn, crash_route: crash_route, .. }, 1, conn, 1,
+    qput(http::serve(net::Listener { .. }, p, c, Session { conn: conn, crash_route: crash_route, .. }, 1, conn, 1,
                handle, export_more));
 }
 
@@ -273,7 +273,7 @@ fn ended(t: Totals&, e: const Ended&) {
     }
 }
 
-fn add(sum: Counts&, c: Counts) {
+fn add(sum: http::Counts&, c: http::Counts) {
     sum.requests += c.requests;
     sum.ok += c.ok;
     sum.client_errors += c.client_errors;
@@ -289,7 +289,7 @@ fn serve_threads(listener: net::Listener, crash_route: bool, t: Totals&) {
     let p, ps = net::poller();
     if ps != 0 || net::watch(p, listener) != 0 { abort("cannot wait on the listener"); }
     var busy: u8[>..] = [];
-    format_refusal(busy, 503);
+    http::format_refusal(busy, 503);
     var hs: i64[..1] = [0];
     var evs: i64[..1] = [0];
     while !net::stop_requested() {
@@ -339,7 +339,7 @@ thread_fn pool_worker(listener: net::Listener, slot: i64, workers: i64, round: i
     if ps != 0 { abort("cannot make a poller"); }
     let proto = Session { conn: 0, crash_route: crash_route, .. };
     let first = slot + workers * (round << 24);
-    qput(serve(listener, p, net::Conn { .. }, proto, MAX_LOOP_CONNECTIONS, first, workers,
+    qput(http::serve(listener, p, net::Conn { .. }, proto, MAX_LOOP_CONNECTIONS, first, workers,
                handle, export_more));
 }
 
@@ -429,9 +429,9 @@ fn main() {
     else { serve_pool(listener, workers, crash_route, t); }
     net::close(listener);
 
-    var sum = Counts { .. };
+    var sum = http::Counts { .. };
     loop {
-        let c, got = qpoll<Counts>();
+        let c, got = qpoll<http::Counts>();
         if !got { break; }
         add(sum, c);
     }

@@ -1,5 +1,5 @@
 // Gust: the Rust twin of go/rawserver, on tokio: the same minimal HTTP/1.1 as
-// examples/api/http.gust (a task per connection, the request parsed in place
+// the standard library's http server (stdlib/http.goose) (a task per connection, the request parsed in place
 // in one buffer, keep-alive and pipelining, the same limits and refusals,
 // one write per response) and the same routes, JSON and validation, with
 // JSON written and read by hand, as no crate beyond tokio is used. It is what
@@ -528,7 +528,7 @@ fn find(h: &[u8], from: usize, c: u8) -> Option<usize> {
     h[from..].iter().position(|&x| x == c).map(|i| i + from)
 }
 
-// The request's head as http.gust's parse_head reads it, or the status to
+// The request's head as stdlib/http.goose's parse_head reads it, or the status to
 // refuse it with.
 fn parse_head(head: &[u8]) -> Result<Head, u16> {
     let eol = find(head, 0, b'\r').ok_or(400u16)?;

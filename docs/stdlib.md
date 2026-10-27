@@ -792,7 +792,7 @@ ready rather than what is open (`GUST_NET_POLL=1` makes it `poll` or
 TinyCC backend runs on Linux uses `poll`); and `serve`, an event loop for a server,
 which knows bytes and connections and nothing of any protocol.
 `examples/echo/` is a TCP echo server on it and `examples/api/` an
-HTTP/1.1 JSON API, whose `http.gust` is a protocol over `serve`.
+HTTP/1.1 JSON API, served by the standard library's `http::serve`, a protocol over `serve`.
 
 <!-- fragment -->
 ```goose
@@ -984,6 +984,34 @@ fn main() {
 Hosts are what `net::connect` takes: an IPv4 address or `localhost`, with
 no DNS and no TLS yet. `test/threads/http_client.goose` runs each kind of
 body against a server thread.
+
+The server, `http::serve`, runs HTTP/1.1 over `net::serve`'s event loop:
+requests parsed in place in the loop's buffer, keep-alive and pipelining,
+`Content-Length` bodies (a chunked request body is refused with 501), the
+refusals a client that breaks the protocol is owed (400, 408, 413, 431,
+503), and responses of any size. A handler `H(state, req, res, out)` writes
+a whole body into `out`, up to `http::MAX_RESPONSE` bytes, and sets
+`res.status`, `res.content_type` (JSON by default), `res.allow` and
+`res.close`; one that sets `res.stream` answers with what it wrote and then
+with what `G(state, out, room) -> done` appends as the client takes it, sent
+chunked. `state` is a copy of `proto` per connection, of a fixed-size type
+with a `conn` field the loop sets. `serve` returns what it served, an
+`http::Counts`, once the server stops (`net::request_stop`, or a signal
+after `net::catch_signals`).
+<!-- fragment -->
+```goose
+struct Request { method: const u8[:], path: const u8[:], query: const u8[:], body: const u8[:],
+                 keep_alive: bool, http11: bool, deadline: f64, stopping: bool }
+struct Response { status: i64 = 200, allow: const u8[:] = "", close: bool = false, stream: bool = false,
+                  content_type: const u8[:] = "application/json" }
+fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn, proto: S,
+                  max_conns: i64, first_id: i64, id_step: i64) -> Counts
+```
+Over a listener it is one worker of a pool, which handlers must not block;
+over one adopted connection (`first`, with no listener) it serves that
+connection on a thread of its own, where they may.
+`examples/api/api.gust` serves a JSON API on it both ways, and
+`test/threads/http_server.goose` answers its client.
 
 ## ffi
 

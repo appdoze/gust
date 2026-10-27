@@ -286,7 +286,12 @@ git log upstream/master..main
   and `request`, one request per connection: a body by Content-Length, in
   chunks (decoded) or to the server's close, the status as the result, and
   net's errors or `PROTOCOL` below 0. `test/threads/http_client.goose`
-  (new) against a server thread; `docs/stdlib.md`.
+  (new) against a server thread; `docs/stdlib.md`. Then the server too:
+  `examples/api/http.gust`, moved into the module as `http::serve` with its
+  `Request`, `Response` and `Counts` (the client's own head parser renamed
+  `reply_head`), and a response's `content_type`, JSON by default;
+  `examples/api/api.gust` names them through `http::`, and
+  `test/threads/http_server.goose` (new) serves the client from a thread.
 
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
   over a `reusable` pool: a handle names one allocation by index and serial

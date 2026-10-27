@@ -7,11 +7,10 @@ the language and the library can be compared apart.
 
 | file | what |
 |---|---|
-| `api.gust` | the service: routes, models, validation, the worker pool or a thread per connection, containment, graceful shutdown |
-| `http.gust` | HTTP/1.1 server side as a protocol over the standard library's event loop (`net::serve`, `stdlib/net.goose`): in-place request parsing, keep-alive, pipelining, limits, timeouts, error responses, responses built whole up to 1 MB and streamed (chunked) past that |
+| `api.gust` | the service: routes, models, validation, the worker pool or a thread per connection, containment, graceful shutdown; its HTTP/1.1 is the standard library's `http::serve` (`stdlib/http.goose`): in-place request parsing, keep-alive, pipelining, limits, timeouts, error responses, responses built whole up to 1 MB and streamed (chunked) past that |
 | `jsonx.gust` | JSON for a struct through `const for` (compile-time field iteration), and FastAPI-shaped `422` errors |
 | `go/server` | the Go twin on `net/http` |
-| `go/rawserver` | the Go twin with the same minimal HTTP as `http.gust` |
+| `go/rawserver` | the Go twin with the same minimal HTTP as the standard library's `http` server |
 | `go/loadgen` | the load generator all of them are measured with |
 | `rust/` | Gust: the Rust twin of `go/rawserver`, on tokio (a cargo project): the same minimal HTTP, routes and JSON, which `bench.py` runs as `rustraw` where cargo is installed |
 | `test_api.py` | the behaviour tests, run against any of the servers |

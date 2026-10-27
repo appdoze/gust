@@ -1,0 +1,7 @@
+text 200 plain words
+json 200 {"ok":true}
+missing 404 {"detail":"Not Found"}
+post 201 name=gust
+stream 200 [5,4,3,2,1]
+too large 413 {"detail":"Content Too Large"}
+requests 5 ok 4 client errors 1 refused 1 connections 6

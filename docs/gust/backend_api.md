@@ -19,7 +19,7 @@ before-and-after comparison on 26 October 2026. Raw results are in
 | area | Gust before this work | in `examples/api/` now | gap left |
 |---|---|---|---|
 | sockets | nothing: the standard library has files, not sockets | the standard library's `net` (section 6): TCP over IPv4, non-blocking sockets, a poller (WSAPoll, poll), checked handles, and `serve`, the event loop, over `src/runtime/runtime_net.h`; no pointer crosses into C | IPv6, DNS, UDP, TLS; epoll, kqueue or IOCP behind the poller for many thousands of connections per worker |
-| HTTP | none | `http.gust`, a protocol over `net::serve`: HTTP/1.1 parsed in place, keep-alive, pipelining, `Content-Length` bodies, `Host` checks (RFC 9112), `413` / `431` / `501` / `408` refusals, partial reads and writes, responses built whole up to 1 MB and streamed in chunks past that | chunked request bodies, a client, HTTP/2, TLS (terminate it in a proxy meanwhile) |
+| HTTP | none | `stdlib/http.goose`, a protocol over `net::serve`: HTTP/1.1 parsed in place, keep-alive, pipelining, `Content-Length` bodies, `Host` checks (RFC 9112), `413` / `431` / `501` / `408` refusals, partial reads and writes, responses built whole up to 1 MB and streamed in chunks past that | chunked request bodies, a client, HTTP/2, TLS (terminate it in a proxy meanwhile) |
 | routing | none | a plain `if` chain on the path, `405` naming the methods a path has, as Go 1.22's `ServeMux` | a router with path patterns; function values cannot escape, so a table of handlers is not possible today, but an enum of routes expanded with `const for` would be |
 | JSON | `std/json`: a writer, a tree parser, and a reader that decodes straight into a program's types | `jsonx.gust`: a struct of numbers, booleans and inline strings encoded and decoded through `const for` over its fields, one line per type to opt in to encoding | the opt-in line (`const if` would remove it); optional fields; nested structs and arrays in decoding; UTF-8 validation of strings |
 | validation | none | field errors gathered into one FastAPI-shaped `422`; text fields with their limit in the type (`Str64`) | declarative constraints on fields |
@@ -117,7 +117,7 @@ a poller. Its tradeoffs, chosen knowingly:
    for the socket; while output is pending the connection is not read, so
    responses go out in order and a client that does not read is not sent
    more. That loop was first the example's own (`serve_loop`); it is now
-   the standard library's `net::serve` (section 6), and `http.gust` is
+   the standard library's `net::serve` (section 6), and `stdlib/http.goose` is
    only the protocol.
 
 ## 3. How the example fits Gust's models
@@ -167,7 +167,7 @@ each passing the same behaviour tests (`examples/api/test_api.py`):
 - **Gust, worker pool**: `api.gust --workers 8`.
 - **Gust, thread per connection**: `api.gust --thread-per-connection`.
 - **Go, same HTTP as Gust**: `go/rawserver`, the same minimal HTTP/1.1 as
-  `http.gust` with a goroutine per connection, and the same
+  `stdlib/http.goose` with a goroutine per connection, and the same
   `encoding/json` handlers as the `net/http` twin.
 - **Go net/http**: `go/server`, idiomatic `net/http` and `encoding/json`.
 
@@ -407,7 +407,7 @@ throughput the lowest.
 The example's sockets and its event loop moved into the standard library
 as `net` (`stdlib/net.goose`, over `src/runtime/runtime_net.h`; reference
 in [`docs/stdlib.md`](../stdlib.md#net)). The example keeps only HTTP
-(`http.gust`, a protocol over the loop) and its routes, and
+(`stdlib/http.goose`, a protocol over the loop) and its routes, and
 `examples/echo/` is a second user of the loop with no HTTP in it.
 
 ### The interface
@@ -568,7 +568,7 @@ Two findings on the way, both about workers sharing a listener:
   now takes at most 32 connections a turn, and `Limits.pool_conns` is a
   limit over every worker on the listener, counted by the runtime: each
   listener keeps an atomic tally of its connections still open, wherever
-  they are (`net::accepted_open`), which `examples/api/http.gust` uses in
+  they are (`net::accepted_open`), which `stdlib/http.goose` uses in
   place of the split. The 50,000-connection runs below turned none away.
 - **The tally must count only connections.** A first version added to
   the tally before each `accept` and took it back when there was none, so
@@ -812,7 +812,7 @@ Ranked by measured impact against effort; each names its evidence. The
 - **One machine, loopback.** A network between client and server adds
   latency that hides some of these differences.
 - **Gust's allocation count is established from the generated C, not
-  counted.** The request path (`http.gust`'s protocol and handlers, and
+  counted.** The request path (`stdlib/http.goose`'s protocol and handlers, and
   `net::serve` around them) contains no call to an allocator: its slot and
   chunk slabs grow on a data stack only when more connections than before
   have input or output pending at once, and the poller's C tables grow by
