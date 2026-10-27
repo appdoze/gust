@@ -106,6 +106,7 @@ run as part of the test suite.
 | Sample | What it shows |
 |---|---|
 | [29_ui_todo](29_ui_todo.goose) | A to-do list and a color mixer with the `ui` module: Nuklear's immediate-mode widgets drawn through `gfx`. Each frame lists the windows and widgets and reads back what the user did to them: a text field committed with Enter, buttons, check boxes, options, a menu bar, a tooltip, a progress bar, a color picker and properties. The check marks are recolored through Nuklear's color table, text is drawn in Roboto from the Nuklear submodule, and the whole ui is scaled up and down, with its font baked again at each scale. Saves its last frame as `ui_todo.png`. Needs a compiler built with the gfx package (`GOOSE_BUILTIN_LIBS`); the test runner draws 30 frames off screen. |
+| [32_ui_calc](32_ui_calc.goose) | Gust: a calculator in which every key, menu item and keyboard shortcut is a command with a handler of its own, found at compile time: the commands are an enum's variants, `run` has an overload per variant, and a `const for` over the variants expands into the dispatch, the Edit menu and the shortcuts, with Undo over a history of states. No table of callbacks and no closures kept as objects. Needs a compiler built with the gfx package; the test runner plays `12+30=` a key a frame, off screen. |
 
 ## A small game
 

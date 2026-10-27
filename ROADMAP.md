@@ -361,8 +361,11 @@ done, beside the Go twins rather than in `compare/`, where the load generator an
 behaviour tests are: `examples/api/rust/`, the same minimal HTTP as `go/rawserver` on
 tokio's multi-thread runtime, passing `test_api.py`; in one short run on Windows, mixed
 load over 64 connections, Gust's pool served 168k req/s, Go with the same HTTP 140k and
-tokio 88k, with tokio's tails the lowest (`docs/gust/backend_api.md` §5). A Linux run,
-and the GUI program, remain.)**
+tokio 88k, with tokio's tails the lowest (`docs/gust/backend_api.md` §5). A Linux run
+is `.github/workflows/api-bench.yml`, run by hand on a hosted runner. The GUI program is
+`samples/32_ui_calc.goose`: every key, menu item and shortcut a command whose handler is
+an overload on its variant, the dispatch, menu and shortcuts one `const for` over the
+commands, with no callbacks kept as objects; the samples' runner plays it off screen.)**
 
 ## Phase 8: Hardening and 1.0 (months 16–24)
 

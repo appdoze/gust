@@ -145,6 +145,10 @@ git log upstream/master..main
   `test/threads/queue_tree.goose`, `test/threads/queue_tree_outside.goose`
   (an expected abort) and `test/errors_tc/queue_link_not_element.goose`
   (new).
+- `samples/32_ui_calc.goose` (new, with `data/ui_calc.args` and its
+  expected output): a calculator on `ui` whose commands are an enum's
+  variants with a `run`, `menu` and `key` overload each, dispatched and
+  listed by `const for`; `samples/README.md`.
 - `test/mir_runs.py`: a failure shows the head of MIR's stderr, where its
   first error is, rather than the tail.
 - `docs/gust/agent_guide.md` (new): the language for an AI coding agent in
