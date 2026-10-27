@@ -149,6 +149,9 @@ git log upstream/master..main
   expected output): a calculator on `ui` whose commands are an enum's
   variants with a `run`, `menu` and `key` overload each, dispatched and
   listed by `const for`; `samples/README.md`.
+- `test/threads/net_serve.goose`: where the starved worker's bytes are not
+  the pattern, which happened on a loaded Windows runner, it prints the
+  first wrong byte of each connection and what came there.
 - `test/mir_runs.py`: a failure shows the head of MIR's stderr, where its
   first error is, rather than the tail.
 - `docs/gust/agent_guide.md` (new): the language for an AI coding agent in

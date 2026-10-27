@@ -122,10 +122,15 @@ fn ask_line(p: net::Poller, c: net::Conn, line: const u8[:]) -> u8[>..] {
 }
 
 fn pattern_ok(bytes: const u8[:], from: i64) -> bool {
+    return first_wrong(bytes, from) < 0;
+}
+
+// Gust: the first byte not the pattern's, or -1.
+fn first_wrong(bytes: const u8[:], from: i64) -> i64 {
     for i in bytes.len {
-        if bytes[i] != pattern(from + i) { return false; }
+        if bytes[i] != pattern(from + i) { return i; }
     }
-    return true;
+    return -1;
 }
 
 thread_fn foreign(p: net::Poller, c: net::Conn) {
@@ -279,8 +284,19 @@ fn main() {
         if got2.len < 1000000 { read_n(p, m2, got2, min(got2.len + 8192, 1000000), 20); }
         turns++;
     }
-    print("starved worker: ", got1.len, " and ", got2.len, " bytes, intact ",
-          pattern_ok(got1, 0) && pattern_ok(got2, 0));
+    let wrong1 = first_wrong(got1, 0);
+    let wrong2 = first_wrong(got2, 0);
+    print("starved worker: ", got1.len, " and ", got2.len, " bytes, intact ", wrong1 < 0 && wrong2 < 0);
+    // Gust: where it went wrong, if it did (seen once on a loaded Windows
+    // runner): the first wrong byte of each, and what came there.
+    if wrong1 >= 0 || wrong2 >= 0 {
+        print("  first wrong byte ", wrong1, " of the first, ", wrong2, " of the second, after ", turns, " turns");
+        let w = if wrong1 >= 0 { got1[wrong1..min(got1.len, wrong1 + 16)] } else { got2[wrong2..min(got2.len, wrong2 + 16)] };
+        let at = if wrong1 >= 0 { wrong1 } else { wrong2 };
+        var want: u8[>..] = [];
+        for k in w.len { want.push(pattern(at + k)); }
+        print("  got ", w, " want ", want);
+    }
 
     // A stop with one connection idle and one mid-response, unread.
     let idle = open(p, port);
