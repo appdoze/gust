@@ -398,9 +398,28 @@ At 20,000 requests per second, fixed rate, all three keep up: p99 161 µs
 (Gust), 243 µs (Go), 240 µs (tokio). Tokio's server is not short of CPU
 here (51%): taking out the 100 ms read deadline it keeps per read, as Go's
 twin does, changed nothing (90k). A likely limit is its runtime's one I/O
-driver, which one worker polls at a time, on Windows here; a run on Linux
-is still to do. The tails are tokio's best of the three, and its
-throughput the lowest.
+driver, which one worker polls at a time, on Windows here. The tails are
+tokio's best of the three, and its throughput the lowest.
+
+**On Linux** (27 October 2026, `.github/workflows/api-bench.yml` run
+40566316114 on a hosted ubuntu-latest runner: `bench.py --quick --no-idle`,
+one rep of 3 s per scenario, four CPUs split two for the server and two for
+the load generator, the servers' workers two each; a shared VM, so
+indicative only; `examples/api/results/2026-10-27-linux-ci-quick.json`).
+Gust and Rust both pass `test_api.py` there first.
+
+| server, mixed, 64 connections | req/s | p50 | p99 | p99.9 | peak RSS | server CPU |
+|---|---:|---:|---:|---:|---:|---:|
+| Gust, worker pool | 156k | 359 µs | 1.1 ms | 2.7 ms | 2.5 MB | 92% |
+| Rust, tokio, same HTTP | 146k | 414 µs | 1.1 ms | 2.0 ms | 3.9 MB | 96% |
+| Go, same HTTP as Gust | 117k | 478 µs | 1.6 ms | 3.8 ms | 11.8 MB | 95% |
+
+On Linux tokio is no longer far behind: within 7% of Gust at 64
+connections and level at 256 (153k each), with the lowest p99.9 in most
+scenarios. Its slow showing on Windows was its I/O driver there, not the
+language. Gust's pool keeps the smallest memory throughout. With a new
+connection per request all three come to about 18,000 to 19,000 a second,
+set by the runner's connection setup rather than the servers.
 
 ## 6. The networking module
 

@@ -366,7 +366,9 @@ behaviour tests are: `examples/api/rust/`, the same minimal HTTP as `go/rawserve
 tokio's multi-thread runtime, passing `test_api.py`; in one short run on Windows, mixed
 load over 64 connections, Gust's pool served 168k req/s, Go with the same HTTP 140k and
 tokio 88k, with tokio's tails the lowest (`docs/gust/backend_api.md` §5). A Linux run
-is `.github/workflows/api-bench.yml`, run by hand on a hosted runner. The GUI program is
+is `.github/workflows/api-bench.yml`, run by hand on a hosted runner: there, at 64
+connections, Gust 156k, tokio 146k, Go with the same HTTP 117k, tokio's p99.9 the lowest
+and Gust's memory the smallest (run 40566316114). The GUI program is
 `samples/32_ui_calc.goose`: every key, menu item and shortcut a command whose handler is
 an overload on its variant, the dispatch, menu and shortcuts one `const for` over the
 commands, with no callbacks kept as objects; the samples' runner plays it off screen.)**
