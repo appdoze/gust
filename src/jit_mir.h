@@ -103,7 +103,9 @@ inline void *MirCompile(MIR_context_t ctx, const char *source, const char *name,
         mir_bail = nullptr;
         return nullptr;
     }
-    MIR_set_error_func(ctx, MirError);
+    // MIR's callback type carries its own noreturn attribute, which clang
+    // takes as part of the type: the function is one, by [[noreturn]].
+    MIR_set_error_func(ctx, reinterpret_cast<MIR_error_func_t>(&MirError));
     c2mir_init(ctx);
     *c2mir_on = 1;
     ops->message_file = msgs;

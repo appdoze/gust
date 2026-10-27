@@ -181,7 +181,7 @@ jobs:
       - name: Run through the shared TinyCC
         shell: bash
         run: |
-          exe=build/${{ runner.os == 'Windows' && 'Release/gust.exe' || 'gust' }}
+          exe=$(pwd -W 2>/dev/null || pwd)/build/${{ runner.os == 'Windows' && 'Release/gust.exe' || 'gust' }}
           ls "$(dirname "$exe")" | grep gusttcc
           "$exe" run -q test/codegen/labeled_jumps.goose | diff --strip-trailing-cr - test/expected/labeled_jumps.out
           python -c "import sys; sys.path[:0] = ['test', 'scripts']; from cimport import check_cimport; check_cimport('$exe', 'cc', 'build/ci-cimport'); print('cimport ok')"
