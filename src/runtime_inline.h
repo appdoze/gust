@@ -4018,9 +4018,15 @@ static float gs_sqrtf(float x) { return sqrtf(x); }
     !defined(GS_NO_LANES)
 #define GS_LANES 4
 typedef double gs_l4d __attribute__((vector_size(32)));
-static inline gs_l4d gs_l4d_splat(double x) { return (gs_l4d){ x, x, x, x }; }
-/* Macros: gcc notes a change of ABI at a function taking a vector, though
-   an inlined one passes nothing. */
+/* Macros, not functions: a function that takes or returns a vector has an
+   ABI that differs with AVX on x86-64 SysV, which clang refuses between a
+   function's AVX2 version and the baseline (an error, not just gcc's note),
+   though an inlined one passes nothing. */
+#define gs_l4d_splat(x)                                                       \
+    __extension__({                                                           \
+        double gs_l4d_s_ = (x);                                               \
+        (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
+    })
 #ifdef GS_SQRT_NO_ERRNO
 #define gs_l4d_sqrt(v) __builtin_elementwise_sqrt(v)
 #else
@@ -4089,7 +4095,8 @@ GS_LIBM double gs_cos(double x) GS_LIBM1(cos)
 GS_LIBM double gs_tan(double x) GS_LIBM1(tan)
 GS_LIBM double gs_asin(double x) GS_LIBM1(asin)
 GS_LIBM double gs_acos(double x) GS_LIBM1(acos)
-GS_LIBM double gs_atan(double x) GS_LIBM1(atan)
+)GSRT"
+R"GSRT(GS_LIBM double gs_atan(double x) GS_LIBM1(atan)
 GS_LIBM double gs_atan2(double x, double y) GS_LIBM2(atan2)
 GS_LIBM double gs_exp(double x) GS_LIBM1(exp)
 GS_LIBM double gs_log(double x) GS_LIBM1(log)
@@ -4097,8 +4104,7 @@ GS_LIBM double gs_log2(double x) GS_LIBM1(log2)
 GS_LIBM double gs_log10(double x) GS_LIBM1(log10)
 GS_LIBM double gs_pow(double x, double y) GS_LIBM2(pow)
 GS_LIBM float gs_sinf(float x) GS_LIBM1(sinf)
-)GSRT"
-R"GSRT(GS_LIBM float gs_cosf(float x) GS_LIBM1(cosf)
+GS_LIBM float gs_cosf(float x) GS_LIBM1(cosf)
 GS_LIBM float gs_tanf(float x) GS_LIBM1(tanf)
 GS_LIBM float gs_asinf(float x) GS_LIBM1(asinf)
 GS_LIBM float gs_acosf(float x) GS_LIBM1(acosf)
