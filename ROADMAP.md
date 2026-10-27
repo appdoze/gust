@@ -227,7 +227,13 @@ Write the spec first; these change the language.
   server; measured, it halves that server's memory but not its tail latency, and the
   API example's pool does not need it.)
 - **Zero-copy tree transfer**: structures linked by relative references cross a queue as one
-  block, or by handing over the memory region (Goose's open item 9).
+  block, or by handing over the memory region (Goose's open item 9). **(As one block done:
+  a queue element may be an array whose fixed-size elements link to one another by
+  self-relative references; `qput` copies its bytes after checking them with `from_bytes`'s
+  verifier, aborting where a link leads out of what is sent, and the receiver gets the
+  same structure at its own address with no work per node;
+  `test/threads/queue_tree.goose` and `queue_tree_outside.goose`. Handing over the memory
+  region itself, without the copy, is not done.)**
 - Add multithreaded versions of raytrace and nbody to `compare/`, with Rust + rayon
   equivalents, and new safety probes that try to race through `parallel for`. **(Done:
   `compare/gust/parallel.goose` and `compare/rust_parallel/` (cargo, rayon), run by

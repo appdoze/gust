@@ -155,8 +155,12 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             if (vi) CheckIntAny(args[0]);
             auto av = CheckValue(args[vi], nullptr);
             NoUntypedEmptyArray(av, args[vi], d.name);
-            if (av.type->kind == TY_VOID || av.type->kind == TY_FN || !IsFlat(av.type))
-                Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(av.type)));
+            string why;
+            if (av.type->kind == TY_VOID || av.type->kind == TY_FN ||
+                (!IsFlat(av.type) && !IsLinkedImage(DecayRef(av).type, why)))
+                Error(c, cat("queue elements must be flat (§11.2), or an array linked by "
+                             "self-relative references, not ", TypeStr(av.type),
+                             why.empty() ? "" : ": ", why));
             if (HoldsIndexT(av.type)) ThreadIndexError(c, av.type);
             // false when the queue is full (§11.2); a call statement drops it.
             Val ok;
@@ -170,8 +174,10 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                              " needs exactly one explicit type argument"));
             auto t = Subst(c->tyargs[0]);
             ValidateType(t, c->line, VT_LOCAL);
-            if (!IsFlat(t))
-                Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(t)));
+            string why;
+            if (!IsFlat(t) && !IsLinkedImage(t, why))
+                Error(c, cat("queue elements must be flat (§11.2), or an array linked by "
+                             "self-relative references, not ", TypeStr(t), why.empty() ? "" : ": ", why));
             if (HoldsIndexT(t)) ThreadIndexError(c, t);
             // A limit, or a wait's milliseconds.
             if (!args.empty()) CheckArg(args[0], ast.inttypes[IS_I64]);

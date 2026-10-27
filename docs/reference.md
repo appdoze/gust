@@ -3751,6 +3751,19 @@ the program's until it ends, so freeze what is built once and read for
 long, not what is rebuilt in a loop. Handing a worker a view of anything
 else, such as a local array, is a compile error that names `freeze`.
 
+### Linked structures through queues (Gust)
+
+A tree or list built in one array, its links self-relative references
+between its elements (§3.9, as `samples/25_serialize.goose` builds one),
+means the same at any address. So such an array crosses a queue as one
+block: `qput(nodes)` copies its bytes, and `qget<Node[>..]>()` receives
+the same tree, with no serializer and no work per node. Each put checks
+the image as `from_bytes` checks a file, and aborts if a link leads out of
+what is sent, as one from `t.a` into `t.b` would if `t.a` were sent alone.
+The elements must be of a fixed size, and every link must point at an
+element, as for `from_bytes`. `test/threads/queue_tree.goose` sends a
+thousand-node search tree to a worker that searches it.
+
 A worker's return releases everything it owned, whether or not anyone
 waits for it. Queued messages outlive their sender. Workers still running
 when `main` returns are killed. A global that is not flat is an error in

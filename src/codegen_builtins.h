@@ -174,6 +174,16 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 qp = T();
                 L("gs_queue *", qp, " = gs_qbox(&", q, ", ", GenX(an[0]), ");");
             }
+            // Gust: an array linked by self-relative references
+            // (TypeCheck::IsLinkedImage) crosses as its bytes, checked first
+            // as from_bytes checks an image: a link out of what is sent, into
+            // more of its root, aborts here rather than reach the receiver.
+            auto at = t->kind == TY_REF ? t->ref->sub : t;
+            auto linked = at->kind == TY_ARRAY && HasRelRefAny(at->arr->sub);
+            auto verify = [&](const string &p, const string &n) {
+                L("if (", VerifyFn(at->arr->sub), "((const uint8_t *)(", p, "), ", n, ", NULL) < 0) "
+                  "gs_panic(\"", BuiltinByKind(c->builtin).name, ": a self-relative link leads out of what is sent (§11.2)\");");
+            };
             // Emitted here, not returned as text: a discarded result would
             // drop the put.
             auto ok = T();
@@ -183,6 +193,8 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 string stk;
                 auto base = BytesTemp(stk);
                 EmitRzImage(src, t, stk, ln);
+                // The image's count, then its elements.
+                if (linked) verify(cat(base, " + 8"), cat("(", Top(stk), " - ", base, ") - 8"));
                 L("uint8_t ", ok, " = gs_qput(", qp, ", ", base, ", ", Top(stk), " - ", base, ");");
             } else if (IsBytesT(t)) {
                 auto p = GenPtr(val);
@@ -190,6 +202,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             } else {
                 auto tv = T();
                 FixedLocal(t, tv, GenX(val));
+                if (linked) verify(cat("&", tv), cat(FixedSize(t)));
                 L("uint8_t ", ok, " = gs_qput(", qp, ", &", tv, ", ", FixedSize(t), ");");
             }
             return { ok };

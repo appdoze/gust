@@ -135,6 +135,16 @@ git log upstream/master..main
   `test/errors_tc/thread_view_not_static.goose`,
   `test/errors_tc/freeze_references.goose` and
   `test/errors_tc/freeze_write.goose` (new); the editor grammars name it.
+- Linked arrays through queues (`src/typecheck_types.h`,
+  `src/typecheck_builtins.h`, `src/codegen_builtins.h`): a queue element may
+  be a fixed or grow-only array whose fixed-size elements hold only
+  self-relative references to its elements (`IsLinkedImage`, `from_bytes`'s
+  condition). `qput` and `qsend` run the type's `from_bytes` verifier over
+  the image they send and abort where a link leads out of it; a queue
+  receive is built where it is received (`BuiltWhereReceived`).
+  `test/threads/queue_tree.goose`, `test/threads/queue_tree_outside.goose`
+  (an expected abort) and `test/errors_tc/queue_link_not_element.goose`
+  (new).
 - `test/mir_runs.py`: a failure shows the head of MIR's stderr, where its
   first error is, rather than the tail.
 - `docs/gust/agent_guide.md` (new): the language for an AI coding agent in

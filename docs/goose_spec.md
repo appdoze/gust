@@ -4438,6 +4438,12 @@ relative of the Linda tuple-space / coordination style.
   them, which is static data (§1.2). A `thread_fn` parameter may be such a
   view, `const T[:]` with flat `T`, and every spawn passes static data
   there, checked at the spawn; the worker reads the same bytes in place.
+* **Linked arrays** (Gust): a queue element may also be a fixed or
+  grow-only array whose elements are of a fixed size and hold no references
+  but self-relative ones to elements of it (§3.9, the condition `from_bytes`
+  verifies by). It crosses as its bytes. `qput` and `qsend` verify the image
+  as `from_bytes` does and abort when a link leads out of it; a received one
+  is built where it is received.
 
 ### 11.3 Dynamic stacks (future)
 

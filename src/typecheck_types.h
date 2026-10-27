@@ -363,6 +363,24 @@ inline bool TypeCheck::IsFlat(TypeExpr *t) {
     }
 }
 
+// Gust: an array whose elements, of a fixed size, link to one another by
+// self-relative references and hold no other kind (§3.9): its bytes mean
+// the same at any address, so it crosses a queue as one block, which the
+// put checks with from_bytes's verifier (§11.2). why says what keeps a
+// non-flat array from being one.
+inline bool TypeCheck::IsLinkedImage(TypeExpr *t, string &why) {
+    if (t->kind != TY_ARRAY) return false;
+    auto k = t->arr->akind;
+    if (k != A_FIXED && k != A_GROW && k != A_GROWSHRINK) return false;
+    auto elem = t->arr->sub;
+    if (!Reaches(elem, [](TypeExpr *x) { return IsRelRef(x); })) return false;
+    if (ClassOf(elem) != SC_FIXED) {
+        why = cat(TypeStr(elem), " is not of a fixed size");
+        return false;
+    }
+    return VerifiableElem(elem, elem, why);
+}
+
 // Whether t, or a type a value of it reaches through references, slices,
 // arrays and fields, satisfies pred. Each struct, enum and variant type is
 // entered once, as a recursive type reaches itself again; a variant type
@@ -805,6 +823,12 @@ inline bool TypeCheck::BuiltWhereReceived(Node *n, size_t result) {
     // array's none, and `self` where a field's default says so: offsets that
     // mean the same wherever the value sits.
     if (auto c = Is<Call>(n); c && c->builtin == B_DEFAULT) return true;
+    // Gust: a received array linked by self-relative references is a whole
+    // image, checked as it was sent (§11.2), and copied in one block to
+    // where it is received: its links lie within it.
+    if (auto c = Is<Call>(n); c && result == 0 &&
+                              (c->builtin == B_QGET || c->builtin == B_QPOLL || c->builtin == B_QRECV))
+        return true;
     // The inline body's tail is checked as a value before the call can
     // expose it as fresh; returning existing relative storage is a copy.
     if (auto c = Is<Call>(n); c && c->fvbody && result == 0)
