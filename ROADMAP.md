@@ -193,8 +193,13 @@ Write the spec first; these change the language.
   balances uneven iterations; no per-thread deques. A parallel for inside another runs on
   its own thread.)**
 - **Deterministic reductions**: the same floating-point result at any thread count.
+  **(By construction for the form `parallel for` allows: each iteration writes its own
+  element and the loop after it sums them in order, which no thread count changes. A
+  reduction written into the loop itself, `reduce s += e`, is not done.)**
 - **Freeze-then-share**: large read-only data built at run time, read by every worker in
-  place. The API example (`docs/gust/backend_api.md`) needs it for any shared data not
+  place. **(For a `parallel for`'s duration, done: its workers read the enclosing code's
+  data and the globals in place, which the checker keeps every iteration from writing.
+  Freezing data for threads that outlive a loop, `thread_spawn`'s, is not done.)** The API example (`docs/gust/backend_api.md`) needs it for any shared data not
   known at compile time.
 - **Addressed mailboxes**: replies a worker can wait for itself. (A **non-blocking
   `thread_wait`** would also save a thread per connection in a thread-per-connection
@@ -216,6 +221,18 @@ compile error.
 - Emit the lanes as explicit C vector types (`vector_size`), not hoping for clang's
   auto-vectorizer, which failed in `simd fn` copies (measured).
 - Tie into `simd fn` dispatch for AVX2 / AVX-512 at run time.
+
+**Status (26 October): measured, not built.** On an n-body force loop of 256 bodies in C,
+clang 22 at -O2 -march=native on this machine: LLVM's own outer-loop vectorizer
+(`-mllvm -enable-vplan-native-path` with `#pragma clang loop vectorize(enable)`) made it
+twice as slow (0.61 s against 0.30 s); four lanes written as `vector_size(32)` doubles, with
+`__builtin_elementwise_sqrt`, gave the same checksum bit for bit and ran in 0.135 to 0.20 s
+against 0.23 s, 1.2x to 1.7x across runs with others' programs running. So the explicit-lane
+route is the one, as planned. What it needs and does not have yet: the independence proof
+for an ordinary `for` (the `parallel for` checker's rules, `src/typecheck_parallel.h`, apply
+as they are), and a lane code generator that splits struct values (`V3`) into a vector per
+field, broadcasts what every lane reads, and if-converts branches; that generator is the
+phase.
 
 **Exit:** unmodified `compare/gust/main.goose` nbody at least 2x faster than Rust with an
 identical checksum (the hand prototype reached 2.1x); `simd fn` copies never slower than
