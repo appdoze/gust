@@ -11,6 +11,12 @@ let SCALE = 3;
 var table: i64[>..] = [];
 
 fn mix(a: i64, b: i64) -> i64 { (a * 31 + b * 17) % 1009 }
+// It takes the slice for writing, and only reads it: a body may hand it the
+// enclosing code's storage, and recursion, which needs the fixpoint, too.
+recursive fn total_of(xs: i64[:], from: i64) -> i64 {
+    if from >= xs.len { return 0; }
+    return xs[from] + total_of(xs, from + 1);
+}
 
 fn main() {
     for k in 64 { table.push(k * k % 97); }
@@ -68,4 +74,10 @@ fn main() {
     parallel for i in none { r[i] = 999; }
     parallel for i in 25..26 { r[i] = 1; }
     print("ranges ", r[9], " ", r[10], " ", r[19], " ", r[20], " ", r[25]);
+
+    // A callee that only reads what it is handed for writing.
+    var sums: i64[>..] = [];
+    sums.push_n(0, 100);
+    parallel for i in 100 { sums[i] = total_of(table, i % 64) + i; }
+    print("read-only callee ", sums[0], " ", sums[63], " ", sums[99]);
 }

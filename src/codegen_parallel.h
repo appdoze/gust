@@ -51,21 +51,28 @@ inline void CodeGen::GenParallelFor(ForLoop *f, const string &lov, const string 
     L("gs_pfor_finish(&", j, ".h, ", LocArgs(f->line), ");");
 }
 
-// Each parallel for's worker thunk, once the stacks are counted: its block
-// of the stacks the body's function and its callees take from a base of 0,
-// the calling thread's globals, and calls on the chunks it takes.
+// Each parallel for's worker thunk, once the stacks are counted. A worker
+// of the pool opens its block of data stacks once, as many as the hungriest
+// body takes from a base of 0, its callees' included; then for each job it
+// reads the calling thread's globals and calls the body on the chunks it
+// takes.
 inline void CodeGen::EmitParallelThunks(int64_t &workerregions) {
+    int64_t most = 0;
     for (auto &pt : pforthunks) {
-        auto &ki = sinfo[pt.sp];
         auto stacks = ProgramStacks({ pt.sp });
         CheckStackLimit("a parallel for's body", stacks, pt.sp->sf->line);
-        workerregions = std::max(workerregions, stacks);
+        most = std::max(most, stacks);
+    }
+    workerregions = std::max(workerregions, most);
+    for (auto &pt : pforthunks) {
+        auto &ki = sinfo[pt.sp];
+        auto stacks = most;
         string args = cat("(", pt.ivct, ")k");
         for (size_t i = 0; i < pt.nfv; i++) Append(args, ", j->fv[", i, "]");
         if (ki.needssp) args += ", 0";
         Append(code, "static void ", pt.thunk, "(uint8_t *p) {\n",
                "    ", pt.job, " *j = *(", pt.job, " **)p;\n",
-               "    gs_stack_block(", stacks, ");\n",
+               "    if (!gs_stks) gs_stack_block(", stacks, ");\n",
                "    gs_gl = j->h.gl;\n",
                "    for (int64_t a; (a = gs_pfor_take(&j->h)) >= 0;) {\n",
                "        int64_t b = a < j->h.hi - j->h.chunk ? a + j->h.chunk : j->h.hi;\n",

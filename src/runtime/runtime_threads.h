@@ -322,6 +322,82 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
     return returned;
 }
 
+/* Gust: the parallel for pool (§6.5): workers started as the first jobs
+   want them, which wait between jobs. A job wakes them all; each runs its
+   thunk, which takes chunks until none is left, then reports that it is
+   done. One job holds the pool at a time, from its post to its wait. */
+static gs_mutex gs_pf_mutex = GS_MUTEX_INIT;
+static gs_cond gs_pf_wake = GS_COND_INIT;
+static gs_cond gs_pf_idle = GS_COND_INIT;
+static gs_pfor_job *gs_pf_job;
+static int64_t gs_pf_epoch, gs_pf_workers, gs_pf_running;
+static int gs_pf_busy;
+
+/* A short spin before a sleep: jobs that follow each other closely (an
+   n-body step's) find the workers awake, and the caller finds them done,
+   without the cost of a wake. Bounded, so an idle program sleeps. */
+#define GS_PF_SPIN 20000
+static int64_t gs_pf_load(int64_t *v) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return *(volatile int64_t *)v;
+#else
+    return __atomic_load_n(v, __ATOMIC_ACQUIRE);
+#endif
+}
+
+static void gs_pfor_worker(uint8_t *p) {
+    (void)p;
+    int64_t seen = 0;
+    for (;;) {
+        for (int s = 0; s < GS_PF_SPIN && gs_pf_load(&gs_pf_epoch) == seen; s++) {}
+        gs_mutex_lock(&gs_pf_mutex);
+        while (gs_pf_epoch == seen) gs_cond_wait(&gs_pf_wake, &gs_pf_mutex);
+        seen = gs_pf_epoch;
+        gs_pfor_job *j = gs_pf_job;
+        gs_mutex_unlock(&gs_pf_mutex);
+        j->thunk((uint8_t *)&j);
+        gs_mutex_lock(&gs_pf_mutex);
+        if (--gs_pf_running == 0) gs_cond_broadcast(&gs_pf_idle);
+        gs_mutex_unlock(&gs_pf_mutex);
+    }
+}
+
+GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_t *),
+                         void (*release)(void)) {
+    j->nworkers = 0;
+    int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
+    int64_t want = gs_hardware_threads() - 1;
+    if (want > chunks - 1) want = chunks - 1;
+    if (want > GS_PFOR_MAXW) want = GS_PFOR_MAXW;
+    if (want <= 0) return;
+    gs_mutex_lock(&gs_pf_mutex);
+    if (gs_pf_busy) {
+        gs_mutex_unlock(&gs_pf_mutex);
+        return;
+    }
+    gs_pf_busy = 1;
+    while (gs_pf_workers < want) {
+        gs_pf_workers++;
+        gs_thread_start(run, release, gs_pfor_worker, NULL, 0, 0);
+    }
+    gs_pf_job = j;
+    gs_pf_running = gs_pf_workers;
+    gs_pf_epoch++;
+    j->nworkers = gs_pf_workers;
+    gs_cond_broadcast(&gs_pf_wake);
+    gs_mutex_unlock(&gs_pf_mutex);
+}
+
+GS_API void gs_pfor_wait(gs_pfor_job *j) {
+    if (!j->nworkers) return;
+    for (int s = 0; s < GS_PF_SPIN && gs_pf_load(&gs_pf_running) > 0; s++) {}
+    gs_mutex_lock(&gs_pf_mutex);
+    while (gs_pf_running > 0) gs_cond_wait(&gs_pf_idle, &gs_pf_mutex);
+    gs_pf_job = NULL;
+    gs_pf_busy = 0;
+    gs_mutex_unlock(&gs_pf_mutex);
+}
+
 GS_API void gs_free_msg(uint8_t *msg) {
     free(msg);
 }

@@ -943,6 +943,30 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                                const char *file, int line);
 GS_API void gs_free_msg(uint8_t *msg);
 
+/* Gust: parallel for (§6.5). A job per loop run, which the compiler fills:
+   the range, the chunk a taker claims at a time, the calling thread's
+   globals instance and the thunk a worker runs, which opens stacks of its
+   own and calls the body's function on the iterations it takes, with the
+   free variables' arguments the job holds after this header. The calling
+   thread takes chunks too, so where no worker joins (a JIT run, a range of
+   one chunk, a parallel for inside another) it runs them all, in order. */
+#define GS_PFOR_MAXW 63
+typedef struct gs_pfor_job {
+    int64_t lo, hi, chunk;
+    int64_t next;
+    void *gl;
+    void (*thunk)(uint8_t *);
+    int64_t nworkers;
+} gs_pfor_job;
+/* Hands the job to the pool of workers the runtime keeps, starting the ones
+   it lacks with `run` and `release`, the program's thread program start
+   and end; sets how many joined. None join while another job holds the
+   pool. */
+GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_t *),
+                         void (*release)(void));
+/* Returns once every worker that joined the job has left it. */
+GS_API void gs_pfor_wait(gs_pfor_job *j);
+
 /* One queue per flat element type the program uses (the compiler emits a
    gs_queue global per type, which main sets up before anything can use it).
    Values are contiguous byte images: gs_qget, gs_qwait and gs_qpoll return a
@@ -1041,29 +1065,14 @@ static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64
 }
 #endif
 
-/* Gust: parallel for (§6.5). The compiler fills a job per loop run: the
-   range, the chunk a taker claims at a time, the calling thread's globals
-   instance and the thunk a worker runs, which opens stacks of its own and
-   calls the body's function on the iterations it takes, with the free
-   variables' arguments the job holds after this header. The calling thread
-   takes chunks too, so where no worker starts (a JIT run, a range of one
-   chunk) it runs them all, in order. */
-#define GS_PFOR_MAXW 63
-typedef struct gs_pfor_job {
-    int64_t lo, hi, chunk;
-    int64_t next;
-    void *gl;
-    void (*thunk)(uint8_t *);
-    int64_t nworkers;
-    int64_t workers[GS_PFOR_MAXW];
-} gs_pfor_job;
-
-/* About eight chunks per thread that may run, so that uneven iterations
-   even out, and at least one iteration. */
+/* Gust: parallel for (§6.5), the program's part: a chunk's size, taking
+   one, and the worker thread program's start and end. The job and the pool
+   that runs it are the runtime's (gs_pfor_post). */
 static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
     int64_t n = hi > lo ? hi - lo : 0;
     int64_t t = gs_hardware_threads();
-    int64_t c = n / (t > 0 ? t * 8 : 8);
+)GSRT"
+R"GSRT(    int64_t c = n / (t > 0 ? t * 8 : 8);
     return c > 0 ? c : 1;
 }
 
@@ -1083,13 +1092,12 @@ static int64_t gs_pfor_take(gs_pfor_job *j) {
 }
 
 #if GS_NEED_THREADS
-)GSRT"
-R"GSRT(static void gs_pfor_run(void (*entry)(uint8_t *), uint8_t *args) {
+static void gs_pfor_run(void (*entry)(uint8_t *), uint8_t *args) {
     entry(args);
 }
 
-/* A worker ends: its stacks go, and the globals instance it read was the
-   calling thread's, which stays. */
+/* A worker ends: its stacks go, and the globals instance it last read was
+   the calling thread's, which stays. */
 static void gs_pfor_release(void) {
     gs_gl = NULL;
     free(gs_stks);
@@ -1098,27 +1106,16 @@ static void gs_pfor_release(void) {
 }
 #endif
 
-/* Workers for the chunks beyond the calling thread's first: at most one
-   fewer than hardware_threads() reports. */
 static void gs_pfor_start(gs_pfor_job *j) {
     j->nworkers = 0;
 #if GS_NEED_THREADS
-    int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
-    int64_t w = gs_hardware_threads() - 1;
-    if (w > chunks - 1) w = chunks - 1;
-    if (w > GS_PFOR_MAXW) w = GS_PFOR_MAXW;
-    for (int64_t i = 0; i < w; i++) {
-        gs_pfor_job *p = j;
-        j->workers[j->nworkers++] = gs_thread_start(gs_pfor_run, gs_pfor_release, j->thunk, &p, sizeof p, 0);
-    }
+    gs_pfor_post(j, gs_pfor_run, gs_pfor_release);
 #endif
 }
 
-/* The loop ends once every worker has: what they wrote is then this
-   thread's to read. */
 static void gs_pfor_finish(gs_pfor_job *j, const char *file, int line) {
 #if GS_NEED_THREADS
-    for (int64_t i = 0; i < j->nworkers; i++) gs_thread_wait(j->workers[i], NULL, NULL, file, line);
+    gs_pfor_wait(j);
 #endif
     (void)j;
     (void)file;
@@ -1284,9 +1281,9 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
 
+/* Byte search behind std's find_any and find_pair (runtime_impl.h): the
 )GSRT"
-R"GSRT(/* Byte search behind std's find_any and find_pair (runtime_impl.h): the
-   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
+R"GSRT(   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
    (i + d < n); -1 if there is none. A set is std's ByteSet. */
 GS_API int64_t gs_scan_any(const uint8_t *p, int64_t n, const void *set);
 GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t d,
@@ -3528,6 +3525,82 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
     return returned;
 }
 
+/* Gust: the parallel for pool (§6.5): workers started as the first jobs
+   want them, which wait between jobs. A job wakes them all; each runs its
+   thunk, which takes chunks until none is left, then reports that it is
+   done. One job holds the pool at a time, from its post to its wait. */
+static gs_mutex gs_pf_mutex = GS_MUTEX_INIT;
+static gs_cond gs_pf_wake = GS_COND_INIT;
+static gs_cond gs_pf_idle = GS_COND_INIT;
+static gs_pfor_job *gs_pf_job;
+static int64_t gs_pf_epoch, gs_pf_workers, gs_pf_running;
+static int gs_pf_busy;
+
+/* A short spin before a sleep: jobs that follow each other closely (an
+   n-body step's) find the workers awake, and the caller finds them done,
+   without the cost of a wake. Bounded, so an idle program sleeps. */
+#define GS_PF_SPIN 20000
+static int64_t gs_pf_load(int64_t *v) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    return *(volatile int64_t *)v;
+#else
+    return __atomic_load_n(v, __ATOMIC_ACQUIRE);
+#endif
+}
+
+static void gs_pfor_worker(uint8_t *p) {
+    (void)p;
+    int64_t seen = 0;
+    for (;;) {
+        for (int s = 0; s < GS_PF_SPIN && gs_pf_load(&gs_pf_epoch) == seen; s++) {}
+        gs_mutex_lock(&gs_pf_mutex);
+        while (gs_pf_epoch == seen) gs_cond_wait(&gs_pf_wake, &gs_pf_mutex);
+        seen = gs_pf_epoch;
+        gs_pfor_job *j = gs_pf_job;
+        gs_mutex_unlock(&gs_pf_mutex);
+        j->thunk((uint8_t *)&j);
+        gs_mutex_lock(&gs_pf_mutex);
+        if (--gs_pf_running == 0) gs_cond_broadcast(&gs_pf_idle);
+        gs_mutex_unlock(&gs_pf_mutex);
+    }
+}
+
+GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_t *),
+                         void (*release)(void)) {
+    j->nworkers = 0;
+    int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
+    int64_t want = gs_hardware_threads() - 1;
+    if (want > chunks - 1) want = chunks - 1;
+    if (want > GS_PFOR_MAXW) want = GS_PFOR_MAXW;
+    if (want <= 0) return;
+    gs_mutex_lock(&gs_pf_mutex);
+    if (gs_pf_busy) {
+        gs_mutex_unlock(&gs_pf_mutex);
+        return;
+    }
+    gs_pf_busy = 1;
+    while (gs_pf_workers < want) {
+        gs_pf_workers++;
+        gs_thread_start(run, release, gs_pfor_worker, NULL, 0, 0);
+    }
+    gs_pf_job = j;
+    gs_pf_running = gs_pf_workers;
+    gs_pf_epoch++;
+    j->nworkers = gs_pf_workers;
+    gs_cond_broadcast(&gs_pf_wake);
+    gs_mutex_unlock(&gs_pf_mutex);
+}
+
+GS_API void gs_pfor_wait(gs_pfor_job *j) {
+    if (!j->nworkers) return;
+    for (int s = 0; s < GS_PF_SPIN && gs_pf_load(&gs_pf_running) > 0; s++) {}
+    gs_mutex_lock(&gs_pf_mutex);
+    while (gs_pf_running > 0) gs_cond_wait(&gs_pf_idle, &gs_pf_mutex);
+    gs_pf_job = NULL;
+    gs_pf_busy = 0;
+    gs_mutex_unlock(&gs_pf_mutex);
+}
+
 GS_API void gs_free_msg(uint8_t *msg) {
     free(msg);
 }
@@ -3563,7 +3636,8 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
         int64_t ms = (left + 999999) / 1000000;
         SleepConditionVariableSRW(c, m, ms < INFINITE ? (DWORD)ms : INFINITE - 1, 0);
     #elif defined(__APPLE__)
-        struct timespec ts = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
+)GSRT"
+R"GSRT(        struct timespec ts = { (time_t)(left / 1000000000), (long)(left % 1000000000) };
         pthread_cond_timedwait_relative_np(c, m, &ts);
     #else
         struct timespec ts = { (time_t)(deadline / 1000000000), (long)(deadline % 1000000000) };
@@ -3648,8 +3722,7 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
 
 GS_API gs_qnode *gs_qpoll(gs_queue *q) { return gs_qwait(q, 0); }
 
-)GSRT"
-R"GSRT(GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
+GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
     if (n <= 0) gs_abort(GS_E_QBOUND, file, line);
     struct gs_qstate *s = *q;
     gs_mutex_lock(&s->mutex);

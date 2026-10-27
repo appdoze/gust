@@ -925,6 +925,30 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                                const char *file, int line);
 GS_API void gs_free_msg(uint8_t *msg);
 
+/* Gust: parallel for (§6.5). A job per loop run, which the compiler fills:
+   the range, the chunk a taker claims at a time, the calling thread's
+   globals instance and the thunk a worker runs, which opens stacks of its
+   own and calls the body's function on the iterations it takes, with the
+   free variables' arguments the job holds after this header. The calling
+   thread takes chunks too, so where no worker joins (a JIT run, a range of
+   one chunk, a parallel for inside another) it runs them all, in order. */
+#define GS_PFOR_MAXW 63
+typedef struct gs_pfor_job {
+    int64_t lo, hi, chunk;
+    int64_t next;
+    void *gl;
+    void (*thunk)(uint8_t *);
+    int64_t nworkers;
+} gs_pfor_job;
+/* Hands the job to the pool of workers the runtime keeps, starting the ones
+   it lacks with `run` and `release`, the program's thread program start
+   and end; sets how many joined. None join while another job holds the
+   pool. */
+GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_t *),
+                         void (*release)(void));
+/* Returns once every worker that joined the job has left it. */
+GS_API void gs_pfor_wait(gs_pfor_job *j);
+
 /* One queue per flat element type the program uses (the compiler emits a
    gs_queue global per type, which main sets up before anything can use it).
    Values are contiguous byte images: gs_qget, gs_qwait and gs_qpoll return a
@@ -1023,25 +1047,9 @@ static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64
 }
 #endif
 
-/* Gust: parallel for (§6.5). The compiler fills a job per loop run: the
-   range, the chunk a taker claims at a time, the calling thread's globals
-   instance and the thunk a worker runs, which opens stacks of its own and
-   calls the body's function on the iterations it takes, with the free
-   variables' arguments the job holds after this header. The calling thread
-   takes chunks too, so where no worker starts (a JIT run, a range of one
-   chunk) it runs them all, in order. */
-#define GS_PFOR_MAXW 63
-typedef struct gs_pfor_job {
-    int64_t lo, hi, chunk;
-    int64_t next;
-    void *gl;
-    void (*thunk)(uint8_t *);
-    int64_t nworkers;
-    int64_t workers[GS_PFOR_MAXW];
-} gs_pfor_job;
-
-/* About eight chunks per thread that may run, so that uneven iterations
-   even out, and at least one iteration. */
+/* Gust: parallel for (§6.5), the program's part: a chunk's size, taking
+   one, and the worker thread program's start and end. The job and the pool
+   that runs it are the runtime's (gs_pfor_post). */
 static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
     int64_t n = hi > lo ? hi - lo : 0;
     int64_t t = gs_hardware_threads();
@@ -1069,8 +1077,8 @@ static void gs_pfor_run(void (*entry)(uint8_t *), uint8_t *args) {
     entry(args);
 }
 
-/* A worker ends: its stacks go, and the globals instance it read was the
-   calling thread's, which stays. */
+/* A worker ends: its stacks go, and the globals instance it last read was
+   the calling thread's, which stays. */
 static void gs_pfor_release(void) {
     gs_gl = NULL;
     free(gs_stks);
@@ -1079,27 +1087,16 @@ static void gs_pfor_release(void) {
 }
 #endif
 
-/* Workers for the chunks beyond the calling thread's first: at most one
-   fewer than hardware_threads() reports. */
 static void gs_pfor_start(gs_pfor_job *j) {
     j->nworkers = 0;
 #if GS_NEED_THREADS
-    int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
-    int64_t w = gs_hardware_threads() - 1;
-    if (w > chunks - 1) w = chunks - 1;
-    if (w > GS_PFOR_MAXW) w = GS_PFOR_MAXW;
-    for (int64_t i = 0; i < w; i++) {
-        gs_pfor_job *p = j;
-        j->workers[j->nworkers++] = gs_thread_start(gs_pfor_run, gs_pfor_release, j->thunk, &p, sizeof p, 0);
-    }
+    gs_pfor_post(j, gs_pfor_run, gs_pfor_release);
 #endif
 }
 
-/* The loop ends once every worker has: what they wrote is then this
-   thread's to read. */
 static void gs_pfor_finish(gs_pfor_job *j, const char *file, int line) {
 #if GS_NEED_THREADS
-    for (int64_t i = 0; i < j->nworkers; i++) gs_thread_wait(j->workers[i], NULL, NULL, file, line);
+    gs_pfor_wait(j);
 #endif
     (void)j;
     (void)file;

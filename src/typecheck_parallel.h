@@ -68,6 +68,79 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
         return t && t->kind == TY_ARRAY ? a->vdef : nullptr;
     };
     auto fail = [&](Node *at, const string &why) { Error(at, cat("a parallel for's body ", why)); };
+    // Whether a callee writes through its parameter j, a reference or a
+    // slice it takes without const but may only read (a scene's spheres
+    // handed to a tracer): what its body writes there, through a reference
+    // of its own into it, or hands on to a callee that writes it, as a
+    // fixpoint over the calls, which recursion needs.
+    map<pair<FnSpec *, size_t>, bool> pwrites;
+    map<pair<FnSpec *, size_t>, vector<pair<FnSpec *, size_t>>> passes;
+    set<FnSpec *> scanned;
+    auto mutparam = [](TypeExpr *pt) {
+        return pt && !pt->cq &&
+               ((pt->kind == TY_REF && !(pt->ref && pt->ref->sub && pt->ref->sub->cq)) ||
+                (pt->kind == TY_SLICE && !(pt->sub && pt->sub->cq)));
+    };
+    function<void(FnSpec *)> scan = [&](FnSpec *k) {
+        if (!k || !scanned.insert(k).second) return;
+        for (size_t j = 0; j < k->params.size(); j++) {
+            pwrites[{ k, j }] = k->sf && k->sf->isextern && j < k->argtypes.size() && mutparam(k->argtypes[j]);
+            passes[{ k, j }];
+        }
+        if (!k->body) return;
+        // The parameter a place names: itself, or a reference of the body's
+        // own that points into it.
+        auto param = [&](Node *place) -> int {
+            auto v = base(place);
+            for (size_t j = 0; v && j < k->params.size(); j++) {
+                if (v == k->params[j]) return (int)j;
+                for (auto &a : v->ref.alts) if (a.root == k->params[j]) return (int)j;
+            }
+            return -1;
+        };
+        function<void(Node *)> walk = [&](Node *n) {
+            if (!n) return;
+            auto direct = [&](Node *place) {
+                if (auto j = param(place); j >= 0) pwrites[{ k, (size_t)j }] = true;
+            };
+            if (auto a = Is<Assign>(n)) direct(a->lval);
+            else if (auto inc = Is<IncDec>(n)) direct(inc->lval);
+            else if (auto fl = Is<ForLoop>(n); fl && fl->byref) direct(fl->iter);
+            else if (auto cl = Is<Call>(n)) {
+                auto an = cl->ArgNodes();
+                if (cl->builtin >= 0) {
+                    if ((BuiltinByKind(cl->builtin).flags & BF_WRITE) && !an.empty()) direct(an[0]);
+                } else {
+                    vector<FnSpec *> ts;
+                    if (cl->spec) ts.push_back(cl->spec);
+                    for (auto d : cl->dispatch) ts.push_back(d);
+                    for (auto t : ts) {
+                        scan(t);
+                        for (size_t m = 0; m < an.size() && m < t->argtypes.size(); m++)
+                            if (mutparam(t->argtypes[m]))
+                                if (auto j = param(an[m]); j >= 0) passes[{ k, (size_t)j }].push_back({ t, m });
+                    }
+                }
+            }
+            RunChildren(n, walk);
+        };
+        walk(k->body);
+    };
+    auto writesparam = [&](FnSpec *k, size_t j) {
+        scan(k);
+        for (auto changed = true; changed;) {
+            changed = false;
+            for (auto &[from, tos] : passes)
+                if (!pwrites[from])
+                    for (auto &to : tos)
+                        if (pwrites[to]) {
+                            pwrites[from] = true;
+                            changed = true;
+                            break;
+                        }
+        }
+        return pwrites[{ k, j }];
+    };
     set<VarDef *> written;
     auto write = [&](Node *place, Node *at, const char *how) {
         auto v = base(place);
@@ -155,13 +228,9 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
             } else if (cl->spec) {
                 // What it is handed for writing: the enclosing code's storage
                 // only as the iteration's own element.
-                for (size_t j = 0; j < an.size() && j < cl->spec->argtypes.size(); j++) {
-                    auto pt = cl->spec->argtypes[j];
-                    auto mut = pt && !pt->cq &&
-                               ((pt->kind == TY_REF && !(pt->ref && pt->ref->sub && pt->ref->sub->cq)) ||
-                                (pt->kind == TY_SLICE && !(pt->sub && pt->sub->cq)));
-                    if (mut) write(an[j], an[j], "hands for writing");
-                }
+                for (size_t j = 0; j < an.size() && j < cl->spec->argtypes.size(); j++)
+                    if (mutparam(cl->spec->argtypes[j]) && writesparam(cl->spec, j))
+                        write(an[j], an[j], "hands for writing");
                 callee(cl->spec, n);
                 for (auto d : cl->dispatch) callee(d, n);
             }

@@ -87,10 +87,14 @@ git log upstream/master..main
   those only there, writes no global or other variable around the loop, and
   calls nothing that does nor any extern outside the standard library.
   Codegen (`src/codegen_parallel.h`, new) fills a job with the free
-  variables' arguments, starts up to `hardware_threads() - 1` workers with
-  stacks of their own that share the caller's globals, and has every thread
-  take chunks of the range (`src/runtime/runtime.h`); a JIT run takes them
-  all on the calling thread, in order. The body is never inlined
+  variables' arguments and hands it to a pool of up to `hardware_threads() -
+  1` workers the runtime keeps (`src/runtime/runtime_threads.h`), each with
+  stacks of its own, which read the caller's globals; every thread takes
+  chunks of the range (`src/runtime/runtime.h`), and workers spin briefly
+  between jobs before they sleep. A JIT run, and a parallel for inside
+  another, take every chunk on the calling thread, in order. A callee may
+  take the enclosing code's storage for writing where it only reads it,
+  which a fixpoint over the calls finds. The body is never inlined
   (`src/optimize.h`). `test/codegen/parallel_for.goose` (new) prints the
   same in a JIT run and in builds at -O0 and -O2; ten rejection fixtures in
   `test/errors_tc/` and two in `test/errors/` (new).
