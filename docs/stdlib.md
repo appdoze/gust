@@ -12,6 +12,7 @@
 - [math](#math)
 - [os](#os)
 - [net](#net)
+- [http](#http)
 - [ffi](#ffi)
 - [binary](#binary)
 - [base64](#base64)
@@ -25,8 +26,8 @@
 
 </details>
 
-The standard library has eighteen modules under `stdlib/`: `std`,
-`dictionary`, `slots`, `vec`, `math`, `os`, `net`, `ffi`, `binary`, `base64`, `csv`, `json`,
+The standard library has nineteen modules under `stdlib/`: `std`,
+`dictionary`, `slots`, `vec`, `math`, `os`, `net`, `http`, `ffi`, `binary`, `base64`, `csv`, `json`,
 `regex`, `audio`, `gfx`, `physics`, `ui`, and `exception`. Import each module by name,
 for example `import std;`. The compiler locates the library in its source
 tree; use `--stdlib <dir>` or `GOOSE_STDLIB` to select another location.
@@ -952,6 +953,37 @@ What it does not have yet: IPv6, names other than `localhost` (no DNS),
 TLS and UDP. IOCP completions, whose buffers the OS owns until they
 finish, would need `serve`'s buffers to be the runtime's
 (`docs/gust/backend_api.md` §6).
+
+## http
+*Gust.* An HTTP/1.1 client over `net`, one request per connection (it
+sends `Connection: close`). A request returns the reply's status and
+appends its body to `body`: a body of `Content-Length` bytes, a chunked one
+(decoded, extensions and trailer dropped), or one that ends where the
+server closes. A result below 0 is `net`'s error (connecting, sending or
+receiving), `net::TIMEOUT` where nothing came for `timeout_ms`, or
+`http::PROTOCOL` for a reply that is not HTTP/1.x. A 1xx, 204 or 304 reply
+has no body.
+<!-- fragment -->
+```goose
+fn get(host: const u8[:], port: i64, path: const u8[:], body: u8[>..]&, timeout_ms: i64 = 10000) -> i64
+fn post(host: const u8[:], port: i64, path: const u8[:], payload: const u8[:], content_type: const u8[:],
+        body: u8[>..]&, timeout_ms: i64 = 10000) -> i64
+fn request(method: const u8[:], host: const u8[:], port: i64, path: const u8[:], payload: const u8[:],
+           content_type: const u8[:], body: u8[>..]&, timeout_ms: i64 = 10000) -> i64
+const PROTOCOL = -100
+```
+```goose
+import http;
+
+fn main() {
+    var body: u8[>..] = [];
+    let status = http::get("127.0.0.1", 8080, "/hello", body);
+    if status == 200 { print(body); }
+}
+```
+Hosts are what `net::connect` takes: an IPv4 address or `localhost`, with
+no DNS and no TLS yet. `test/threads/http_client.goose` runs each kind of
+body against a server thread.
 
 ## ffi
 

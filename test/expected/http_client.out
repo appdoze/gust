@@ -1,0 +1,6 @@
+plain 200 hello
+chunked 200 Gust says hi!
+close 404 no such page
+post 201 name=gust&n=1
+empty 204 []
+not http true

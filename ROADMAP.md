@@ -270,7 +270,8 @@ the plain function.
 - **Compile-time plugin registration** with `const for` (routers, event handlers resolved at
   compile time), instead of closures-as-objects.
 - **Thread-per-core async I/O**: each worker owns its connections and event loop; then an
-  HTTP server and client library on it. **(the first half done, without async: the
+  HTTP server and client library on it. **(The client library done: `stdlib/http.goose`, HTTP/1.1 over `net`;
+  the server is `examples/api/http.gust`, not yet a library.)** **(the first half done, without async: the
   standard library's `net`, `stdlib/net.goose` over `src/runtime/runtime_net.h`, with
   checked handles, thread ownership, a runtime that closes an ended thread's sockets, and
   `net::serve`, an event loop with bounded output, streaming and backpressure; tested in

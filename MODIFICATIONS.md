@@ -241,6 +241,12 @@ git log upstream/master..main
 
 ## Standard library
 
+- `stdlib/http.goose` (new): an HTTP/1.1 client over `net`, `get`, `post`
+  and `request`, one request per connection: a body by Content-Length, in
+  chunks (decoded) or to the server's close, the status as the result, and
+  net's errors or `PROTOCOL` below 0. `test/threads/http_client.goose`
+  (new) against a server thread; `docs/stdlib.md`.
+
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
   over a `reusable` pool: a handle names one allocation by index and serial
   number, and using it after the allocation is released, or releasing it
