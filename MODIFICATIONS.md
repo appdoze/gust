@@ -107,7 +107,11 @@ git log upstream/master..main
   last worker. `compare/gust/parallel.goose`, `compare/rust_parallel/`
   (Rust with rayon) and `compare/run_parallel.py` (new) measure nbody and
   raytrace against rayon, which CI checks; `compare/safety/` probes 11 to 13
-  (new) race through `parallel for`, each a compile error.
+  (new) race through `parallel for`, each a compile error. Then `reduce x
+  += e;` in the body (`src/parser.h`, `ParseReduce`): an iteration's slot of
+  an array `parallel_reduce_slots` (`stdlib/std.goose`, which the parser
+  imports for it) makes before the loop, added into `x` in order after it,
+  the bounds evaluated once; two rejection fixtures in `test/errors/`.
 - `src/packages.h`: a sidecar may say `edition = "2026";`, the one edition
   so far (`docs/gust/stability.md`, new: what 1.0 will freeze, editions,
   versions and deprecation).

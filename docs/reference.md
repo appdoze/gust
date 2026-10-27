@@ -2624,6 +2624,26 @@ fn main() {
 332840500
 ```
 
+`reduce x += e;` in the body adds into a variable around the loop with the
+result of the loop run in order, bit for bit, whatever the thread count:
+each iteration adds into a slot of its own, and the slots are added into
+`x` in order after the loop. A body reduces a variable once, outside any
+loop of its own.
+
+```goose
+fn main() {
+    var total = 0.0;
+    parallel for i in 1000 { reduce total += 1.0 / (i + 1); }
+    var inorder = 0.0;
+    for i in 1000 { inorder += 1.0 / (i + 1); }
+    print(total == inorder);
+}
+```
+
+```
+true
+```
+
 ### Labels on loops and blocks (Gust)
 
 A label names a loop or `block` (`outer: for …`), and `break :outer` or

@@ -1,7 +1,8 @@
 // Gust: `parallel for` (§6.5). Iterations run on workers in a build and in
 // order in a JIT run, and the output is the same either way: each writes
 // only its own element of arrays the enclosing code owns, reads what no
-// iteration writes, and keeps its own storage on its own thread's stacks.
+// iteration writes, and keeps its own storage on its own thread's stacks;
+// a reduce adds as the loop run in order does.
 
 import std;
 
@@ -94,4 +95,19 @@ fn main() {
     far.push_n(0.0, 50);
     parallel for i in 50 { far[i] = farthest(pts, i * 1.0); }
     print("by-reference reads ", far[0], " ", far[49]);
+
+    // Reductions: what the loop run in order adds, bit for bit, an
+    // iteration that continues adding nothing; over a range too.
+    var sq = 0.0;
+    var odd = 0;
+    parallel for i in 20000 {
+        if i % 2 == 0 { continue; }
+        reduce sq += 1.0 / (i * i);
+        reduce odd += 1;
+    }
+    var inorder = 0.0;
+    for i in 20000 { if i % 2 == 1 { inorder += 1.0 / (i * i); } }
+    var span = 0;
+    parallel for i in 10..20 { reduce span += i * i; }
+    print("reductions ", sq == inorder, " ", sq, " ", odd, " ", span);
 }

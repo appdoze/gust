@@ -206,8 +206,10 @@ Write the spec first; these change the language.
   its own thread.)**
 - **Deterministic reductions**: the same floating-point result at any thread count.
   **(By construction for the form `parallel for` allows: each iteration writes its own
-  element and the loop after it sums them in order, which no thread count changes. A
-  reduction written into the loop itself, `reduce s += e`, is not done.)**
+  element and the loop after it sums them in order, which no thread count changes. And
+  written into the loop itself, `reduce s += e;`: the parser gives each iteration a slot
+  of its own and adds the slots into `s` in order after the loop, bit for bit the result
+  of the loop run in order; `test/codegen/parallel_for.goose`.)**
 - **Freeze-then-share**: large read-only data built at run time, read by every worker in
   place. **(For a `parallel for`'s duration, done: its workers read the enclosing code's
   data and the globals in place, which the checker keeps every iteration from writing.

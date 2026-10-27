@@ -482,6 +482,14 @@ fn sum<T>(xs: T[:]) -> T {
     return s;
 }
 
+// Gust: the slots a parallel for's `reduce x += e` adds into, one an
+// iteration (spec §6.5): n of x's type, each its default, zero.
+fn parallel_reduce_slots<T>(like: T, n: i64) -> T[>..] {
+    var s: T[>..] = [];
+    s.push_n(default<T>(), max(n, 0));
+    return s;
+}
+
 fn concat<T>(a: T[:], b: T[:]) -> T[>..] {
     var out: T[>..] = [];
     out.append(a);

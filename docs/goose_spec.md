@@ -2404,6 +2404,17 @@ what another writes. The checker proves it of the body:
 * It uses no threads or queues. `return` and a `break` out of the body are
   errors; `continue` ends the iteration.
 
+`reduce x += e;` in the body (`reduce` is a word only so, there) adds `e`
+into a variable `x` of the enclosing code, as `x += e` would in the loop run
+in order, with the same result bit for bit at any thread count: each
+iteration adds into a slot of its own, zero to begin with, and after the
+loop the slots are added into `x` in the order of the iterations. An
+iteration that ends before its `reduce` adds nothing (a zero, which leaves
+any `x` but `-0.0` as it was). A body reduces a variable at most once, and
+not inside a loop of its own; the slots are an array of `x`'s type as long
+as the count (`parallel_reduce_slots`, the standard library's, which the
+parser imports for it).
+
 Anything else the body reads, globals included, it reads in place, without
 a copy: nothing writes it while the loop runs. The loop counts (`in n`, `in
 a..b`) with one binder; an array is iterated as `parallel for i in a.len`,

@@ -4,3 +4,4 @@ fields 55388972.25 1994 1.0 0.0
 ranges -1 100 361 -1 1
 read-only callee 3185 152 1724
 by-reference reads 499.5 450.5
+reductions true 1.233675550136196 10000 2185

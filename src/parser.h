@@ -1336,6 +1336,7 @@ struct Parser {
         if (lex.tok == T_BITAND) Role(R_UNARY);
         auto byref = IsNext(T_BITAND);
         auto var = ExpectIdent("for binding");
+        if (bodyfn) pforvar = var;   // Gust: what a reduce's slot is indexed by.
         TypeExpr *vartype = nullptr, *idxtype = nullptr;
         string_view idxvar;
         {
@@ -1384,6 +1385,43 @@ struct Parser {
     // own jumps the body's function cannot take (ParseParallelFor).
     SFunction *pforfn = nullptr;
     int pforloops = 0, pforbreaks = 0;
+    // Gust: the `reduce x += e;` statements of that body, and its binder:
+    // each iteration adds e into its own element of a hidden array, which
+    // the loop's own-index rule lets it write, and after the loop the
+    // elements are added into x in order, which gives what the loop run in
+    // order gives at any thread count (ParseReduce, ParseParallelFor).
+    struct PforReduce {
+        string_view var, slots;
+        Line line;
+    };
+    vector<PforReduce> pforreduces;
+    string_view pforvar;
+
+    Node *ParseReduce() {
+        auto line = CurLine();
+        lex.Next();   // `reduce`
+        auto var = ExpectIdent("reduce");
+        if (pforloops)
+            Error("a reduce adds once an iteration: not in a loop inside the parallel for's body");
+        for (auto &r : pforreduces)
+            if (r.var == var) Error(cat("a parallel for's body reduces ", var, " once"));
+        Expect(T_PLUSEQ, "reduce");
+        auto e = ParseExpr();
+        Expect(T_SEMI, "reduce");
+        auto slots = ast.Intern(cat("reduce#", parallelfors, "#", var));
+        pforreduces.push_back({ var, slots, line });
+        // The slots come from the standard library's parallel_reduce_slots.
+        auto hasstd = false;
+        for (auto &imp : imports) hasstd = hasstd || (!imp.relative && imp.path == "std" && imp.source.empty());
+        if (!hasstd) {
+            Import imp;
+            imp.line = line;
+            imp.path = "std";
+            imports.push_back(imp);
+        }
+        auto lval = New<Index>(line, New<Ident>(line, slots), New<Ident>(line, pforvar));
+        return Finish(New<Assign>(line, T_PLUSEQ, lval, e));
+    }
     struct PforDepth {
         Parser &p;
         bool on, loop;
@@ -1419,21 +1457,31 @@ struct Parser {
         sf->parallelbody = true;
         sf->name = ast.Intern(cat("parallel_for_", ++parallelfors));
         ForLoop *f;
+        vector<PforReduce> reduces;
+        auto k = parallelfors;
         {
             struct Saved {
                 Parser &p;
                 SFunction *fn;
                 int loops, breaks;
-                Saved(Parser &_p) : p(_p), fn(_p.pforfn), loops(_p.pforloops), breaks(_p.pforbreaks) {}
+                vector<PforReduce> reduces;
+                string_view var;
+                Saved(Parser &_p)
+                    : p(_p), fn(_p.pforfn), loops(_p.pforloops), breaks(_p.pforbreaks), reduces(_p.pforreduces),
+                      var(_p.pforvar) {}
                 ~Saved() {
                     p.pforfn = fn;
                     p.pforloops = loops;
                     p.pforbreaks = breaks;
+                    p.pforreduces = reduces;
+                    p.pforvar = var;
                 }
             } saved(*this);
             pforfn = sf;
             pforloops = pforbreaks = 0;
+            pforreduces.clear();
             f = (ForLoop *)ParseFor(sf);
+            reduces = pforreduces;
         }
         Param p;
         p.name = f->var;
@@ -1454,8 +1502,54 @@ struct Parser {
         f->body = nb;
         f->parallel = sf;
         auto outer = New<Block>(line);
+        if (reduces.empty()) {
+            outer->stmts.push_back(New<FnDecl>(line, sf));
+            outer->stmts.push_back(f);
+            if (stmt_level) stmt_ended = true;
+            return outer;
+        }
+        // Gust: reductions (ParseReduce). The bounds are evaluated once, the
+        // slots come before the body's function that writes them, and after
+        // the loop each variable takes its slots in the order of the
+        // iterations: `let n = ..; var slots = parallel_reduce_slots(x, n);
+        // parallel for i in n { .. slots[i] += e; .. } for j in n { x += slots[j]; }`.
+        auto id = [&](string_view name) { return New<Ident>(line, name); };
+        auto bound = [&](const char *what, Node *e) {
+            auto name = ast.Intern(cat("reduce#", k, "#", what));
+            auto vd = New<VarDecl>(line, false);
+            vd->names.push_back(name);
+            vd->inits.push_back(e);
+            outer->stmts.push_back(vd);
+            return name;
+        };
+        string_view lo, hi;
+        if (auto r = Is<RangeExpr>(f->iter)) {
+            lo = bound("lo", r->lo);
+            hi = bound("hi", r->hi);
+            r->lo = id(lo);
+            r->hi = id(hi);
+        } else {
+            hi = bound("n", f->iter);
+            f->iter = id(hi);
+        }
+        for (auto &r : reduces) {
+            auto vd = New<VarDecl>(line, true);
+            vd->names.push_back(r.slots);
+            auto c = New<Call>(r.line, id(ast.Intern("parallel_reduce_slots")));
+            c->args.push_back(id(r.var));
+            c->args.push_back(id(hi));
+            vd->inits.push_back(c);
+            outer->stmts.push_back(vd);
+        }
         outer->stmts.push_back(New<FnDecl>(line, sf));
         outer->stmts.push_back(f);
+        for (auto &r : reduces) {
+            auto j = ast.Intern(cat("reduce#", k, "#", r.var, "#j"));
+            auto body = New<Block>(r.line);
+            body->stmts.push_back(New<Assign>(r.line, T_PLUSEQ, id(r.var), New<Index>(r.line, id(r.slots), id(j))));
+            Node *iter = lo.empty() ? (Node *)id(hi) : New<RangeExpr>(r.line, id(lo), id(hi));
+            outer->stmts.push_back(New<ForLoop>(r.line, false, j, string_view(), iter, body));
+        }
         if (stmt_level) stmt_ended = true;
         return outer;
     }
@@ -2109,6 +2203,13 @@ struct Parser {
                 ParseGuard(b);
                 return false;
             default: break;
+        }
+        // Gust: `reduce x += e;`, a word only so, in a parallel for's body
+        // (§6.5, ParseReduce).
+        if (lex.tok == T_IDENT && lex.attr == "reduce" && pforfn && curfn == pforfn &&
+            lex.PeekTok() == T_IDENT && lex.PeekTok2() == T_PLUSEQ) {
+            b->stmts.push_back(ParseReduce());
+            return true;
         }
         stmt_level = true;
         auto e = ParseExpr();
