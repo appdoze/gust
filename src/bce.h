@@ -99,6 +99,16 @@
 // with what its other sites prove when, granted that at entry, its own
 // calls prove it too, which by induction on the depth of recursion makes it
 // hold at every call (InductiveEntry; dry runs that mark nothing find it).
+// Gust: a body that resizes an array it is handed by reference also has an
+// exit summary (ExitSum): how that length at each exit relates to the
+// length and the integer parameters at entry, found by dry runs callees
+// first, assuming the integer parameters it needs nonnegative, which a
+// call site has to prove before it gets the summary (`xs.push_n(v, n)`
+// leaves `xs.len >= n`, `xs.clear(); for i in n { xs.push(i); }` leaves n).
+// Inlined, such a parameter is a `let` reference to the caller's variable,
+// which names that variable's array (mustref). And where one path of an if
+// changed a length and the other did not, the join keeps what both know of
+// it (RenamedLens): a push on one path leaves `old <= len <= old + 1`.
 //
 // Loops: a body is first walked in a kills-only mode to invalidate whatever
 // any earlier iteration may have changed, then walked for real; while-loop
@@ -435,6 +445,12 @@ struct BCE {
     // `readsref`: the path reads a reference stored in a field (PlaceOf).
     int PlaceFor(VarDef *root, const vector<int> &path, TypeExpr *t, bool readsref = false) {
         if (t && t->kind == TY_REF) t = t->ref->sub;
+        // Gust: a `let` reference bound to a variable names that variable's
+        // array for as long as it exists (an inlined call's reference
+        // parameter), so it is that array's place.
+        if (path.empty())
+            for (auto it = mustref.find(root); it != mustref.end(); it = mustref.find(root))
+                root = it->second;
         auto slice = t && t->kind == TY_SLICE;
         auto arr = t && t->kind == TY_ARRAY && t->arr->akind != A_FIXED;
         if (!slice && !arr) return -1;
@@ -703,6 +719,27 @@ struct BCE {
     FnSpec *dry = nullptr;
     Sites drysites;
     const Sites *seedover = nullptr;   // The entry facts to grant, in place of sites'.
+
+    // Gust: what a body leaves of the length of each array it is handed by
+    // reference, for its callers (ComputeExitSums): per such parameter j,
+    // per interface base k (InterfaceOf), up[k] for `exit <= base_k + up[k]`
+    // and dn[k] for `base_k <= exit + dn[k]`, the bases as the body entered.
+    // They were found assuming the parameters in hyp nonnegative, so a call
+    // site that proves those gets them about its arguments (PlanExit).
+    struct ExitSum {
+        vector<int> hyp;
+        map<int, pair<vector<int64_t>, vector<int64_t>>> lens;
+    };
+    map<FnSpec *, ExitSum> exitsums;
+    // Gust: each `let` reference whose initializer is a variable's array
+    // (`let xs = &acc`), to that variable (PlaceFor).
+    map<VarDef *, VarDef *> mustref;
+    ExitSum *exitrec = nullptr;      // Where a summarizing run meets its exits.
+    FnSpec *exitspec = nullptr;      // The body it summarizes.
+    vector<Base> entrybases;         // Its interface bases at entry.
+    vector<bool> entryok;
+    vector<VarDef *> exithyp;        // The parameters it assumes nonnegative.
+    int inlinedepth = 0;             // Within an inlined body, whose returns are not exits.
 
     // ------------------------------------------------------------------
     // Index and bound types (§3.11). A value of one is below its array's
@@ -1131,7 +1168,12 @@ struct BCE {
             if (!IntBaseVar(id->vdef)) return {};
             return Term { true, VarBase(id->vdef), 0 };
         }
-        if (auto d = Is<Dot>(n); d && d->member == B_LEN) return LenTermOf(d->obj);
+        if (auto d = Is<Dot>(n); d && d->member == B_LEN) {
+            // Gust: a length is within [0, 2^48] whatever holds it, a call's
+            // result (`args().len`) too, which no place names.
+            auto t = LenTermOf(d->obj);
+            return t.ok || mode == M_KILLS ? t : IvalTerm(n->exprtype, 0, LENMAX);
+        }
         if (auto b = Is<Binary>(n); b && (b->op == T_PLUS || b->op == T_MINUS)) {
             auto t = OpType(b);
             if (!MachineInt(t)) return {};
@@ -2152,6 +2194,97 @@ struct BCE {
             }
     }
 
+    // Gust: exit summaries (ExitSum). A summarizing run assumes its
+    // hypothesis at entry and pins the interface bases there, whose facts
+    // stay true of those generations however the body moves on.
+    void EnterSummarized(FnSpec *sp) {
+        for (auto p : exithyp) AddFactB(Zero(), VarBase(p), 0);
+        if (!exitrec) return;
+        auto &bases = InterfaceOf(sp).bases;
+        entrybases.assign(bases.size(), Zero());
+        entryok.assign(bases.size(), true);
+        for (size_t k = 1; k < bases.size(); k++) {
+            auto [islen, j] = bases[k];
+            auto p = sp->params[j];
+            auto pid = islen ? PlaceOfVar(p) : -1;
+            entryok[k] = !islen || pid >= 0;
+            if (entryok[k]) entrybases[k] = islen ? LenBase(pid) : VarBase(p);
+        }
+    }
+
+    // One exit of the summarized body: the meet of what each exit proves.
+    void RecordExit() {
+        auto n = entrybases.size();
+        for (auto &[j, row] : exitrec->lens) {
+            auto &[up, dn] = row;
+            if (up.empty()) {
+                up.assign(n, INT64_MIN);
+                dn.assign(n, INT64_MIN);
+            }
+            auto pid = PlaceOfVar(exitspec->params[j]);
+            for (size_t k = 0; k < n; k++) {
+                auto post = pid >= 0 ? LenBase(pid) : Zero();
+                auto u = pid >= 0 && entryok[k] ? Dist(post, entrybases[k]) : INF;
+                auto d = pid >= 0 && entryok[k] ? Dist(entrybases[k], post) : INF;
+                up[k] = std::max(up[k], u);
+                dn[k] = std::max(dn[k], d);
+            }
+        }
+    }
+
+    // A call whose target has an exit summary, at a site that proves its
+    // hypothesis: the caller's terms for the target's interface bases,
+    // read before the call's kills, and the places its arguments name.
+    struct ExitPlan {
+        const ExitSum *s = nullptr;
+        vector<Term> terms;
+        vector<int> pids;
+    };
+    ExitPlan PlanExit(Call *c, const vector<Node *> &an, const vector<Term> &ints,
+                      const vector<Term> &slens, bool moved) {
+        ExitPlan P;
+        if (mode == M_KILLS || !c->spec || !c->dispatch.empty()) return P;
+        auto it = exitsums.find(c->spec);
+        if (it == exitsums.end() || an.size() < c->spec->params.size() ||
+            ints.size() < c->spec->params.size())
+            return P;
+        auto &s = it->second;
+        for (auto k : s.hyp)
+            if (!ints[k].ok || !Query(Zero(), ints[k].b, ints[k].off)) return P;
+        auto &bases = InterfaceOf(c->spec).bases;
+        P.terms.assign(bases.size(), Term {});
+        P.terms[0] = Term { true, Zero(), 0 };
+        for (size_t k = 1; k < bases.size(); k++) {
+            auto [islen, j] = bases[k];
+            P.terms[k] = islen ? (moved ? Term {} : ArgLenTerm(an[j], slens[j])) : ints[j];
+        }
+        for (auto &[j, row] : s.lens) {
+            auto a = an[j];
+            if (auto u = Is<Unary>(a); u && u->op == T_BITAND) a = u->child;
+            P.pids.push_back(PlaceOf(a));
+        }
+        P.s = &s;
+        return P;
+    }
+
+    // After the call's kills: the lengths it left, related to the terms.
+    void ExitFacts(const ExitPlan &P) {
+        if (!P.s) return;
+        size_t i = 0;
+        for (auto &[j, row] : P.s->lens) {
+            auto pid = P.pids[i++];
+            if (pid < 0) continue;
+            auto post = LenBase(pid);
+            auto &[up, dn] = row;
+            for (size_t k = 0; k < P.terms.size() && k < up.size(); k++) {
+                auto &t = P.terms[k];
+                if (!t.ok) continue;
+                if (up[k] != INF) AddFactB(post, t.b, SatAdd(up[k], t.off));
+                if (dn[k] != INF) AddFactB(t.b, post, SatSub(dn[k], t.off));
+            }
+        }
+    }
+
     // ------------------------------------------------------------------
     // Variable writes: shifts, sets, and invariant recording.
 
@@ -3064,7 +3197,38 @@ struct BCE {
         mode = saved;
     }
 
-    Flow Meet(const Flow &a, const Flow &b) {
+    // Gust: a length one path changed and the other did not. The join names
+    // it by the later generation, which the unchanged path never saw; there
+    // it is the earlier one's value, so that path states of the later
+    // generation what it knows of the earlier, and the meet keeps what both
+    // paths know (`if c { a.push(x); }` leaves `old <= len <= old + 1`).
+    // Generations come from one counter, so the later one means nothing else
+    // on the unchanged path.
+    static Flow RenamedLens(const Flow &x, const Flow &y) {
+        Flow out;
+        auto renamed = false;
+        for (auto &g : y.pgen.gens) {
+            auto have = x.pgen.Get(g.id);
+            if (have >= g.gen) continue;
+            if (!renamed) out = x;
+            renamed = true;
+            Base was { BK_LEN, g.id, have }, now { BK_LEN, g.id, g.gen };
+            auto n = out.facts.size();
+            for (size_t i = 0; i < n; i++) {
+                auto f = out.facts[i];
+                if (f.l == was) out.facts.push_back({ now, f.r, f.c });
+                if (f.r == was) out.facts.push_back({ f.l, now, f.c });
+            }
+            out.facts.push_back({ now, was, 0 });
+            out.facts.push_back({ was, now, 0 });
+        }
+        return renamed ? out : Flow {};
+    }
+
+    Flow Meet(const Flow &a0, const Flow &b0) {
+        auto ra = RenamedLens(a0, b0), rb = RenamedLens(b0, a0);
+        auto &a = ra.facts.empty() ? a0 : ra;
+        auto &b = rb.facts.empty() ? b0 : rb;
         Flow r;
         for (auto &f : a.facts)
             for (auto &g : b.facts)
@@ -3112,6 +3276,7 @@ struct BCE {
         loopstack.clear();
         stripping = nullptr;
         ownvars.clear();
+        mustref.clear();
         classparams.clear();
         ownclasses.clear();
     }
@@ -3228,6 +3393,7 @@ struct BCE {
             nextsteps.clear();
             flow = Flow {};
             SeedEntryFacts(sp);
+            EnterSummarized(sp);
             derived.clear();
             Walk(sp->body);
             auto more = false;
@@ -3256,8 +3422,9 @@ struct BCE {
         mode = M_JUDGE;
         flow = Flow {};
         SeedEntryFacts(sp);
+        EnterSummarized(sp);
         derived.clear();
-        Walk(sp->body);
+        if (Walk(sp->body) && exitrec) RecordExit();
     }
 
     // ------------------------------------------------------------------
@@ -3370,6 +3537,68 @@ struct BCE {
         }
     }
 
+    // Gust: the exit summaries (ExitSum), callees first so that a body's
+    // calls use theirs. A body that may resize an array it is handed by
+    // reference is run dry, assuming every integer parameter nonnegative
+    // (`push_n(xs, v, n)` grows xs by n only where n >= 0); then each
+    // assumption the summary does not need is dropped, so that a call site
+    // has less to prove.
+    void ComputeExitSums() {
+        for (auto sp : calleesfirst) {
+            if (!sp->live || !sp->body) continue;
+            auto eit = effects.find(sp);
+            if (eit == effects.end() || eit->second.opaque) continue;
+            vector<int> refs, ints;
+            for (size_t j = 0; j < sp->params.size(); j++) {
+                auto p = sp->params[j];
+                if (IntBaseVar(p)) ints.push_back((int)j);
+                else if (p->type && p->type->kind == TY_REF && LenTrackable(p->type) &&
+                         eit->second.params.count((int)j))
+                    refs.push_back((int)j);
+            }
+            if (refs.empty()) continue;
+            auto run = [&](const vector<int> &hyp) {
+                ExitSum s;
+                s.hyp = hyp;
+                for (auto j : refs) s.lens[j];
+                exithyp.clear();
+                for (auto k : hyp) exithyp.push_back(sp->params[k]);
+                exitrec = &s;
+                exitspec = sp;
+                dry = sp;
+                drysites = Sites {};
+                RunSpecOnce(sp);
+                dry = nullptr;
+                exitrec = nullptr;
+                exitspec = nullptr;
+                exithyp.clear();
+                // A body that never returns leaves nothing to say.
+                for (auto it = s.lens.begin(); it != s.lens.end();) {
+                    auto &[up, dn] = it->second;
+                    auto any = false;
+                    for (auto *v : { &up, &dn })
+                        for (auto &x : *v) {
+                            if (x == INT64_MIN) x = INF;
+                            any = any || x != INF;
+                        }
+                    if (up.empty() || !any) it = s.lens.erase(it);
+                    else ++it;
+                }
+                return s;
+            };
+            auto best = run(ints);
+            if (best.lens.empty()) continue;
+            for (auto k : ints) {
+                auto fewer = best.hyp;
+                fewer.erase(std::find(fewer.begin(), fewer.end(), k));
+                auto s = run(fewer);
+                if (s.lens == best.lens) best = std::move(s);
+            }
+            exitsums[sp] = std::move(best);
+        }
+        drysites = Sites {};
+    }
+
     // Fresh state plus the prescan for the global initializers, each walked
     // as a tree of its own. They need their own prescan once a body's places
     // have been discarded, including places a call can invalidate.
@@ -3457,6 +3686,7 @@ struct BCE {
         CheckfreeSpans();
         BuildCallGraph();
         ComputeEffects();
+        ComputeExitSums();
         ValidateGlobalInvariants();
         // Callers first: a specialization's entry facts come from its call
         // sites, which have to have been judged.
@@ -3572,6 +3802,22 @@ inline void VarDecl::BceMark(BCE &b) {
     }
     if (defs.size() == 1 && inits.size() == 1 && defs[0]) b.wdecl.insert(defs[0]);
     else for (auto d : defs) if (d) b.wbad.insert(d);
+    // Gust: a reference that can only ever name one variable's array.
+    if (defs.size() == 1 && inits.size() == 1 && defs[0]) {
+        auto v = defs[0];
+        auto init = inits[0];
+        if (auto u = Is<Unary>(init); u && u->op == T_BITAND) init = u->child;
+        auto id = Is<Ident>(init);
+        auto t = id ? id->vdef : nullptr;
+        auto arrayof = [](TypeExpr *x) {
+            if (x && x->kind == TY_REF) x = x->ref->sub;
+            return x && x->kind == TY_ARRAY && x->arr->akind != A_FIXED;
+        };
+        if (t && t != v && !v->isvar && !v->isparam && !v->isglobal && !v->captured &&
+            v->type && v->type->kind == TY_REF && arrayof(v->type) && arrayof(t->type) &&
+            (t->type->kind != TY_REF || !t->isvar))
+            b.mustref[v] = t;
+    }
     Node::BceMark(b);
 }
 
@@ -3698,12 +3944,14 @@ inline bool Call::BceWalk(BCE &b) {
     // after a later argument's call has run, and each length was read at its
     // own argument, so both are only trusted when evaluating the arguments
     // moved nothing.
-    auto site = b.mode == BCE::M_JUDGE && builtin < 0 && !fvbody && (spec || !dispatch.empty());
+    // Gust: the record mode samples them too, for an exit summary (PlanExit).
+    auto collect = b.mode != BCE::M_KILLS && builtin < 0 && !fvbody && (spec || !dispatch.empty());
+    auto site = collect && b.mode == BCE::M_JUDGE;
     vector<BCE::Term> ints, slens;
     auto gen0 = b.nextgen;
     auto walkarg = [&](Node *a) {
         b.Walk(a);
-        if (!site) return;
+        if (!collect) return;
         auto t = a->exprtype;
         auto isint = BCE::MachineInt(t);
         auto it = isint ? b.TermOf(a) : BCE::Term {};
@@ -3741,7 +3989,7 @@ inline bool Call::BceWalk(BCE &b) {
         if (pinrecv && !recv && argsgen.size() == 1) pin(a);
     }
     auto recvmoved = recvpid >= 0 && b.LenBase(recvpid).gen != recvgen;
-    auto moved = site && b.nextgen != gen0;
+    auto moved = collect && b.nextgen != gen0;
     if (moved) {
         for (auto &t : ints) t = BCE::Term {};
         for (auto &t : slens) t = BCE::Term {};
@@ -3865,7 +4113,9 @@ inline bool Call::BceWalk(BCE &b) {
         return true;
     }
     if (site) b.RecordSite(this, ArgNodes(), ints, slens, moved);
+    auto plan = collect ? b.PlanExit(this, ArgNodes(), ints, slens, moved) : BCE::ExitPlan {};
     b.CallKills(this);
+    b.ExitFacts(plan);
     return true;
 }
 
@@ -4183,6 +4433,12 @@ inline bool ForLoop::BceWalk(BCE &b) {
 }
 
 inline bool InlineBlock::BceWalk(BCE &b) {
+    // Gust: its returns end the inlined call, not the body around it.
+    struct Depth {
+        int &d;
+        explicit Depth(int &d) : d(d) { d++; }
+        ~Depth() { d--; }
+    } depth(b.inlinedepth);
     if (b.mode == BCE::M_KILLS) {
         b.Walk(body);
         return true;
@@ -4217,6 +4473,9 @@ inline bool InlineBlock::BceWalk(BCE &b) {
 
 inline bool Return::BceWalk(BCE &b) {
     for (auto v : vals) b.Walk(v);
+    // Gust: an exit of a body being summarized (ExitSum).
+    if (b.exitrec && b.mode == BCE::M_JUDGE && !b.inlinedepth && target == b.exitspec->sf)
+        b.RecordExit();
     return false;
 }
 

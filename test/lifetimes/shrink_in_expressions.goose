@@ -97,7 +97,7 @@ fn main() {
     print(total, " ", ns.len);
     // An index after a shrink in the same expression checks the new length.
     var b: i64[>..] = [5, 6, 7, 8, 9];
-    let x = trim(b, 3) + b[2]; // bce:keep
+    let x = trim(b, 3) + b[2]; // bce:elide (trim leaves exactly 3: its exit summary)
     print(x);
     print(pops(b), " ", b.len);
     // Built in place in another array than the one shrunk.

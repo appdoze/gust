@@ -9,7 +9,8 @@ an index or -1, doubling merge passes, helpers with early returns, push
 loops a `continue` in a block may cut short, cursors moved before a break,
 if-values as indices, multiples and quotients of an index against those of a
 length, stride loops from a start above zero, masked probes, nonzero guards,
-whole-struct stores through element references), each with random off-by-one
+whole-struct stores through element references, helpers resizing an array
+handed to them by reference, pushes through a `let` reference), each with random off-by-one
 mutations that make some of them unsafe. Every program runs through the JIT
 with the pass on and off; a check the pass wrongly elides turns an abort into
 a read past the end, so the two runs differ. Programs that differ are kept.
@@ -33,7 +34,7 @@ def shape(r, a, n):
     off = pick(0, 0, 0, 1, -1)
     off2 = pick(0, 0, 0, 1, -1, 2)
     k = r.randint(0, 4)
-    kind = r.randint(0, 22)
+    kind = r.randint(0, 24)
     if kind == 0:   # two indices towards each other
         return [f"var {i} = {max(0, off)};", f"var {j} = {a}.len - {1 - off2 if off2 <= 1 else 0};",
                 f"while {i} {pick('<', '<', '<=')} {j} {{",
@@ -126,6 +127,19 @@ def shape(r, a, n):
                 f"while {i} < {j} {{", f"    acc += {a}[{i}];",
                 f"    if acc % 3 == 0 {{ {i} += 1; }} else {{ {j} -= 1; acc += {a}[{j}]; }}", "}",
                 f"{i} -= {pick(1, 1, 0, 2)};", f"if acc % 2 == 0 {{ acc += {a}[{i}]; }}"]
+    if kind == 23:  # a helper resizing through a reference (exit summaries), then an index near the new end
+        cnt = pick(str(k), f"{a}.len", "-1", f"{a}.len - {k}", "0")
+        call = pick(f"grow(g{n}, {k}, {cnt});", f"grow_rec(g{n}, {cnt});", f"grow2(g{n}, {cnt});",
+                    f"maybe(g{n}, {a}.len);", f"twice(g{n}, {cnt});", f"shrink(g{n}, {cnt});",
+                    f"refill(g{n}, {cnt});")
+        idx = pick(f"{a}.len + {cnt} - 1", f"{a}.len - 1", f"{cnt} - 1", f"g{n}.len - 1",
+                   f"{a}.len + 2 * ({cnt}) - 1", f"{a}.len")
+        return [f"var g{n}: i64[>..<] = [];", f"for x in {a} {{ g{n}.push(x); }}", call,
+                f"if {pick('true', f'{a}.len > 0', f'{cnt} > 0', f'{cnt} >= 0')} {{ acc += g{n}[{idx}{' + 1' if off == 1 else ''}]; }}"]
+    if kind == 24:  # pushes through a `let` reference to a local array
+        return [f"var g{n}: i64[>..] = [];", f"let r{n} = g{n};", f"for x in {a} {{ r{n}.push(x); }}",
+                f"r{n}.push({k});" if off != -1 else "",
+                f"acc += g{n}[{a}.len{pick('', ' - 1', '', ' + 1')}];"]
     if kind == 21:  # whole-struct stores through element references
         return [f"var q{n}: Pt[>..] = [];", f"for {i} in {a}.len {{ q{n}.push(Pt {{ x: {a}[{i}], y: {i} }}); }}",
                 f"for &p{n}, {i} in q{n} {{",
@@ -145,6 +159,17 @@ def program(seed):
              "    return -1;", "}",
              "fn clampi(x: i64, lo: i64, hi: i64) -> i64 {",
              "    if x < lo { return lo; }", "    if x > hi { return hi; }", "    return x;", "}",
+             # Helpers that resize what they are handed by reference, for the
+             # callers' exit summaries: inlined (the plain ones at -O2), out of
+             # line (recursive fn), through each other, and by an amount only
+             # a nonnegative count makes exact.
+             "fn grow(xs: i64[>..<]&, v: i64, n: i64) { for i in n { xs.push(v); } }",
+             "recursive fn grow_rec(xs: i64[>..<]&, n: i64) { for i in n { xs.push(i); } }",
+             "fn grow2(xs: i64[>..<]&, n: i64) { for i in n { xs.push(i); xs.push(i); } }",
+             "fn maybe(xs: i64[>..<]&, c: i64) { if c > 3 { xs.push(c); } }",
+             "recursive fn twice(xs: i64[>..<]&, n: i64) { grow(xs, 0, n); grow_rec(xs, n); }",
+             "recursive fn shrink(xs: i64[>..<]&, n: i64) { for i in n { xs.pop(); } }",
+             "fn refill(xs: i64[>..<]&, n: i64) { xs.clear(); for i in n { xs.push(i); } }",
              "fn body(a: i64[:], b: i64[:]) -> i64 {", "    var acc = 0;"]
     for n in range(r.randint(2, 5)):
         lines += ["    " + l for l in shape(r, r.choice(["a", "b"]), n)]

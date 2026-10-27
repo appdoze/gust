@@ -1,11 +1,13 @@
 // An array is of one type, and a reference reaches only an array of its
 // own type, so a growth or shrink through one, or a callee's through an
 // argument holding scalars, leaves the lengths of other types' arrays alone
-// (§10.5). Same-typed arrays may be one, and keep their checks.
+// (§10.5). Same-typed arrays may be one, and keep their checks: in a body
+// kept out of line (`recursive fn`), since inlined into main each call binds
+// its parameters to two variables the pass tells apart.
 
 import std;
 
-fn same_type(a: i32[>..<]&, b: i32[>..<]&) -> i32 {
+recursive fn same_type(a: i32[>..<]&, b: i32[>..<]&) -> i32 {
     guard b.len > 0 else { return 0; }
     a.clear();
     return b[0];                               // bce:keep (a may be b)
@@ -26,7 +28,7 @@ fn other_kind(a: i32[>..<]&, b: i32[>..]&) -> i32 {
 fn drain(a: i32[>..<]&) { a.clear(); }
 fn drain_u(a: u32[>..<]&) { a.clear(); }
 
-fn callee_same(a: i32[>..<]&, b: i32[>..<]&) -> i32 {
+recursive fn callee_same(a: i32[>..<]&, b: i32[>..<]&) -> i32 {
     guard b.len > 0 else { return 0; }
     drain(a);
     return b[0];                               // bce:keep (a may be b)

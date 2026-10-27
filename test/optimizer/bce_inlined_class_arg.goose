@@ -5,6 +5,6 @@ fn main() {
     var a: i64[>..<] = [1, 2, 3];
     let n = a.len;
     outer(a);
-    if n > 0 { print(a[0]); } // bce:keep
+    if n > 0 { print(a[0]); } // bce:elide (cut leaves exactly n - 2: its exit summary)
     if n > 2 { print(a[2]); } // bce:keep
 }

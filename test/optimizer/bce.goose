@@ -280,7 +280,7 @@ fn sum_unbounded(k: i64) -> i64 {
 
 fn limited_ops(extra: i64) -> i64 {
     var l: i64[..8] = [1, 2, 3, 4];
-    if extra > 0 { l.push(extra); }           // Length now unknown statically.
+    if extra > 0 { l.push(extra); }           // Length now 4 or 5.
     var s = 0;
     for i in l.len {
         s += l[i];                            // bce:elide
@@ -291,7 +291,7 @@ fn limited_ops(extra: i64) -> i64 {
     }
     guard l.len > 0 else { return s; }
     l.pop();
-    s += l[0];                                // bce:keep (the guard predates the pop)
+    s += l[0];                                // bce:elide (4 or 5 long, then two pops)
     return s;
 }
 
@@ -357,10 +357,10 @@ fn exact_lengths() -> i64 {
 
 fn shrink_invalidates(extra: i64) -> i64 {
     var l: i64[..8] = [1, 2, 3, 4, 5];
-    if extra > 0 { l.push(extra); }           // Length now unknown statically.
+    if extra > 0 { l.push(extra); }           // Length now 5 or 6.
     guard l.len > 3 else { return 0; }
     l.pop();
-    return l[3];                              // bce:keep (the pop may undo the guard)
+    return l[3];                              // bce:elide (5 or 6 long, then a pop)
 }
 
 // A grow-only array shrinks at a `clear` (§5.1), so both its length facts and
@@ -380,13 +380,36 @@ fn grow_clear_invalidates(extra: i64) -> i64 {
 }
 
 // A grow-only local shrinks at a `pop` too (§5.1): a length fact from before
-// it does not survive.
+// it does not survive, though one path's pop leaves a bound.
 fn grow_pop_invalidates(extra: i64) -> i64 {
     var v: i64[>..] = [];
     for i in 6 { v.push(i); }
     let n = v.len;
     if extra > 0 { v.pop(); }
-    return v[n - 2];                          // bce:keep (the pop may have shortened it)
+    return v[n - 2];                          // bce:elide (n - 1 <= v.len: one pop at most)
+}
+
+// Gust: the same with a length nothing bounds (n is opaque), where a guard
+// from before the pop says nothing after it.
+fn guard_pop_unknown(n: i64) -> i64 {
+    var l: i64[>..<] = [];
+    for i in n { l.push(i); }
+    guard l.len > 0 else { return 0; }
+    l.pop();
+    return l[0];                              // bce:keep (the guard predates the pop)
+}
+
+// Gust: a pop on one path only joins as m - 1 <= len <= m, which proves an
+// index of m - 2 and not one of m - 1.
+fn pop_one_path(n: i64, extra: i64) -> i64 {
+    var v: i64[>..] = [];
+    for i in n { v.push(i); }
+    let m = v.len;
+    guard m >= 2 else { return 0; }
+    if extra > 0 { v.pop(); }
+    var s = v[m - 2];                         // bce:elide (m - 1 <= v.len)
+    s += v[m - 1];                            // bce:keep (the pop may have taken it)
+    return s;
 }
 
 fn whole_assign_kills(extra: i64) -> i64 {
@@ -684,13 +707,13 @@ fn stencil(a: i64[>..]&) -> i64 {
     return s;
 }
 
-// One site's length is unknown, so the meet proves nothing.
+// One site's array may be empty, so the meet proves nothing.
 fn stencil_unknown(a: i64[>..]&) -> i64 {
     var s = 0;
     for y in 1..3 {
         for x in 1..3 {
             let i = y * 4 + x;
-            s += a[i - 4 - 1] + a[i] + a[i + 4 + 1];   // bce:keep (one site's length is unknown)
+            s += a[i - 4 - 1] + a[i] + a[i + 4 + 1];   // bce:keep (one site's may be empty)
         }
     }
     return s;
@@ -735,7 +758,7 @@ fn carried_lengths(extra: i64) -> i64 {
     for i in 16 { h.push(i * 2); }
     var u: i64[>..] = [];
     for i in 16 { u.push(i); }
-    if extra > 0 { u.push(1); }                   // Length unknown from here on.
+    if extra > 0 { u.clear(); }                   // 16 long or empty from here on.
     var e: i64[>..] = [];
     for i in 8 { e.push(i + 1); }
     var s = stencil(g) + stencil(h);
@@ -901,6 +924,8 @@ fn main() {
     print(shrink_invalidates(kz));            // 4
     print(grow_clear_invalidates(kz));        // 9
     print(grow_pop_invalidates(kz));          // 4
+    print(guard_pop_unknown(kz + 3));         // 0
+    print(pop_one_path(kz + 5, kz));          // 7
     print(whole_assign_kills(kz));            // 6
     let kneg = 0 - data[2];                   // -3, opaque to the analysis
     print(modulo_index(data, ke));            // 6

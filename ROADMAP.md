@@ -123,7 +123,14 @@ criterion moves to Phase 5.
   inside a loop keeps its entry value as a bound; and a second invariant round proves what
   the first makes provable. That removes every check in quicksort's partition loop: 42 of
   161 remain, and sort runs in 0.190 s against Rust LTO's 0.218, best of five runs each on
-  26 October, where it was level.)**
+  26 October, where it was level. Then lengths across calls and joins: a callee that resizes
+  an array it is handed by reference passes back what it leaves of the length, an inlined
+  reference parameter is the caller's array, and an if that grows an array on one path
+  joins to a bound. nbody's parallel arrays and astar's scores lose their checks: 9 of 51
+  remain in `compare/gust/main.goose`, where 17 did, and 36 of 171 counting the standard
+  library code it runs, with no change in time beyond noise (the checks nbody lost sit
+  outside its inner loop). What is left: the dictionary's hash buckets, the heap's
+  children, indices read out of data (`env[x.i]`, `closed[n]` for a node off the heap).)**
 - Find out why Lobster (same author) runs `interp` 1.24x faster than Goose under clang.
 - Bundle clang (or an LLVM toolchain) with releases, so users without it don't get MSVC's
   17–27% slower code.

@@ -122,6 +122,23 @@ git log upstream/master..main
   array through a callback, qsort with a Gust comparator, callbacks nested
   through C six deep, a bounds check kept across a call that moves an
   index) and three rejection fixtures in `test/errors_tc/` (new).
+- `src/bce.h`: lengths across calls and joins. A body that resizes an array
+  it is handed by reference has an exit summary, the facts between that
+  length at its exits and its entry length and integer parameters, found
+  callees first under the nonnegativity of the integer parameters it needs,
+  which each call site proves before it gets them (`acc.push_n(v, n)` leaves
+  `acc.len >= n`); an inlined call's reference parameter, a `let` reference
+  to the caller's variable, is that variable's array; and an if whose one
+  path changed a length joins to what both paths know of it. In `compare/`,
+  nbody's parallel arrays and astar's score array lose their checks, 9 of
+  51 left in `compare/gust/main.goose` where 17 were. Also, a length a call
+  returns (`args().len`) lies in [0, 2^48]. `test/optimizer/bce_exit_lengths.goose`
+  (new); `bench/bce_fuzz.py` generates helpers that resize through a
+  reference and pushes through a `let` reference. Fixtures whose `bce:keep`
+  the pass now proves are annotated `bce:elide` with the reason, and each
+  keeps its point with a length nothing bounds (`test/optimizer/bce.goose`'s
+  `guard_pop_unknown` and `pop_one_path`, a site that may pass an empty
+  array, out-of-line bodies in `test/optimizer/bce_typed_kills.goose`).
 - `src/bce.h`: bounds-check elimination proves three more kinds of index.
   A function whose only recursive calls are its own (quicksort) enters
   with what its other call sites prove about its parameters when, granted
