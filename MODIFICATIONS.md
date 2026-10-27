@@ -536,7 +536,11 @@ git log upstream/master..main
   had set it to the next iteration's value on the way out, and a store
   past the loop folded through it went to the wrong place. That kept Gust
   at MIR's level 1; at level 2 the compare suite runs 1.54x off rather
-  than 1.94x.
+  than 1.94x. On arm64, the generator's test of a memory operand
+  (`mir-gen-aarch64.c`, `target_memory_ok_p`) scales a displacement and an
+  index by the access's size, as its patterns do, not by the size's log:
+  SSA combining had folded a packed field's displacement of 57 into an
+  8-byte access, which no pattern matched (230 MIR fixtures on macOS).
 - `third_party/mir` is built with `__WIN32` defined on Windows
   (`CMakeLists.txt`): its built-in headers test MinGW's macro, which MSVC
   and clang do not define, and c2mir's stdarg.h declared no `va_list`.

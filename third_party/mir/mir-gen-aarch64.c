@@ -2455,7 +2455,11 @@ static int target_memory_ok_p (gen_ctx_t gen_ctx, MIR_op_t *op_ref) {
   gen_assert (op_ref->mode == MIR_OP_VAR_MEM);
   MIR_context_t ctx = gen_ctx->ctx;
   size_t size = _MIR_type_size (ctx, op_ref->u.var_mem.type);
-  int scale = gen_int_log2 ((int64_t) size);
+  /* Gust: an index's and a displacement's scale is the size itself, as the
+     'm' and 'M' patterns have it (pattern_match_p). Its log let SSA
+     combining fold a packed field's displacement of 57 into an i64 access
+     (57 % 3 == 0), which no pattern then matched. */
+  int64_t scale = (int64_t) size;
 
   if (op_ref->u.var_mem.disp == 0
       && ((op_ref->u.var_mem.index == MIR_NON_VAR || op_ref->u.var_mem.scale == 1
