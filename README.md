@@ -54,7 +54,9 @@ Design notes for these are in [docs/gust/](docs/gust/): the
 generating C), [backends and the API benchmark](docs/gust/backend_api.md),
 [what other languages do](docs/gust/language_research.md), and
 [rust-lang/rust#164250 and Gust](docs/gust/soundness_rust_164250.md), and the
-[stability and edition policy](docs/gust/stability.md) 1.0 will follow.
+[stability and edition policy](docs/gust/stability.md) 1.0 will follow. For
+an AI coding agent, [the language in one sitting](docs/gust/agent_guide.md),
+in a single file to load whole.
 
 Not renamed yet, so that Goose's changes keep merging: the documentation in
 [GOOSE.md](GOOSE.md) (Goose's overview) and [docs/](docs/index.md), which

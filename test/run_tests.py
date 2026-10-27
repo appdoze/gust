@@ -1480,6 +1480,24 @@ def main():
             r.local.out.failures += max(1, sum(line.startswith("FAIL ") for line in lines))
     doc_examples_future = r.task(doc_examples, alone=True)
 
+    # Gust: the guide for AI agents, whose examples are held to the same
+    # checker so that what it teaches compiles.
+    gargs = [sys.executable, str(tc.REPO_ROOT / "scripts" / "check_doc_examples.py"),
+             str(tc.REPO_ROOT / "docs" / "gust" / "agent_guide.md"), "--exe", str(exe),
+             "--jobs", str(args.jobs), "--out-dir", str(gendir / "doc_examples_guide")]
+    if jit:
+        gargs.append("--run")
+
+    def guide_examples():
+        result = subprocess.run(gargs, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+        lines = tc.decode(result.stdout).splitlines()
+        if result.returncode == 0 and lines:
+            r.ok("agent guide examples: " + lines[-1])
+        else:
+            r.say("\n".join(lines) if lines else "the checker printed nothing")
+            r.local.out.failures += max(1, sum(line.startswith("FAIL ") for line in lines))
+    guide_examples_future = r.task(guide_examples, alone=True)
+
     # One level of category directories; nested syntax helpers and the modules
     # of the goose_in_goose bootstrap are exercised through their entry points.
     # The lsp/ fixtures are the language server's, driven by lsp_protocol.py.
@@ -2821,6 +2839,8 @@ def main():
 
     r.section("language reference examples (docs/reference.md)")
     r.show(doc_examples_future)
+    r.section("agent guide examples (docs/gust/agent_guide.md)")
+    r.show(guide_examples_future)
 
     r.section("samples")
     r.show(samples_future)

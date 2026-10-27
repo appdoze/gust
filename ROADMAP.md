@@ -289,7 +289,11 @@ the plain function.
   names (a directory or a git repository with an `index.txt` of names and sources) that
   lists it, through the lockfile as any git source; `test/package_registry.py`.)**
 - Keep error output agent-friendly (`--diagnostics json` exists) and ship a compact
-  language guide AI agents can load in one go.
+  language guide AI agents can load in one go. **(Done: `docs/gust/agent_guide.md`, the
+  commands, the syntax, the memory model in five rules, the array family, references,
+  functions and recursion, the errors an agent meets and their fixes, threads, `parallel
+  for`, packages and the standard library, in one file whose examples the test suite
+  compiles and runs.)**
 
 **Exit:** a fork library installed with `pip` and called from Python; no-build runs within
 1.5x of compiled speed.

@@ -112,6 +112,13 @@ git log upstream/master..main
   an array `parallel_reduce_slots` (`stdlib/std.goose`, which the parser
   imports for it) makes before the loop, added into `x` in order after it,
   the bounds evaluated once; two rejection fixtures in `test/errors/`.
+- `docs/gust/agent_guide.md` (new): the language for an AI coding agent in
+  one file: commands and JSON diagnostics, syntax, the memory model in five
+  rules, the arrays, references and optionals, functions, function values
+  and recursion, the errors an agent meets with their fixes, threads,
+  `parallel for` and `reduce`, packages, the standard library and C. Its
+  examples are compiled and run by `test/run_tests.py`, as the reference's
+  are; `README.md` links it.
 - `src/packages.h`: a sidecar may say `edition = "2026";`, the one edition
   so far (`docs/gust/stability.md`, new: what 1.0 will freeze, editions,
   versions and deprecation).
