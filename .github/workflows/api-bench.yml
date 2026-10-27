@@ -1,0 +1,57 @@
+# Gust (https://github.com/appdoze/gust); see MODIFICATIONS.md.
+# The API example on Linux (examples/api/): the Gust server and its Rust
+# (tokio) twin pass test_api.py, then one quick run of bench.py has them,
+# and the two Go servers, under the same load. Run by hand, from the Actions
+# tab or `gh workflow run api-bench.yml`: a hosted runner shares its 4 CPUs
+# with whatever else the host runs, so its numbers are a Linux run to read
+# beside the desktop's, not a result to gate commits on.
+name: API benchmark (Linux)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bench:
+    name: ubuntu-latest / api bench
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: examples/api/go/go.mod
+
+      # A release build, as the benchmark's servers are.
+      - name: Build the compiler
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --parallel
+
+      - name: Install psutil
+        run: python -m pip install psutil
+
+      # bench.py builds the servers into build/api-bench/; the Gust and Rust
+      # ones are checked over real sockets first.
+      - name: Check the servers
+        run: |
+          python -c "import sys; sys.path.insert(0, 'examples/api'); import bench; bench.build(['rustraw'])"
+          python examples/api/test_api.py --exe build/api-bench/api_gust
+          python examples/api/test_api.py --exe build/api-bench/rust/release/rawserver_rust
+
+      - name: Run the benchmark
+        run: >-
+          python examples/api/bench.py --quick --no-idle --kinds gust,go,goraw,rustraw
+          --out build/api-bench/linux-quick.json
+
+      - name: Print the results
+        run: python examples/api/tables.py build/api-bench/linux-quick.json || cat build/api-bench/linux-quick.json
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: api-bench-linux
+          path: build/api-bench/linux-quick.json

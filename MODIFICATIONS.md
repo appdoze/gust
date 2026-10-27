@@ -345,7 +345,12 @@ git log upstream/master..main
   inline strings) and calls its `handle`, or answers 405 with the methods
   the path has or 404. `Response.allow` is an inline string `u8[..64]`, so
   that a 405 can name more than one method. `examples/api/api.gust` routes
-  on it; `test/stdlib/http_route.goose` (new).
+  on it; `test/stdlib/http_route.goose` (new). `examples/api/bench.py`
+  gives the server and the load generator half the CPUs each where there
+  are fewer than 16 and finds the compiler in a single-config build too,
+  `examples/api/tables.py` names the Rust twin, and
+  `.github/workflows/api-bench.yml` (new, run by hand) checks and measures
+  the servers on a Linux runner.
 
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
   over a `reusable` pool: a handle names one allocation by index and serial

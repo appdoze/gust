@@ -9,7 +9,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 path = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, "..", "..", "build", "api-bench", "results.json")
 rep = json.load(open(path))
 NAMES = {"gust": "Gust, worker pool", "gustthreads": "Gust, thread per connection", "go": "Go net/http",
-         "goraw": "Go, same HTTP as Gust", "gustbefore": "Gust, worker pool, before (bench.py --before)"}
+         "goraw": "Go, same HTTP as Gust", "gustbefore": "Gust, worker pool, before (bench.py --before)",
+         "rustraw": "Rust on tokio, same HTTP as Gust"}
 
 def f(v, fmt="{:,.0f}"):
     return "–" if v is None else fmt.format(v)
@@ -73,7 +74,7 @@ if any("gustbefore" in sc["median"] for sc in rep["scenarios"]):
 else:
     # The two comparisons apart: the same minimal HTTP in each language, then
     # Gust's server against Go's standard library server.
-    latency_table("Equivalent minimal HTTP", ("gust", "gustthreads", "goraw"))
+    latency_table("Equivalent minimal HTTP", ("gust", "gustthreads", "goraw", "rustraw"))
     latency_table("Gust against Go's net/http", ("gust", "go"))
 
 print()

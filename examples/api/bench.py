@@ -11,7 +11,9 @@ HTTP/1.1 in Rust on tokio (rust/), built with cargo where `--kinds` names it.
 Builds the Gust server (clang, -O2), the Go server and the load generator
 into build/api-bench/, then runs each scenario --reps times, alternating
 the servers. The server runs on CPUs 0-7 and the load generator on 8-15
-(GOMAXPROCS=8 for both Go programs), so neither takes the other's cores.
+(GOMAXPROCS=8 for both Go programs), so neither takes the other's cores;
+on a machine with fewer than 16, each gets half of them, and the servers'
+workers are as many (a CI runner's 4 give each 2).
 --before adds a Gust pool server built from an earlier tree, as the kind
 `gustbefore`, for a before-and-after comparison on the same load.
 
@@ -35,8 +37,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 OUT = os.path.join(ROOT, "build", "api-bench")
 EXE = ".exe" if os.name == "nt" else ""
-SERVER_CPUS = list(range(0, 8))
-CLIENT_CPUS = list(range(8, 16))
+HALF = max(1, min(8, (psutil.cpu_count() or 2) // 2))
+SERVER_CPUS = list(range(0, HALF))
+CLIENT_CPUS = list(range(HALF, 2 * HALF))
+WORKERS = str(HALF)
 
 def build(kinds=()):
     os.makedirs(OUT, exist_ok=True)
@@ -46,7 +50,10 @@ def build(kinds=()):
                "--target-dir", os.path.join(OUT, "rust")]
         if subprocess.run(cmd + ["--offline"], capture_output=True).returncode != 0:
             subprocess.run(cmd, check=True, capture_output=True)
-    gust = os.path.join(ROOT, "build", "Release", "gust" + EXE)
+    # The compiler where a multi-config build (Visual Studio's) or a
+    # single-config one (make, ninja) puts it.
+    gust = next(p for p in (os.path.join(ROOT, "build", "Release", "gust" + EXE),
+                            os.path.join(ROOT, "build", "gust" + EXE)) if os.path.exists(p))
     subprocess.run([gust, "build", "--cc", "clang", "-o", os.path.join(OUT, "api_gust" + EXE),
                     os.path.join(HERE, "api.gust")], check=True, capture_output=True)
     env = dict(os.environ, CGO_ENABLED="0")
@@ -63,7 +70,7 @@ class Server:
     def __init__(self, kind, extra=()):
         self.kind = kind
         exe = EXES[kind] if os.path.isabs(EXES[kind]) else os.path.join(OUT, EXES[kind] + EXE)
-        env = dict(os.environ, GOMAXPROCS="8", TOKIO_WORKER_THREADS="8")
+        env = dict(os.environ, GOMAXPROCS=WORKERS, TOKIO_WORKER_THREADS=WORKERS)
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         # A port picked free can be taken again before the server binds it:
         # after a run with thousands of connections, their closed client
@@ -134,7 +141,7 @@ def loadgen(port, args, server_ps):
     exe = os.path.join(OUT, "loadgen_go" + EXE)
     s0, t0 = cpu_seconds(server_ps), time.time()
     p = subprocess.Popen([exe, "-addr", f"127.0.0.1:{port}"] + args, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                         env=dict(os.environ, GOMAXPROCS="8"))
+                         env=dict(os.environ, GOMAXPROCS=WORKERS))
     lp = psutil.Process(p.pid)
     lp.cpu_affinity(CLIENT_CPUS)
     client = 0.0
@@ -289,10 +296,11 @@ SCENARIOS = [
 KINDS = ["gust", "gustthreads", "go", "goraw"] + (["rustraw"] if shutil.which("cargo") else [])
 # The executable each server kind runs, and the arguments it gets after its
 # port: the Gust pool gets as many workers as the server has CPUs, as Go's
-# servers get GOMAXPROCS=8.
+# servers get GOMAXPROCS of as many.
 EXES = {"gust": "api_gust", "gustthreads": "api_gust", "go": "server_go", "goraw": "rawserver_go",
         "rustraw": os.path.join(OUT, "rust", "release", "rawserver_rust" + EXE)}
-SERVER_ARGS = {"gust": ["--workers", "8"], "gustthreads": ["--thread-per-connection"], "gustbefore": ["--workers", "8"]}
+SERVER_ARGS = {"gust": ["--workers", WORKERS], "gustthreads": ["--thread-per-connection"],
+               "gustbefore": ["--workers", WORKERS]}
 
 KEYS = ["rps", "p50_us", "p90_us", "p95_us", "p99_us", "p999_us", "max_us", "due_p50_us", "due_p95_us",
         "due_p99_us", "due_p999_us",
