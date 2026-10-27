@@ -58,6 +58,14 @@ static uint8_t gs_ffi_bytes(uint64_t p, int64_t n, gs_rref out) {
 #ifdef GS_SQRT_NO_ERRNO
 static double gs_sqrt(double x) { return __builtin_elementwise_sqrt(x); }
 static float gs_sqrtf(float x) { return __builtin_elementwise_sqrt(x); }
+#elif defined(__MIRC__)
+/* c2mir: sqrt and sqrtf themselves, each call of which src/jit_mir.h makes
+   MIR's square root instruction. A call of a function around them stayed a
+   call once MIR's inliner had spent what it lets a long function grow by,
+   and on x86-64 SysV, where no float register survives a call, n-body's
+   inner loop then stored and reloaded each live double around every one. */
+#define gs_sqrt sqrt
+#define gs_sqrtf sqrtf
 #else
 static double gs_sqrt(double x) { return sqrt(x); }
 static float gs_sqrtf(float x) { return sqrtf(x); }

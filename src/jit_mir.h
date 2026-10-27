@@ -426,12 +426,12 @@ inline void *MirCompile(MIR_context_t ctx, const char *source, const char *name,
         for (auto &[n, addr] : *mir_symbols) MIR_load_external(ctx, n.c_str(), (void *)addr);
     MIR_gen_init(ctx);
     *gen_on = 1;
-    // Level 1, MIR's code selection and register allocation without the
-    // global optimizations level 2 adds: at 2 a loop that appends through a
-    // stack-top pointer kept it stale past the loop (codegen/
-    // append_constructed_results), and the compare suite runs no slower
-    // at 1 (3.53 s either way in WSL).
-    MIR_gen_set_optimize_level(ctx, 1);
+    // Level 2: MIR's global value numbering, copy propagation, dead store
+    // elimination and loop-invariant motion over the registers
+    // MirPromoteFrame made of the frame's struct fields. In WSL the compare
+    // suite runs 1.54x off a native gcc build rather than level 1's 1.94x
+    // (n-body 0.24 s rather than 0.50).
+    MIR_gen_set_optimize_level(ctx, 2);
     // Every function generated now, the program's own being all there is:
     // generating each as it is first called saved 6 ms of a 26 ms run in
     // WSL, and on Windows MIR's thunk for it corrupted the first call.

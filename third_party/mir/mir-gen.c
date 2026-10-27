@@ -5609,11 +5609,12 @@ static int get_int_const (gen_ctx_t gen_ctx, MIR_op_t *op_ref, int64_t *c) {
 }
 
 static int cycle_phi_p (bb_insn_t bb_insn) { /* we are not in pure SSA at this stage */
-  ssa_edge_t se;
-  if (bb_insn->insn->code != MIR_PHI) return FALSE;
-  for (size_t i = 1; i < bb_insn->insn->nops; i++)
-    if ((se = bb_insn->insn->ops[i].data) != NULL && se->def->bb == bb_insn->bb) return TRUE;
-  return FALSE;
+  /* Gust: conventional SSA puts the copies to a phi var before the branch ending each
+     predecessor, so a loop latch that also exits the loop sets the var to the next
+     iteration's value on the exit path too.  The copies are then outside the phi's bb and
+     checking only for the phi's own bb misses them: a use after the loop read the wrong
+     address.  Treat every phi as cyclic; the uses keep the copy made after the phi. */
+  return bb_insn->insn->code == MIR_PHI;
 }
 
 static int var_plus_const (gen_ctx_t gen_ctx, ssa_edge_t se, bb_t from_bb, MIR_op_t **var_op_ref,

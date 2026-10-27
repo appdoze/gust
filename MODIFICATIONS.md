@@ -513,7 +513,14 @@ git log upstream/master..main
   away its object (a memcpy or memset of a known size what it covers, fp
   plus a scaled index the arrays), and one that cannot be resolved leaves
   the function's frame alone. n-body runs 3.3x off a native gcc build
-  rather than 6.5x, raytrace 1.8x rather than 4.4x.
+  rather than 6.5x, raytrace 1.8x rather than 4.4x. Then the generator's
+  SSA combining (`mir-gen.c`, `cycle_phi_p`) takes no address through a
+  phi in another block: conventional SSA sets a phi's variable before the
+  branch ending each predecessor, so a loop latch that also leaves the loop
+  had set it to the next iteration's value on the way out, and a store
+  past the loop folded through it went to the wrong place. That kept Gust
+  at MIR's level 1; at level 2 the compare suite runs 1.54x off rather
+  than 1.94x.
 - `third_party/mir` is built with `__WIN32` defined on Windows
   (`CMakeLists.txt`): its built-in headers test MinGW's macro, which MSVC
   and clang do not define, and c2mir's stdarg.h declared no `va_list`.

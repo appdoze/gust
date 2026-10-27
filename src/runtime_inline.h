@@ -3996,6 +3996,14 @@ static uint8_t gs_ffi_bytes(uint64_t p, int64_t n, gs_rref out) {
 #ifdef GS_SQRT_NO_ERRNO
 static double gs_sqrt(double x) { return __builtin_elementwise_sqrt(x); }
 static float gs_sqrtf(float x) { return __builtin_elementwise_sqrt(x); }
+#elif defined(__MIRC__)
+/* c2mir: sqrt and sqrtf themselves, each call of which src/jit_mir.h makes
+   MIR's square root instruction. A call of a function around them stayed a
+   call once MIR's inliner had spent what it lets a long function grow by,
+   and on x86-64 SysV, where no float register survives a call, n-body's
+   inner loop then stored and reloaded each live double around every one. */
+#define gs_sqrt sqrt
+#define gs_sqrtf sqrtf
 #else
 static double gs_sqrt(double x) { return sqrt(x); }
 static float gs_sqrtf(float x) { return sqrtf(x); }
@@ -4093,7 +4101,8 @@ static int64_t gs_find_pair(sl_u8 s, const void *a, int64_t d, const void *b) {
 static int64_t gs_popcount(uint64_t x) {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
     return __builtin_popcountll(x);
-#elif defined(_MSC_VER) && defined(_M_X64) && defined(__AVX__)
+)GSRT"
+R"GSRT(#elif defined(_MSC_VER) && defined(_M_X64) && defined(__AVX__)
     return (int64_t)__popcnt64(x);
 #else
     int64_t n = 0;
@@ -4109,8 +4118,7 @@ static int64_t gs_clz(uint64_t x) {
     return x ? __builtin_clzll(x) : 64;
 #elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
     unsigned long i;
-)GSRT"
-R"GSRT(    return _BitScanReverse64(&i, x) ? 63 - (int64_t)i : 64;
+    return _BitScanReverse64(&i, x) ? 63 - (int64_t)i : 64;
 #else
     int64_t n = 0;
     if (!x) return 64;
