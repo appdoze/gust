@@ -153,6 +153,12 @@ git log upstream/master..main
   Linux and macOS; Windows says it is not available yet.
   `test/mir_runs.py` (new) runs the fixtures with an expected output both
   ways and requires the same output and outcome.
+- `GUST_TCC_SHARED` (new CMake option, `cmake/libtcc.cmake`,
+  `CMakeLists.txt`, `scripts/package_release.py`): TinyCC built as a
+  shared library beside the compiler (`gusttcc.dll`, `libgusttcc.so`,
+  `libgusttcc.dylib`, found through the executable's directory) rather than
+  linked into it, which a release then ships: what the LGPL's relinking
+  terms ask of a binary distribution. Off by default.
 - `src/packages.h`, `src/main.cpp`, `docs/packages.md`: version ranges in a
   git source (`@^1.2`, `@~1.2.3`, `@>=1.2`, `@1.x`), resolved to the
   highest tag they allow with `git ls-remote`, and the program's lockfile,

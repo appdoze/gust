@@ -152,3 +152,36 @@ jobs:
 
       - name: Test compiler, generated C, runtime lifecycle and samples
         run: python test/run_tests.py --exe build-sanitize/gust --profile sanitize --cc clang
+
+  # Gust: TinyCC as a shared library beside the compiler (GUST_TCC_SHARED),
+  # which a release ships for the LGPL's relinking: the compiler finds it
+  # there, and an in-process run and gust cimport work through it.
+  tcc-shared:
+    name: ${{ matrix.os }} / TinyCC shared
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DGUST_TCC_SHARED=ON
+
+      - name: Build
+        run: cmake --build build --config Release --target goose --parallel 4
+
+      - name: Run through the shared TinyCC
+        shell: bash
+        run: |
+          exe=build/${{ runner.os == 'Windows' && 'Release/gust.exe' || 'gust' }}
+          ls "$(dirname "$exe")" | grep gusttcc
+          "$exe" run -q test/codegen/labeled_jumps.goose | diff --strip-trailing-cr - test/expected/labeled_jumps.out
+          python -c "import sys; sys.path[:0] = ['test', 'scripts']; from cimport import check_cimport; check_cimport('$exe', 'cc', 'build/ci-cimport'); print('cimport ok')"

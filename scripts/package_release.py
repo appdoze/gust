@@ -9,6 +9,8 @@ builtin.h's BuiltinSrcDir and BuiltinPackageLinkFile), so a release is one
 directory:
 
   goose[.exe]          the compiler, with the blessed packages compiled in
+  gusttcc.dll, ...     TinyCC, where the build made it a shared library
+                       (GUST_TCC_SHARED), for the LGPL's relinking
   stdlib/              the standard library
   tcclib/              TinyCC's headers and support archive, for in-process runs
   pkg/<package>/       each builtin package's Goose sources, sidecar, docs and
@@ -174,6 +176,11 @@ def main():
     out.mkdir(parents=True)
 
     copy_file(exe, out / exe_name)
+    # Gust: TinyCC as a library beside the compiler, where the build has one
+    # (-DGUST_TCC_SHARED=ON), which a user may replace with their own build.
+    for shared in ("gusttcc.dll", "libgusttcc.so", "libgusttcc.dylib"):
+        if (exe.parent / shared).exists():
+            copy_file(exe.parent / shared, out / shared)
     tcclib = build / "tcclib"
     if not (tcclib / "include" / "stddef.h").exists():
         fail(f"{tcclib} is incomplete: build the compiler first")

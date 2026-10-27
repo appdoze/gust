@@ -116,6 +116,30 @@ target_compile_definitions(libtcc PRIVATE ${tcc_defines} ONE_SOURCE=1)
 set_target_properties(libtcc PROPERTIES
     C_STANDARD 99 OUTPUT_NAME tcc POSITION_INDEPENDENT_CODE ON)
 
+# Gust: GUST_TCC_SHARED builds TinyCC for the compiler as a shared library
+# beside it (gusttcc.dll, libgusttcc.so, libgusttcc.dylib) rather than into it:
+# a binary distribution of the compiler that ships it so meets the LGPL's
+# relinking terms, a user able to put a TinyCC of their own build in its place.
+# The static library above stays, for the driver, which reaches past the API.
+option(GUST_TCC_SHARED "Build TinyCC as a shared library beside the compiler (LGPL relinking)" OFF)
+if(GUST_TCC_SHARED)
+    add_library(libtcc_shared SHARED "${TCC_SRC}/libtcc.c")
+    target_include_directories(libtcc_shared PRIVATE "${TCC_BUILD}")
+    target_include_directories(libtcc_shared SYSTEM PRIVATE "${TCC_SRC}")
+    target_include_directories(libtcc_shared SYSTEM PUBLIC "${TCC_BUILD}/api")
+    target_compile_definitions(libtcc_shared PRIVATE ${tcc_defines} ONE_SOURCE=1)
+    if(WIN32)
+        target_compile_definitions(libtcc_shared PRIVATE "LIBTCCAPI=__declspec(dllexport)"
+                                                 INTERFACE "LIBTCCAPI=__declspec(dllimport)")
+    else()
+        target_compile_definitions(libtcc_shared PRIVATE "LIBTCCAPI=__attribute__((visibility(\"default\")))")
+        set_target_properties(libtcc_shared PROPERTIES C_VISIBILITY_PRESET hidden)
+        target_link_libraries(libtcc_shared PUBLIC ${CMAKE_DL_LIBS} m)
+    endif()
+    target_compile_options(libtcc_shared PRIVATE $<IF:$<BOOL:${MSVC}>,/W0,-w>)
+    set_target_properties(libtcc_shared PROPERTIES C_STANDARD 99 OUTPUT_NAME gusttcc)
+endif()
+
 # The driver exists to build libtcc1.a below: parts of it are TinyCC assembly,
 # which only TinyCC assembles.
 add_executable(tcc_driver "${TCC_SRC}/tcc.c")

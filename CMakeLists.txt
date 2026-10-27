@@ -150,7 +150,21 @@ target_link_libraries(goose PRIVATE goose_shaderc)
 # The in-process C backend: TinyCC, vendored under third_party/tinycc and
 # built into every compiler (cmake/libtcc.cmake).
 include(cmake/libtcc.cmake)
-target_link_libraries(goose PRIVATE libtcc)
+if(GUST_TCC_SHARED)
+    # Gust: TinyCC beside the compiler, where the loader finds it.
+    target_link_libraries(goose PRIVATE libtcc_shared)
+    set_target_properties(libtcc_shared PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:goose>"
+        LIBRARY_OUTPUT_DIRECTORY "$<TARGET_FILE_DIR:goose>")
+    if(APPLE)
+        set_target_properties(goose PROPERTIES BUILD_RPATH "@loader_path" INSTALL_RPATH "@loader_path")
+        set_target_properties(libtcc_shared PROPERTIES INSTALL_NAME_DIR "@rpath")
+    elseif(UNIX)
+        set_target_properties(goose PROPERTIES BUILD_RPATH "$ORIGIN" INSTALL_RPATH "$ORIGIN")
+    endif()
+else()
+    target_link_libraries(goose PRIVATE libtcc)
+endif()
 add_dependencies(goose tcc_runtime)
 # A packager sets this to where it installs tcclib/, so the binary names no
 # build directory. A tcclib/ beside the compiler still wins (src/jit.h).

@@ -146,6 +146,9 @@ is. Files changed for Gust say so at their top, and
 - TinyCC, which the compiler embeds for in-process runs, is LGPL-2.1
   ([third_party/tinycc/COPYING](third_party/tinycc/COPYING)); a binary
   distribution of the compiler must let users relink it with their own
-  TinyCC. The programs Gust builds with clang, gcc or MSVC do not contain it.
+  TinyCC, which configuring with `-DGUST_TCC_SHARED=ON` provides: TinyCC is
+  then a shared library beside the compiler (`gusttcc.dll`, `libgusttcc.so`,
+  `libgusttcc.dylib`) that a user can replace. The programs Gust builds with
+  clang, gcc or MSVC do not contain it.
 - MIR, Vladimir Makarov's JIT compiler, which `gust run --mir` uses, is MIT
   ([third_party/mir/LICENSE](third_party/mir/LICENSE)).

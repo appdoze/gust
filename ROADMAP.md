@@ -174,11 +174,15 @@ interp at Lobster's 0.419.)**
   `void *` without a length, pointer-constant macros, and a link check against
   `--lib`.)**
 - **Licensing**: move TinyCC to a separate DLL (satisfies LGPL relinking) or plan its
-  replacement by MIR in Phase 6.
+  replacement by MIR in Phase 6. **(Done as an option: `-DGUST_TCC_SHARED=ON` builds
+  TinyCC as `gusttcc.dll` / `libgusttcc.so` / `libgusttcc.dylib` beside the compiler,
+  which the release script ships and a user can replace; tested on Windows (an
+  in-process run and `test/cimport.py` through the DLL) and in CI on all three
+  platforms. MIR, MIT-licensed, is also in now, behind `gust run --mir`, Phase 6.)**
 
 **Exit:** a program using SQLite and libcurl with no hand-written `extern fn`; C libraries
 that need callbacks (libcurl's write callback) work. **(Met on Linux, by
-`test/cimport_libs.py`; the TinyCC licensing item remains.)**
+`test/cimport_libs.py`.)**
 
 ## Phase 4: Multicore (months 5–8)
 
@@ -255,6 +259,19 @@ the plain function.
 
 - **MIR JIT** for no-build runs (Lobster's MIR mode is 2.56x off the fastest build, against
   4.39x for Goose's TinyCC mode; MIR is MIT-licensed, ending the LGPL question).
+  **(Begun: `gust run --mir` on Linux and macOS, `src/jit_mir.h`, MIR vendored from
+  Lobster's copy into `third_party/mir`; TinyCC stays the default. On the compare suite
+  in WSL it runs 2.3x off a native gcc build as a geometric mean, against TinyCC's 4.1x,
+  and starts in 0.28 s against 0.03 s, c2mir compiling the runtime each run. What it took:
+  a square-root instruction for MIR, c2mir copying small structs with moves and keeping
+  `#pragma pack`, c2mir's float to unsigned 64-bit conversions made right from 2^63 up,
+  MIR's level 1 rather than its level 2, which kept a pointer stale past a loop, and a
+  correct size bound for one x86-64 pattern. `test/mir_runs.py` holds every fixture with
+  an expected output to TinyCC's result. Not yet: Windows, where c2mir cannot read the
+  headers the runtime's Windows half needs; a runtime compiled natively into the
+  compiler, which would answer Windows and the start time both; and keeping small
+  structs' fields in registers, which n-body (6.5x off) and raytrace (4.4x) need for
+  the 1.5x exit.)**
 - **Python bindings generator**: turn a library into a pip-installable module, the route
   Rust grew through with PyO3. **(Done: `scripts/gust_python.py` builds a library's
   exports into a ctypes package with checked integers, structs, slices read from
