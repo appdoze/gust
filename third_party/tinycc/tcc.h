@@ -733,6 +733,13 @@ struct sym_attr {
 };
 
 struct TCCState {
+    /* Gust: where tcc_set_decl_func reports declarations, and the structs
+       reported so far. */
+    void *decl_opaque;
+    void (*decl_func)(void *opaque, const char *line);
+    void **decl_structs;
+    int nb_decl_structs;
+
     unsigned char verbose; /* if true, display some information during compilation */
     unsigned char nostdinc; /* if true, no standard headers are added */
     unsigned char nostdlib; /* if true, no standard libraries are added */
@@ -1392,6 +1399,8 @@ ST_FUNC void define_undef(Sym *s);
 ST_INLN Sym *define_find(int v);
 ST_FUNC void free_defines(Sym *b);
 ST_FUNC void parse_define(void);
+/* Gust: the declaration report (tcc_set_decl_func). */
+ST_FUNC void gs_decl_report(TCCState *s1, const char *line);
 ST_FUNC void skip_to_eol(int warn);
 ST_FUNC void preprocess(int is_bof);
 ST_FUNC void next(void);

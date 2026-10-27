@@ -52,6 +52,7 @@
 #include "packages.h"
 #include "native.h"
 #include "format.h"
+#include "cimport.h"
 #include "lsp_rpc.h"
 #include "lsp_analysis.h"
 #include "lsp_workspace.h"
@@ -694,6 +695,7 @@ Commands:
   check      Parse and typecheck a program, and run nothing.
   fetch      Fetch the packages a program declares.
   format     Rewrite source files in the standard layout.
+  cimport    Make a package of a C header's functions, structs and constants.
   toolchain  Report the C compiler, cmake and git found, and GOOSE_HOME.
   version    Print the compiler's version (or --version).
   lsp        Serve an editor over the Language Server Protocol.
@@ -780,6 +782,29 @@ compiles nothing. A run or a build fetches what is missing as well.
 Options:
   --update              Fetch packages at a tag or branch again (a commit is
                         never fetched again).
+)";
+    if (topic == "cimport") return
+R"(usage: gust cimport header.h [--name n] [--lib l] [--also a.h,b.h] [--source f.c]
+                              [-I dir] [-D x=y] [--out dir]
+
+Writes a package of what the header declares, parsed with the compiler's
+own C front end: <out>/<n>/<n>.goose with an extern fn for each function,
+a struct for each struct laid out as C lays it out, and a constant for each
+integer or string macro and enum constant; <n>_cimport.c, the C that hands
+each call to the library; and <n>.build, its sidecar, which links -l<l>.
+A program imports it as any package: `import n from "<out>/<n>";`. Only
+the header's own declarations are imported, and those of the headers
+--also names by file name. The externs are a boundary like any others:
+`gust --externs` lists them (docs/reference.md, "C header import").
+
+Options:
+  --name n              The package and namespace (default: the header's stem).
+  --lib l               The library to link, by name (`z` for libz).
+  --also a.h,b.h        Headers the header includes whose declarations count too.
+  --source f.c          C the package compiles as its own (a library shipped as
+                        source, such as SQLite's amalgamation), copied into it.
+  -I dir, -D x=y        Where to find headers, and macros to define, as for cc.
+  --out dir             Where the package directory goes (default: here).
 )";
     if (topic == "format") return
 R"(usage: gust format [--check] file.gust|dir...
@@ -1032,8 +1057,8 @@ CodeGen::StackConfig StackConfigOf(const vector<string> &cdefines) {
 }
 
 // The commands, in the order the help lists them.
-static const char *const VERBS[] = { "run", "build", "check", "fetch", "format", "toolchain",
-                                     "version", "lsp", "completion", "help" };
+static const char *const VERBS[] = { "run", "build", "check", "fetch", "format", "cimport",
+                                     "toolchain", "version", "lsp", "completion", "help" };
 
 // The edit distance between two words, for the command a mistyped one meant.
 static size_t EditDistance(string_view a, string_view b) {
@@ -1339,6 +1364,7 @@ int Main(int argc, char **argv) {
     }
     if (verb == "lsp") return RunLsp(exe, vector<string>(argv + firstarg, argv + argc));
     if (verb == "format") return RunFormat(vector<string>(argv + firstarg, argv + argc));
+    if (verb == "cimport") return RunCimport(exe, vector<string>(argv + firstarg, argv + argc));
     string outname, headername, stdlibdir, shaderfile, shadersource, dumpfile;
     auto dump = false, dumpdocs = false, tokens = false, parseonly = false, specs = false;
     auto nocgen = false;

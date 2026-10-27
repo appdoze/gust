@@ -95,6 +95,12 @@ LIBTCCAPI int tcc_relocate(TCCState *s1);
 LIBTCCAPI void *tcc_get_symbol(TCCState *s, const char *name);
 
 /* list all (global) symbols and their values via 'symbol_cb()' */
+/* Gust: report each global declaration as it is parsed, as one line of
+   tab-separated text per function, typedef, enum constant, object-like
+   macro and struct (gust cimport, src/cimport.h, writes the format). */
+LIBTCCAPI void tcc_set_decl_func(TCCState *s, void *opaque,
+    void (*func)(void *opaque, const char *line));
+
 LIBTCCAPI void tcc_list_symbols(TCCState *s, void *ctx,
     void (*symbol_cb)(void *ctx, const char *name, const void *val));
 

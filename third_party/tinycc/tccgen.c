@@ -144,6 +144,10 @@ static void init_putv(init_params *p, CType *type, unsigned long c);
 static void decl_initializer(init_params *p, CType *type, unsigned long c, int flags);
 static void decl_initializer_alloc(CType *type, AttributeDef *ad, int r, int has_init, int v, int scope);
 static int decl(int l);
+/* Gust: the declaration report (tcc_set_decl_func). */
+static void gs_decl_function(int v, CType *type);
+static void gs_decl_typedef(int v, CType *type);
+static void gs_decl_enumval(int v, long long val);
 static void expr_eq(void);
 static void vpush_type_size(CType *type, int *a);
 static int is_compatible_unqualified_types(CType *type1, CType *type2);
@@ -4531,6 +4535,7 @@ do_decl:
 			get_tok_str(v, NULL));
                 ss = sym_push(v, &t, VT_CONST, 0);
                 ss->enum_val = ll;
+                gs_decl_enumval(v, ll); /* Gust */
                 *ps = ss, ps = &ss->next;
                 if (ll < nl)
                     nl = ll;
@@ -8928,6 +8933,8 @@ static int decl(int l)
                       merge_funcattr(&sym->type.ref->f, &ad.f);
                     if (debug_modes)
                         tcc_debug_typedef (tcc_state, sym);
+                    if (l == VT_CONST)
+                        gs_decl_typedef(v, &type); /* Gust */
 		} else if ((type.t & VT_BTYPE) == VT_VOID
 			   && !(type.t & VT_EXTERN)) {
 		    tcc_error("declaration of void object");
@@ -8954,6 +8961,8 @@ static int decl(int l)
                         ) {
                         /* external variable or function */
                         type.t |= VT_EXTERN;
+                        if (l == VT_CONST && (type.t & VT_BTYPE) == VT_FUNC)
+                            gs_decl_function(v, &type); /* Gust */
                         external_sym(v, &type, r, &ad);
                     } else {
                         if (l == VT_CONST || (type.t & VT_STATIC))
@@ -8995,6 +9004,189 @@ static int decl(int l)
     return 0;
 }
 
+
+/* ------------------------------------------------------------------------- */
+/* Gust: the declaration report (tcc_set_decl_func). A type is written as v
+   (void), b (_Bool), c<n> / C<n> (plain char, signed / unsigned), i<n> /
+   u<n> (a signed / unsigned integer of n bytes), e<n> (an enum of n
+   bytes), f<n> (a float of n bytes), K<type> (const), p<type> (pointer),
+   a<count>,<type> (array), s<name> / U<name> (a struct / union, which gets
+   a line of its own the first time), F{<C spelling>} (a function) and ?
+   (anything else). Lines: "f file name ret kind params..." (kind 0 for a
+   prototype, 1 with `...`, 2 without a prototype; a param is name:type),
+   "t file name type", "e file name value", "d file name" (in tccpp.c),
+   "s kind name size align field@offset:type..." (kind s or U; a bitfield's
+   type is !). */
+typedef struct GsBuf { char b[8192]; int n; } GsBuf;
+
+static void gs_put(GsBuf *o, const char *s)
+{
+    while (*s && o->n < (int)sizeof o->b - 1)
+        o->b[o->n++] = *s++;
+    o->b[o->n] = 0;
+}
+
+static void gs_putn(GsBuf *o, const char *fmt, long long x)
+{
+    char t[64];
+    snprintf(t, sizeof t, fmt, x);
+    gs_put(o, t);
+}
+
+static void gs_type(GsBuf *o, CType *type);
+
+static const char *gs_struct_name(Sym *s, char *buf, int size)
+{
+    int v = s->v & ~SYM_STRUCT, i;
+    if (v < SYM_FIRST_ANOM)
+        return get_tok_str(v, NULL);
+    for (i = 0; i < tcc_state->nb_decl_structs; i++)
+        if (tcc_state->decl_structs[i] == s)
+            break;
+    snprintf(buf, size, "anon%d", i);
+    return buf;
+}
+
+static void gs_struct(Sym *s)
+{
+    int i, size, align;
+    char nb[32];
+    Sym *f;
+    CType t;
+    GsBuf *o;
+    for (i = 0; i < tcc_state->nb_decl_structs; i++)
+        if (tcc_state->decl_structs[i] == s)
+            return;
+    dynarray_add(&tcc_state->decl_structs, &tcc_state->nb_decl_structs, s);
+    if (s->c < 0)
+        return; /* incomplete: only ever a pointer's target */
+    t.t = s->type.t;
+    t.ref = s;
+    size = type_size(&t, &align);
+    o = tcc_malloc(sizeof *o);
+    o->n = 0;
+    o->b[0] = 0;
+    gs_put(o, IS_UNION(s->type.t) ? "s\tU\t" : "s\ts\t");
+    gs_put(o, gs_struct_name(s, nb, sizeof nb));
+    gs_putn(o, "\t%lld", size);
+    gs_putn(o, "\t%lld", align);
+    for (f = s->next; f; f = f->next) {
+        int fv = f->v & ~SYM_FIELD;
+        gs_put(o, "\t");
+        gs_put(o, fv < SYM_FIRST_ANOM ? get_tok_str(fv, NULL) : "?");
+        gs_putn(o, "@%lld:", f->c);
+        if (f->type.t & VT_BITFIELD)
+            gs_put(o, "!");
+        else
+            gs_type(o, &f->type);
+    }
+    gs_decl_report(tcc_state, o->b);
+    tcc_free(o);
+}
+
+static void gs_type(GsBuf *o, CType *type)
+{
+    int bt = type->t & VT_BTYPE, size, align;
+    char nb[32], spell[512];
+    if (type->t & VT_CONSTANT)
+        gs_put(o, "K");
+    switch (bt) {
+    case VT_VOID: gs_put(o, "v"); return;
+    case VT_BOOL: gs_put(o, "b"); return;
+    case VT_BYTE: case VT_SHORT: case VT_INT: case VT_LLONG:
+        size = type_size(type, &align);
+        if (IS_ENUM(type->t))
+            gs_putn(o, "e%lld", size);
+        else if (bt == VT_BYTE && !(type->t & VT_DEFSIGN))
+            gs_putn(o, (type->t & VT_UNSIGNED) ? "C%lld" : "c%lld", size);
+        else
+            gs_putn(o, (type->t & VT_UNSIGNED) ? "u%lld" : "i%lld", size);
+        return;
+    case VT_FLOAT: gs_put(o, "f4"); return;
+    case VT_DOUBLE: gs_put(o, "f8"); return;
+    case VT_PTR:
+        if (type->t & VT_VLA) {
+            gs_put(o, "?");
+        } else if (type->t & VT_ARRAY) {
+            gs_putn(o, "a%lld,", type->ref->c);
+            gs_type(o, &type->ref->type);
+        } else if ((type->ref->type.t & VT_BTYPE) == VT_FUNC) {
+            type_to_str(spell, sizeof spell, type, NULL);
+            gs_put(o, "pF{");
+            gs_put(o, spell);
+            gs_put(o, "}");
+        } else {
+            gs_put(o, "p");
+            gs_type(o, &type->ref->type);
+        }
+        return;
+    case VT_FUNC: gs_put(o, "F{}"); return;
+    case VT_STRUCT:
+        gs_struct(type->ref);
+        gs_put(o, IS_UNION(type->t) ? "U" : "s");
+        gs_put(o, gs_struct_name(type->ref, nb, sizeof nb));
+        return;
+    default: gs_put(o, "?"); return;
+    }
+}
+
+static void gs_decl_function(int v, CType *type)
+{
+    GsBuf *o;
+    Sym *s = type->ref, *p;
+    int i = 0;
+    if (!tcc_state->decl_func || !file)
+        return;
+    o = tcc_malloc(sizeof *o);
+    o->n = 0;
+    o->b[0] = 0;
+    gs_put(o, "f\t");
+    gs_put(o, file->filename);
+    gs_put(o, "\t");
+    gs_put(o, get_tok_str(v, NULL));
+    gs_put(o, "\t");
+    gs_type(o, &s->type);
+    gs_put(o, s->f.func_type == FUNC_ELLIPSIS ? "\t1" : s->f.func_type == FUNC_OLD ? "\t2" : "\t0");
+    for (p = s->next; p; p = p->next, i++) {
+        int pv = p->v & ~SYM_FIELD;
+        gs_put(o, "\t");
+        if (pv && pv < SYM_FIRST_ANOM)
+            gs_put(o, get_tok_str(pv, NULL));
+        else
+            gs_putn(o, "p%lld", i);
+        gs_put(o, ":");
+        gs_type(o, &p->type);
+    }
+    gs_decl_report(tcc_state, o->b);
+    tcc_free(o);
+}
+
+static void gs_decl_typedef(int v, CType *type)
+{
+    GsBuf *o;
+    if (!tcc_state->decl_func || !file)
+        return;
+    o = tcc_malloc(sizeof *o);
+    o->n = 0;
+    o->b[0] = 0;
+    gs_put(o, "t\t");
+    gs_put(o, file->filename);
+    gs_put(o, "\t");
+    gs_put(o, get_tok_str(v, NULL));
+    gs_put(o, "\t");
+    gs_type(o, type);
+    gs_decl_report(tcc_state, o->b);
+    tcc_free(o);
+}
+
+static void gs_decl_enumval(int v, long long val)
+{
+    char line[1400];
+    if (!tcc_state->decl_func || !file || local_scope)
+        return;
+    snprintf(line, sizeof line, "e\t%s\t%s\t%lld", file->filename, get_tok_str(v, NULL), val);
+    gs_decl_report(tcc_state, line);
+}
 /* ------------------------------------------------------------------------- */
 #undef gjmp_addr
 #undef gjmp

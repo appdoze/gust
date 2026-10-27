@@ -3929,6 +3929,43 @@ It may grow storage outside it, but not shrink it or rebind an optional
 outside it, which the caller, suspended in the extern call, may still rely
 on: those are compile errors at `c_callback`. Spec §7.11.
 
+### C header import (Gust)
+
+`gust cimport zlib.h --lib z` writes a package of what a C header
+declares, read with the compiler's own C front end (TinyCC): `zlib/zlib.goose`
+with an `extern fn` per function, a struct per struct the functions use
+(laid out as C lays it out, with `pad` where C pads) and a constant per
+integer or string macro and enum constant; `zlib/zlib_cimport.c`, the C
+each extern calls, which passes the library pointers where Goose passes
+slices; and `zlib/zlib.build`, which compiles that C and links `-lz`.
+
+<!-- fragment -->
+```goose
+import zlib from "./zlib";
+
+fn main() {
+    let text = "hello hello hello hello";
+    var packed: u8[64] = [];
+    var size: u64[1] = [64];
+    let rc = zlib::compress(packed, size, text, text.len as u64);
+    print(rc == zlib::Z_OK, " ", size[0] < text.len as u64);
+}
+```
+
+A number is itself, `char *` and `void *` are a `u8[:]` C writes into, a
+`const char *` is a `const u8[:]` the glue copies with a terminating NUL,
+`T *` of another number is a `T[:]` (an out parameter is an array of one),
+a pointer to a struct the package lays out, or such a struct by value, is a
+reference to it, a struct returned by value fills an `out` first parameter,
+and any other pointer, a function pointer included (`c_callback(f)`), is a
+`u64` handle. A function returning `const char *` also gets an `_str` form
+returning its string. A variadic function, one without a prototype and one
+with a union, a struct with bitfields or a `long double` crossing by value
+are left out, each with a comment in the module saying why. Only the
+header's own declarations are imported, and those of headers `--also`
+names. The externs are a boundary like any hand-written ones: `gust
+--externs` lists them and `--deny-externs` refuses them.
+
 ### Python bindings (Gust)
 
 `scripts/gust_python.py lib.gust --out dist` turns a library's exports into

@@ -79,6 +79,23 @@ git log upstream/master..main
 
 ## Compiler
 
+- `gust cimport header.h` (new, `src/cimport.h`, `src/main.cpp`): a C
+  header as a package, parsed by the compiler's own TinyCC: an `extern fn`
+  per function the header declares, a struct per struct its functions use,
+  laid out as C's with explicit `pad`, and the header's integer and string
+  macros and enum constants, each macro tried as a constant in a probe
+  program (bisected past the ones that are not, `_Generic` keeping floats
+  and pointers out); the C glue each extern calls, which passes pointers
+  where Goose passes slices, a NUL-terminated copy of a `const char *`, a
+  struct by reference, and calls the function by its parenthesized name
+  past a function-like macro of the same name; and the sidecar, linking
+  `--lib` and compiling `--source` C. Variadic and prototype-less functions,
+  and types with no Goose form, are left out with the reason.
+  `test/cimport.py` (new) imports a header of every shape and runs a
+  program through it under the JIT and built; checked on zlib in WSL
+  (compress and uncompress round trip, crc32 as Python's zlib computes it,
+  the version from the function and the macro, all 80 of zlib.h's
+  functions but the variadic gzprintf).
 - Labeled `break` and `continue` (spec §6.4, Goose's open item 13): `name:`
   on a loop or `block`, and `break :name e?` / `continue :name` from inside
   it at any depth (`src/lexer.h`, `src/parser.h`, `src/ast.h`). The checker
@@ -269,6 +286,15 @@ git log upstream/master..main
   (`net.c`, `net.h`, `net.gust`, `api.build`), now removed.
 - `examples/echo/` (new): a TCP echo server on `net::serve`, with no HTTP,
   and a `--check` mode that serves itself and checks the echoes.
+
+## Third-party code
+
+- `third_party/tinycc` (LGPL): `tcc_set_decl_func` reports each global
+  declaration as it is parsed, a function, typedef, enum constant,
+  object-like macro or struct layout per line with the file it is in, for
+  `gust cimport` (`libtcc.h`, `libtcc.c`, `tcc.h`, `tccgen.c`, `tccpp.c`, each
+  change marked `Gust:`). Nothing else in TinyCC changed, and nothing calls
+  the hook but `gust cimport`.
 
 ## Scripts and tests
 

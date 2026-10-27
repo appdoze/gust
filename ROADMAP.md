@@ -157,8 +157,16 @@ interp at Lobster's 0.419.)**
   grow storage outside it but not shrink it or rebind an optional of it; qsort with a Gust
   comparator, and callbacks nested through C, in `test/packages/c_callbacks.goose`.)**
 - **Automatic C header import** (`import c "sqlite3.h"`) using TinyCC's parser, with raw
-  imports confined to auditable boundary modules.
-- Prove it on four real libraries: SQLite, libcurl, zlib, OpenSSL.
+  imports confined to auditable boundary modules. **(Done as a command: `gust cimport
+  zlib.h --lib z` writes the boundary module, its C glue and its sidecar, parsed by the
+  compiler's TinyCC through a declaration report added to it; the module is imported as
+  any package and its externs are what `--externs` lists, rather than names a program
+  gets from an `import c` line no audit sees.)**
+- Prove it on four real libraries: SQLite, libcurl, zlib, OpenSSL. **(zlib done, in WSL:
+  80 of zlib.h's 81 functions, a round trip through compress and uncompress, crc32 as
+  Python's zlib computes it. SQLite, libcurl and OpenSSL wait on their headers, which
+  this machine has not got: their runtime libraries are installed, their -dev packages
+  are not.)**
 - **Licensing**: move TinyCC to a separate DLL (satisfies LGPL relinking) or plan its
   replacement by MIR in Phase 6.
 

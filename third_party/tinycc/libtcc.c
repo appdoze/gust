@@ -916,10 +916,25 @@ LIBTCCAPI TCCState *tcc_new(void)
     return s;
 }
 
+/* Gust: the declaration report (tcc_set_decl_func). */
+LIBTCCAPI void tcc_set_decl_func(TCCState *s, void *opaque,
+    void (*func)(void *opaque, const char *line))
+{
+    s->decl_opaque = opaque;
+    s->decl_func = func;
+}
+
+ST_FUNC void gs_decl_report(TCCState *s1, const char *line)
+{
+    if (s1->decl_func)
+        s1->decl_func(s1->decl_opaque, line);
+}
+
 LIBTCCAPI void tcc_delete(TCCState *s1)
 {
     /* free sections */
     tccelf_delete(s1);
+    tcc_free(s1->decl_structs); /* Gust: the structs reported, not owned */
 
     /* free library paths */
     dynarray_reset(&s1->library_paths, &s1->nb_library_paths);

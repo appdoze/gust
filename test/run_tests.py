@@ -2429,6 +2429,19 @@ def main():
     if cc:
         r.show_task(extern_dylib)
 
+    # Gust: a C header as a package (gust cimport), called from a program
+    # under the JIT and built.
+    def cimport():
+        from cimport import check_cimport
+        try:
+            check_cimport(exe, cc, gendir, extra=extra)
+            r.ok("cimport: a header's functions, structs, constants and callbacks as a package, "
+                 "run and built")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("cimport", str(e))
+    if cc and not extra:
+        r.show_task(cimport)
+
     # Gust: a library's exports as a Python package. Its shared library is
     # loaded into Python itself, which the sanitizers' runtimes are not, so
     # only a build without them.

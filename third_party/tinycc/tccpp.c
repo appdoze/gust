@@ -1600,6 +1600,12 @@ bad_twosharp:
         tcc_error("'##' cannot appear at either end of macro");
     define_push(v, t, str.str, first);
     //tok_print(str.str, "#define (%d) %s %d:", t | is_vaargs * 4, get_tok_str(v, 0));
+    /* Gust: an object-like macro, which gust cimport tries as a constant. */
+    if (tcc_state->decl_func && !(t & MACRO_FUNC) && file) {
+        char line[1300];
+        snprintf(line, sizeof line, "d\t%s\t%s", file->filename, get_tok_str(v, NULL));
+        gs_decl_report(tcc_state, line);
+    }
 }
 
 static CachedInclude *search_cached_include(TCCState *s1, const char *filename, int add)
