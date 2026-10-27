@@ -160,41 +160,53 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             auto id = Is<Ident>(an[0]);
             return { cat("((uint64_t)(uintptr_t)&", id->fnref->cname, ")") };
         }
-        case B_QPUT: {
-            auto t = an[0]->exprtype;
+        case B_THREAD_SELF:
+            usesthreads = true;
+            return { "gs_thread_self()" };
+        case B_QPUT: case B_QSEND: {
+            // Gust: qsend(id, v) puts into thread id's mailbox of v's type.
+            auto val = an[c->builtin == B_QSEND ? 1 : 0];
+            auto t = val->exprtype;
             auto q = QueueFor(t);
+            auto qp = cat("&", q);
+            if (c->builtin == B_QSEND) {
+                qp = T();
+                L("gs_queue *", qp, " = gs_qbox(&", q, ", ", GenX(an[0]), ");");
+            }
             // Emitted here, not returned as text: a discarded result would
             // drop the put.
             auto ok = T();
             if (IsResz(t)) {
-                auto src = GenLoc(an[0]);
+                auto src = GenLoc(val);
                 if (src.t->kind == TY_REF) DerefLoc(src);
                 string stk;
                 auto base = BytesTemp(stk);
                 EmitRzImage(src, t, stk, ln);
-                L("uint8_t ", ok, " = gs_qput(&", q, ", ", base, ", ", Top(stk), " - ", base, ");");
+                L("uint8_t ", ok, " = gs_qput(", qp, ", ", base, ", ", Top(stk), " - ", base, ");");
             } else if (IsBytesT(t)) {
-                auto p = GenPtr(an[0]);
-                L("uint8_t ", ok, " = gs_qput(&", q, ", ", p, ", ", SizeX(t, p), ");");
+                auto p = GenPtr(val);
+                L("uint8_t ", ok, " = gs_qput(", qp, ", ", p, ", ", SizeX(t, p), ");");
             } else {
                 auto tv = T();
-                FixedLocal(t, tv, GenX(an[0]));
-                L("uint8_t ", ok, " = gs_qput(&", q, ", &", tv, ", ", FixedSize(t), ");");
+                FixedLocal(t, tv, GenX(val));
+                L("uint8_t ", ok, " = gs_qput(", qp, ", &", tv, ", ", FixedSize(t), ");");
             }
             return { ok };
         }
         case B_QLIMIT:
             L("gs_qlimit(&", QueueFor(c->qtype), ", ", GenX(an[0]), ", ", LocArgs(ln), ");");
             return {};
-        case B_QGET: case B_QPOLL: {
+        case B_QGET: case B_QPOLL: case B_QRECV: {
             auto t = c->rettypes[0];
             auto q = QueueFor(t);
+            // Gust: qrecv<T>() takes from this thread's own mailbox.
+            auto qp = c->builtin == B_QRECV ? cat("gs_qbox(&", q, ", gs_thread_self())") : cat("&", q);
             auto nn = T();
             // qpoll<T>() and qget<T>(ms) say whether a value came.
             auto poll = c->rettypes.size() > 1;
-            if (c->builtin == B_QPOLL) L("gs_qnode *", nn, " = gs_qpoll(&", q, ");");
-            else if (poll) L("gs_qnode *", nn, " = gs_qwait(&", q, ", ", GenX(an[0]), ");");
-            else L("gs_qnode *", nn, " = gs_qget(&", q, ");");
+            if (c->builtin == B_QPOLL) L("gs_qnode *", nn, " = gs_qpoll(", qp, ");");
+            else if (poll) L("gs_qnode *", nn, " = gs_qwait(", qp, ", ", GenX(an[0]), ");");
+            else L("gs_qnode *", nn, " = gs_qget(", qp, ");");
             string got;
             if (poll) {
                 got = T();

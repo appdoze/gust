@@ -472,6 +472,15 @@ struct gs_qstate {
     int64_t count, limit;
     gs_mutex mutex;
     gs_cond cond;
+    struct gs_qbox_entry *boxes;   /* Gust: the threads' mailboxes of this type (gs_qbox) */
+};
+
+/* Gust: a thread's mailbox among a type's queues (qsend, qrecv): a queue of
+   its own, made on its first use and never freed, so its address stays. */
+struct gs_qbox_entry {
+    int64_t id;
+    gs_queue q;
+    struct gs_qbox_entry *next;
 };
 
 /* A monotonic clock in nanoseconds, for a wait's deadline. */
@@ -510,6 +519,7 @@ GS_API void gs_qinit(gs_queue *q) {
     s->head = s->tail = NULL;
     s->count = 0;
     s->limit = INT64_MAX;
+    s->boxes = NULL;
     gs_mutex_init(&s->mutex);
     #if defined(_WIN32) || defined(__APPLE__)
         gs_cond_init(&s->cond);
@@ -587,5 +597,27 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
     s->limit = n;
     gs_mutex_unlock(&s->mutex);
 }
+
+/* Gust: the mailbox of thread `id` among the queues of q's type, which
+   qsend puts into and that thread's qrecv takes from. */
+GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
+    struct gs_qstate *s = *q;
+    gs_mutex_lock(&s->mutex);
+    struct gs_qbox_entry *b = s->boxes;
+    while (b && b->id != id) b = b->next;
+    if (!b) {
+        b = (struct gs_qbox_entry *)malloc(sizeof(struct gs_qbox_entry));
+        if (!b) gs_panic("out of memory making a mailbox");
+        b->id = id;
+        gs_qinit(&b->q);
+        b->next = s->boxes;
+        s->boxes = b;
+    }
+    gs_mutex_unlock(&s->mutex);
+    return &b->q;
+}
+
+/* Gust: this thread's id, which thread_spawn returned for it; main's is -1. */
+GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
 
 #endif  /* GS_NEED_THREADS */

@@ -1005,6 +1005,10 @@ GS_API gs_qnode *gs_qget(gs_queue *q);
 GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms);
 GS_API gs_qnode *gs_qpoll(gs_queue *q);
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
+/* Gust: thread `id`'s own queue of q's type (qsend, qrecv), and this
+   thread's id (thread_self: main's is -1). */
+GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id);
+GS_API int64_t gs_thread_self(void);
 
 #ifndef GS_RUNTIME_OBJECT
 
@@ -1066,7 +1070,8 @@ static void gs_thread_run(void (*entry)(uint8_t *), uint8_t *args) {
     gs_rt_stats();
 }
 
-/* What the thread program holds once it has returned or aborted; the
+)GSRT"
+R"GSRT(/* What the thread program holds once it has returned or aborted; the
    runtime releases the regions after this. */
 static void gs_thread_release(void) {
     free(gs_gl);
@@ -1076,8 +1081,7 @@ static void gs_thread_release(void) {
     gs_nstks = 0;
 }
 
-)GSRT"
-R"GSRT(static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64_t argsize,
+static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64_t argsize,
                                int contained) {
     return gs_thread_start(gs_thread_run, gs_thread_release, entry, args, argsize, contained);
 }
@@ -1281,14 +1285,14 @@ static int64_t gs_zig_check(const uint8_t *p, const uint8_t *end, int64_t *out) 
    only it can read back. */
 static int gs_is_le(void) {
     const uint16_t one = 1;
-    return *(const uint8_t *)&one == 1;
+)GSRT"
+R"GSRT(    return *(const uint8_t *)&one == 1;
 }
 
 /* ---------------------------------------------------------------------------
    Text forms (§3.7): the gs_fmt_* functions write a value's text at dst and
    return the byte count (at most GS_FMT_MAX); print/str/format are built on
-)GSRT"
-R"GSRT(   them. A float takes the shortest form that still round-trips. */
+   them. A float takes the shortest form that still round-trips. */
 
 #define GS_FMT_MAX 32
 
@@ -3697,6 +3701,15 @@ struct gs_qstate {
     int64_t count, limit;
     gs_mutex mutex;
     gs_cond cond;
+    struct gs_qbox_entry *boxes;   /* Gust: the threads' mailboxes of this type (gs_qbox) */
+};
+
+/* Gust: a thread's mailbox among a type's queues (qsend, qrecv): a queue of
+   its own, made on its first use and never freed, so its address stays. */
+struct gs_qbox_entry {
+    int64_t id;
+    gs_queue q;
+    struct gs_qbox_entry *next;
 };
 
 /* A monotonic clock in nanoseconds, for a wait's deadline. */
@@ -3735,6 +3748,7 @@ GS_API void gs_qinit(gs_queue *q) {
     s->head = s->tail = NULL;
     s->count = 0;
     s->limit = INT64_MAX;
+    s->boxes = NULL;
     gs_mutex_init(&s->mutex);
     #if defined(_WIN32) || defined(__APPLE__)
         gs_cond_init(&s->cond);
@@ -3812,6 +3826,28 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
     s->limit = n;
     gs_mutex_unlock(&s->mutex);
 }
+
+/* Gust: the mailbox of thread `id` among the queues of q's type, which
+   qsend puts into and that thread's qrecv takes from. */
+GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
+    struct gs_qstate *s = *q;
+    gs_mutex_lock(&s->mutex);
+    struct gs_qbox_entry *b = s->boxes;
+    while (b && b->id != id) b = b->next;
+    if (!b) {
+        b = (struct gs_qbox_entry *)malloc(sizeof(struct gs_qbox_entry));
+        if (!b) gs_panic("out of memory making a mailbox");
+        b->id = id;
+        gs_qinit(&b->q);
+        b->next = s->boxes;
+        s->boxes = b;
+    }
+    gs_mutex_unlock(&s->mutex);
+    return &b->q;
+}
+
+/* Gust: this thread's id, which thread_spawn returned for it; main's is -1. */
+GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
 
 #endif  /* GS_NEED_THREADS */
 )GSRT"

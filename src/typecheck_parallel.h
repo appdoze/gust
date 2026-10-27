@@ -222,7 +222,7 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
                     if (!an.empty()) place = an[0];
                 }
                 if (cl->builtin == B_THREAD_SPAWN || cl->builtin == B_THREAD_SPAWN_CONTAINED ||
-                    cl->builtin == B_THREAD_WAIT || cl->builtin == B_QPUT)
+                    cl->builtin == B_THREAD_WAIT || cl->builtin == B_QPUT || cl->builtin == B_QSEND)
                     bad = true;
                 if (cl->spec && cl->spec != k && callee(cl->spec, at)) bad = true;
                 for (auto d : cl->dispatch) if (d != k && callee(d, at)) bad = true;
@@ -255,7 +255,8 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
                                         ? "resizes" : "writes");
                 if (cl->builtin == B_THREAD_SPAWN || cl->builtin == B_THREAD_SPAWN_CONTAINED ||
                     cl->builtin == B_THREAD_WAIT || cl->builtin == B_QPUT || cl->builtin == B_QGET ||
-                    cl->builtin == B_QPOLL)
+                    cl->builtin == B_QPOLL || cl->builtin == B_QSEND || cl->builtin == B_QRECV ||
+                    cl->builtin == B_THREAD_SELF)
                     fail(n, "uses threads or queues, which the loop's own threads would share");
             } else if (cl->spec) {
                 // What it is handed for writing: the enclosing code's storage

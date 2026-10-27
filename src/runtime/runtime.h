@@ -987,6 +987,10 @@ GS_API gs_qnode *gs_qget(gs_queue *q);
 GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms);
 GS_API gs_qnode *gs_qpoll(gs_queue *q);
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
+/* Gust: thread `id`'s own queue of q's type (qsend, qrecv), and this
+   thread's id (thread_self: main's is -1). */
+GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id);
+GS_API int64_t gs_thread_self(void);
 
 #ifndef GS_RUNTIME_OBJECT
 

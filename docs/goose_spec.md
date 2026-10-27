@@ -1069,7 +1069,7 @@ var edges: NodeId[>..] = [];
   array of `u8 in x`, which is not a byte array. When `from_bytes` verifies
   an image, it checks each index in the image against its array's length,
   and rejects the image if any index is out of range. The arguments of
-  `qput`, `qget`, `qpoll`, `qlimit` and `thread_spawn` take no type holding
+  `qput`, `qget`, `qpoll`, `qlimit`, `qsend`, `qrecv` and `thread_spawn` take no type holding
   an index type: each thread program's copy of the array grows on its own
   (§11.2). An `extern fn` or `export fn` signature holds none either, since
   C code is not checked against the array.
@@ -4423,6 +4423,15 @@ relative of the Linda tuple-space / coordination style.
   `qlimit<T>(n)` gives it one of `n` messages; lowering a limit below what
   the queue holds keeps the messages queued, and puts fail until fewer than
   `n` remain. A limit of zero or less aborts with a runtime diagnostic.
+* **Mailboxes** (Gust): besides the queue per type, every thread has a
+  mailbox per type. `thread_self() -> i64` is the calling thread's id, the
+  one `thread_spawn` returned for it, and `-1` in `main`. `qsend(id: i64,
+  v) -> bool` puts `v` in thread `id`'s mailbox for `v`'s type, and
+  `qrecv<T>() -> T` and `qrecv<T>(ms: i64) -> T, bool` take from the
+  calling thread's own as `qget` does from the queue. The values follow the
+  queues' rules (flat, copied, no index types). A mailbox and the queue are
+  apart, and a mailbox has no limit; it is made on first use and kept until
+  the program ends. A `parallel for` body (§6.5) uses neither.
 
 ### 11.3 Dynamic stacks (future)
 
@@ -4449,6 +4458,7 @@ The language's own functions:
 | `hardware_threads() -> i64`, `thread_spawn(worker, args…) -> i64`, `thread_spawn_contained(worker, args…) -> i64`, `thread_wait(id) -> bool`, `thread_wait(id, msg) -> bool` | workers (§11.2) |
 | `qput(v) -> bool`, `qget<T>() -> T`, `qget<T>(ms) -> T, bool`, `qpoll<T>() -> T, bool` | the typed queues (§11.2) |
 | `qlimit<T>(n)` | a queue's limit of messages (§11.2) |
+| `thread_self() -> i64`, `qsend(id, v) -> bool`, `qrecv<T>() -> T`, `qrecv<T>(ms) -> T, bool` | Gust: a thread's id and its mailboxes (§11.2) |
 | `to_bytes(a) -> u8[>..]`, `to_bytes(a, out)` | an array's image (a varint byte count, then its element region), either fresh or appended to a growable `u8` array (§3.9, `design/serialization.md`) |
 | `bytes_of(a) -> u8[:]` | the element region alone, as a view: no copy, and never writable |
 | `from_bytes<T[>..]>(b: u8[:]) -> T[>..], bool` | a *verified* array from an untrusted image; empty and `false` if it is not one. Also builds `T[>..<]` and the `T[]` family |

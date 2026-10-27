@@ -3632,6 +3632,9 @@ locks, atomics or memory orderings.
 | `qget<T>(ms) -> T, bool` | the same, waiting at most `ms` milliseconds; else `T`'s zero value and `false` |
 | `qpoll<T>() -> T, bool` | takes one if there is one; else `T`'s zero value and `false` |
 | `qlimit<T>(n)` | lets the queue for `T` hold at most `n` messages |
+| `thread_self() -> i64` | Gust: this worker's id, as `thread_spawn` returned it; `-1` in `main` |
+| `qsend(id, v) -> bool` | Gust: puts `v` in thread `id`'s mailbox for its type |
+| `qrecv<T>() -> T`, `qrecv<T>(ms) -> T, bool` | Gust: as `qget`, from this thread's own mailbox |
 
 Values cross between programs through **typed queues**, one per type.
 Whatever crosses, including a worker's arguments, must be **flat**: it
@@ -3673,6 +3676,42 @@ is full, `qput` returns `false` without waiting, so a server can turn work
 away rather than queue it without end. `qput(v);` as a statement ignores
 the result. To bound the memory a queue may hold, set its limit to that
 memory divided by the size of a typical message.
+
+### Mailboxes (Gust)
+
+The shared queue for a type goes to whichever thread takes first, so a
+worker that asks `main` something cannot wait there for its own answer:
+another worker might take it. Each thread also has a **mailbox** per type.
+`qsend(id, v)` puts `v` in the mailbox of thread `id`, and `qrecv<T>()`
+takes from the calling thread's own, blocking; `qrecv<T>(ms)` waits at
+most `ms` milliseconds, as `qget<T>(ms)` does. A request carries its
+sender's `thread_self()`, and the answer goes back to it:
+
+<!-- check-only -->
+```goose
+struct Ask    { from: i64, n: i64 }
+struct Answer { square: i64 }
+
+thread_fn asker() {
+    qput(Ask { from: thread_self(), n: 7 });
+    let a = qrecv<Answer>();                     // only answers sent to this worker
+    print(a.square);
+}
+
+fn main() {
+    let id = thread_spawn(asker);
+    let q = qget<Ask>();
+    qsend(q.from, Answer { square: q.n * q.n });
+    thread_wait(id);
+}
+```
+
+`main`'s id is `-1`, so a worker can `qsend(-1, v)` to it. A mailbox is
+apart from the shared queue (a `qput` never reaches a `qrecv`) and has no
+limit of its own: `qlimit` bounds the shared queue only. A mailbox is made
+on its first use and lasts until the program ends, so what is sent to a
+thread that never takes it stays queued. A `parallel for`'s body can use
+neither, as it can use no queue.
 
 A worker's return releases everything it owned, whether or not anyone
 waits for it. Queued messages outlive their sender. Workers still running
@@ -4113,6 +4152,7 @@ standard library, written in Goose under `stdlib/` and documented in
 | `default<T>() -> T` | the value a fixed-size `T` has before anything is written to it, declared defaults applied | [8](#field-defaults) |
 | `hardware_threads()`, `thread_spawn(worker, args…)`, `thread_spawn_contained(worker, args…)`, `thread_wait(id)`, `thread_wait(id, msg)` | workers | [22](#22-threads) |
 | `qput(v)`, `qget<T>()`, `qpoll<T>()`, `qlimit<T>(n)` | the typed queues | [22](#22-threads) |
+| `thread_self()`, `qsend(id, v)`, `qrecv<T>()`, `qrecv<T>(ms)` | Gust: a thread's id and its mailboxes | [22](#mailboxes-gust) |
 | `to_bytes(a)`, `to_bytes(a, out)`, `bytes_of(a)`, `from_bytes<T[>..]>(b)` | serialization | [23](#23-serialization) |
 | `embed_file(path)`, `embed_shader(…)` | a file's bytes, or a compiled shader, read at compile time | [21](#embed_file) |
 | `c_callback(f) -> u64` | Gust: export fn `f`'s C address, for C to call back | [24](#callbacks-gust) |

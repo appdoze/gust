@@ -215,7 +215,9 @@ Write the spec first; these change the language.
   data and the globals in place, which the checker keeps every iteration from writing.
   Freezing data for threads that outlive a loop, `thread_spawn`'s, is not done.)** The API example (`docs/gust/backend_api.md`) needs it for any shared data not
   known at compile time.
-- **Addressed mailboxes**: replies a worker can wait for itself. (A **non-blocking
+- **Addressed mailboxes**: replies a worker can wait for itself. **(Done: `thread_self()`,
+  `qsend(id, v)` and `qrecv<T>()`/`qrecv<T>(ms)`, a mailbox per thread and type beside
+  the shared queue; `test/threads/mailboxes.goose`.)** (A **non-blocking
   `thread_wait`** would also save a thread per connection in a thread-per-connection
   server; measured, it halves that server's memory but not its tail latency, and the
   API example's pool does not need it.)

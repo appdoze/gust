@@ -84,6 +84,9 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_QGET,             "qget",             0,  1,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_QPOLL,            "qpoll",            0,  0,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_QLIMIT,           "qlimit",           1,  1,   "",   "",  0,              "",            BF_TYARGS) \
+    F(B_QSEND,            "qsend",            2,  2,   "",   "",  0,              "",            0) \
+    F(B_QRECV,            "qrecv",            0,  1,   "",   "",  0,              "",            BF_TYARGS) \
+    F(B_THREAD_SELF,      "thread_self",      0,  0,   "",   "i", 0,              "",            0) \
     F(B_DEFAULT,          "default",          0,  0,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_COPY,             "copy",             1,  1,   "",   "",  0,              "",            0) \
     F(B_TO_BYTES,         "to_bytes",         1,  2,   "",   "",  BR_ANY,         "append to",   BF_MEMBER | BF_OUTARG) \

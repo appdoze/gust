@@ -136,9 +136,17 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             v.type = ast.booltype;
             return v;
         }
-        case B_QPUT: {
-            auto av = CheckValue(args[0], nullptr);
-            NoUntypedEmptyArray(av, args[0], d.name);
+        case B_THREAD_SELF: {
+            Val v;
+            v.type = ast.inttypes[IS_I64];
+            return v;
+        }
+        case B_QSEND: case B_QPUT: {
+            // Gust: qsend(id, v), into thread id's own queue of v's type.
+            size_t vi = d.kind == B_QSEND ? 1 : 0;
+            if (vi) CheckIntAny(args[0]);
+            auto av = CheckValue(args[vi], nullptr);
+            NoUntypedEmptyArray(av, args[vi], d.name);
             if (av.type->kind == TY_VOID || av.type->kind == TY_FN || !IsFlat(av.type))
                 Error(c, cat("queue elements must be flat (§11.2), not ", TypeStr(av.type)));
             if (HoldsIndexT(av.type)) ThreadIndexError(c, av.type);
@@ -147,7 +155,7 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
             ok.type = ast.booltype;
             return ok;
         }
-        case B_QGET: case B_QPOLL: case B_QLIMIT: {
+        case B_QGET: case B_QPOLL: case B_QLIMIT: case B_QRECV: {
             if (c->tyargs.size() != 1)
                 Error(c, cat(d.name,
                              d.kind == B_QLIMIT ? "<T>(n)" : args.empty() ? "<T>()" : "<T>(ms)",

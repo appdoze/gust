@@ -114,6 +114,15 @@ git log upstream/master..main
   the bounds evaluated once; two rejection fixtures in `test/errors/`. The
   slots and bounds carry plain names, `parallel_reduce_<k>_…`, so the
   dump of a program with a reduce parses again.
+- Mailboxes (`src/builtins.h`, `src/typecheck_builtins.h`,
+  `src/codegen_builtins.h`, `src/runtime/runtime_threads.h`): builtins
+  `thread_self()`, `qsend(id, v)` and `qrecv<T>()`/`qrecv<T>(ms)`. A type's
+  queue state keeps a list of mailboxes by thread id (`gs_qbox`), each a
+  queue of its own made on first use; `qsend` packs as `qput` does into
+  one, `qrecv` takes as `qget` does from the caller's. A `parallel for`
+  body uses none of them (`src/typecheck_parallel.h`).
+  `test/threads/mailboxes.goose`, `test/errors_tc/parallel_mailbox.goose`
+  and `test/errors_tc/qsend_id.goose` (new).
 - `test/mir_runs.py`: a failure shows the head of MIR's stderr, where its
   first error is, rather than the tail.
 - `docs/gust/agent_guide.md` (new): the language for an AI coding agent in
