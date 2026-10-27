@@ -143,7 +143,7 @@ struct Parser {
             case T_RETURN: case T_BREAK: case T_CONTINUE:
                 return !declaration;
             default:
-                return AtInline() || AtCheckfree();
+                return AtInline() || AtCheckfree() || (declaration && AtRoot());
         }
     }
 
@@ -293,6 +293,12 @@ struct Parser {
         if (lex.tok != T_IDENT || lex.attr != "inline") return false;
         auto next = lex.PeekTok();
         return next == T_FN || next == T_RECURSIVE || next == T_THREADFN;
+    }
+
+    // Gust: `root` before `struct`, a contextual modifier
+    // (docs/design/root_structs.md): `root` is a name everywhere else.
+    bool AtRoot() {
+        return lex.tok == T_IDENT && lex.attr == "root" && lex.PeekTok() == T_STRUCT;
     }
 
     // `checkfree` likewise, before the rest of a declaration's modifiers
@@ -445,6 +451,7 @@ struct Parser {
         }
         declseen = true;
         if (AtInline() || AtCheckfree()) goto fndecl;
+        if (AtRoot()) { ParseStructDecl(); return; }
         switch (lex.tok) {
             case T_STRUCT: ParseStructDecl(); return;
             case T_ENUM:   ParseEnumDecl();   return;
@@ -548,9 +555,12 @@ struct Parser {
         auto doc = lex.doc;
         auto depth = lex.DepthBefore();
         auto startp = lex.attr.data();
+        auto isroot = AtRoot();
+        if (isroot) lex.Next();
         lex.Next();
         auto st = new SStruct();
         ast.structs.push_back(st);
+        st->isroot = isroot;
         st->name = ParseDeclName("struct declaration");
         st->ns = curns;
         st->qname = ast.QualifiedName(st->ns, st->name);

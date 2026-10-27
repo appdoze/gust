@@ -41,6 +41,7 @@ add_executable(goose
     src/clone.h
     src/parser.h
     src/resolve.h
+    src/roots.h
     src/expansion_bind.h
     src/typecheck_expansion.h
     src/builtins.h

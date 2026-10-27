@@ -846,7 +846,7 @@ Goose's speed and safety come from a closed world and static ownership. A few de
 | Changing the variant of a packed (`T..`) element | Its neighbours are packed right behind it | Fixed mode, or rebuild the container |
 | `shared_ptr` with automatic last-owner cleanup | No refcounts, no destructors | Pick an owner; `reusable` pool + explicit `free`; generation field to detect staleness |
 | Shared mutable state between threads | No shared memory by design | Messages through typed queues |
-| A struct with several growable members | One resizable per stack, so one per struct (last field) | Locals in a driver function + a struct of references (`Ctx`) |
+| A struct with several growable members | One resizable per stack, so one per struct (last field) | A `root struct` (Gust), each growable member stored apart; or locals in a driver function + a struct of references (`Ctx`) |
 | Subprocesses, networking | Not in the v1 library | `extern fn` to C |
 
 As a rule of thumb, when something won't compile, read the whole error. It names both ends, such as the reference and where it was bound, or the holder and the line that stored into it, which usually tells you which scope or binding to move.

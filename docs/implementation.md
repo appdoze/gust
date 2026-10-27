@@ -65,6 +65,7 @@ single translation unit, included in the order the driver lists them.
 |---|---|---|---|
 | Parse | `lexer.h`, `parser.h`, `ParseProgram` in `main.cpp` | source files, following `import` | the `Ast`: nodes, type expressions, symbols per namespace, globals in initialization order |
 | Resolve | `resolve.h` (`ResolveTypeNames`) | type names as written | struct/enum/generic kinds, aliases substituted away |
+| Root structs (Gust) | `roots.h` (`LowerRootStructs`) | `root struct` declarations and their uses | each resizable field a variable or parameter of its own (`owner.field`), calls passing them; every other use of a root struct an error |
 | Typecheck | `typecheck*.h` (`TypeCheckProgram`) | the `Ast` | one `FnSpec` per specialization with a cloned, annotated body; `StructInst`/`EnumInst`; `VarDef`s; the store record; every diagnostic of §3--§11; the shader blobs `embed_shader` compiles (`gfx.h`, `shaderc.c`) |
 | Optimize | `optimize.h`, `optimize_basecase.h`, `optimize_tre.h`, `optimize_loops.h`, `optimize_reassoc.h` (`Optimizer`) | live specializations | bodies rewritten in place (inlined, folded, loops), liveness and use counts, loop shapes (`ForLoop::stripk`, `sumred`, `While::countdown`) |
 | BCE | `bce.h` (`BCE::RunAll`) | live specializations | `Index::nobc`, `SliceExpr::nobc`, `ForLoop::fixedlen` and `lenbound`, per-loop `hoistrefs` and `hoistfields` |
@@ -435,6 +436,22 @@ Type arguments on an alias use, and a `..` that cannot apply, are reported
 and left out; the `..` is left out silently where the alias's type is such
 a struct. If resolution reported an error, the driver stops after it, as it
 does after the parse; the language server continues to the check.
+
+**Root structs** (`roots.h`, Gust, spec §3.4.1): before the checker, a
+`root struct`'s resizable fields are set aside (`SStruct::rootfields`), and
+every owner, `R&` parameter and binding of one gains a variable or parameter
+per field, named `owner.field`. An owner is `var x = R { .. }`; its fields'
+declarations come before it, and an initializer that calls something and
+comes before a field stored apart is moved into a temporary, so they all run
+in declaration order. A parameter's added ones are marked
+`Param::rootcomp`. `x.f` becomes the name `x.f`, a call passes the owner and
+then its fields, and `x.m(...)` becomes `m(x, ...)`, looked up as UFCS looks
+it up. The checker then sees variables, so every rule of §5 and §9 holds per
+field, and so do the bounds-check pass and the stack-top caches. Every other
+use of a root value is an error here, and so is the type anywhere but an
+owner, its literal or a reference parameter or binding: the pass finds those
+among `Ast::alltypes`, checking each type at the top of a declaration
+through any alias it names.
 
 **Dump** (`dump.h`): `--dump` regenerates source from the parsed tree, and
 the test runner checks that dump, reparse and dump again are identical.

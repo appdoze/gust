@@ -390,6 +390,9 @@ struct Param {
     TypeExpr *type = nullptr;   // Null = untyped, i.e. generic.
     Node *defaultval = nullptr; // What a call leaving the argument out passes (§7.1).
     bool isvar = false;
+    // Gust: one of the resizable fields of a root struct parameter before
+    // it, a parameter of its own (roots.h), which no source declares.
+    bool rootcomp = false;
 };
 
 struct Field {
@@ -1541,6 +1544,13 @@ struct SStruct {
     // and a value of it, or one expected to be of it, ends the check of the
     // code at hand silently.
     bool unknown = false;
+    // Gust: `root struct` (docs/design/root_structs.md). Its resizable
+    // fields are stored apart, each a variable or parameter of its own
+    // beside the owner's (roots.h, LowerRootStructs), and are set aside
+    // here, out of `fields`, which keeps the others: the struct the owner
+    // itself is.
+    bool isroot = false;
+    vector<Field> rootfields;
 };
 
 struct SVariant {

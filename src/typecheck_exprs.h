@@ -652,6 +652,13 @@ inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
         auto inst = GetStructInst(t);
         if (step(inst->st->fields, inst->ftypes, FieldsInFrame(d))) return;
         if (inst->st->broken) throw Abandoned {};
+        // Gust: a root struct's resizable field, stored apart (roots.h),
+        // is reached through the owner's name or a parameter's alone.
+        for (auto &f : inst->st->rootfields)
+            if (f.name == d->name)
+                Error(d, cat("field ", d->name, " of root struct ", inst->st->name,
+                             " is stored apart from the struct: name it through the owner or a ",
+                             inst->st->name, "& parameter (x.", d->name, ")"));
         Error(d, cat("struct ", inst->st->name, " has no field ", d->name));
     }
     if (t->kind == TY_VARIANT) {

@@ -456,7 +456,8 @@ uninitialized slots (§5.3). Per UFCS these are ordinary functions:
   byte would take bytes that the value's layout does not count.
 
 At most one resizable per struct (the tail). (Future extension: two
-resizables with memmove-on-insert semantics, opt-in.)
+resizables with memmove-on-insert semantics, opt-in.) A root struct
+(§3.4.1, Gust) holds any number, each stored apart.
 
 No type contains itself by value, either directly or through what it
 contains (fields, payloads in either ADT mode, variant types, array
@@ -466,6 +467,41 @@ an ADT's payload may link to its own ADT or one of its variants, and a type
 behind a reference may contain the type holding the reference
 (`enum List { Nil, Cons { v: i64, next: List? } }`, or `struct A { b: B? }`
 with `struct B { a: A }`).
+
+### 3.4.1 Root structs (Gust)
+
+`root struct R { ... }` (`root` a contextual modifier: a name everywhere
+else) declares a struct whose resizable fields, any number and in any
+order, are each **stored apart**: each is a resizable value of its own,
+on top of a data stack of its own, beside the struct of R's other fields,
+which is what the owner itself is. So each such field is a separate root
+(§9.2): growing or shrinking one never affects a reference, view or
+`index_of` into another, of the same type or not, and the rules of §5
+apply to each as to a variable. The checker sees each such field as a
+variable or parameter named `x.f`. The design is
+`docs/design/root_structs.md`; the compiler lowers it in `src/roots.h`.
+
+A root struct value is a name, of one of these forms:
+
+* an **owner**, a local or global `var`/`let` its literal constructs at
+  the declaration (`var x = R { .. }`, or `R<T> { .. }` for a generic R,
+  whose type arguments are given). The initializers run once, in the
+  order the fields are declared. A field stored apart is constructed
+  there, as any resizable value is (§4.2).
+* a **reference parameter** `p: R&` or `p: const R&`, whose fields are
+  then references to the caller's (const ones for `const R&`).
+* a **binding** of either, `let q = p;`, `let q .= p;` or `let q: R& = p;`,
+  which binds each field by reference. `q .= other` rebinds every field.
+
+Through one, `x.f` reaches a field, and a call `f(x, ...)` or `x.f(...)`
+passes it to a parameter declared `R&` or `const R&`. A root struct value
+is not copied, assigned whole, compared, printed, returned, converted,
+or passed to a builtin, a function value, or an untyped or other
+parameter. R is not the type of a field, element, payload, result,
+optional, type argument or function type, or a temporary's, through an
+alias or not, and a `thread_fn`, `export fn` or `extern fn` takes none. A
+worker uses a root global as any global (§11.2): through its own copy of
+each field it reaches.
 
 ### 3.5 Algebraic data types
 
@@ -4703,7 +4739,8 @@ its resolution is described.
 7. **Mixed-type pools & pool GC** — internal vs external references, inline
    compaction, copying; interacts with 6.
 8. **Multiple resizables per struct** (memmove-on-insert, opt-in) and
-   **two-way growth** arrays.
+   **two-way growth** arrays. (Gust: root structs, §3.4.1, hold several,
+   each stored apart; one contiguous image of several stays open.)
 9. **Concurrency surface finalization** — queue fairness/capacity, select,
    worker-local init, flat-type relaxation for self-contained
    relative-reference values (send whole trees through queues).
@@ -4932,7 +4969,7 @@ topdecl     := import | struct | enum | typealias | fndecl | externblock | globa
 import      := "import" "."? ident ("." ident)* ";" | "import" ident "from" strlit ";"
 declname    := ident | ident "::" ident | "::" ident   // the namespace, else the file's
 qname       := ident | ident "::" ident | "::" ident   // a declaration reference
-struct      := "struct" declname generics? "{" fieldlist "}"
+struct      := "root"? "struct" declname generics? "{" fieldlist "}"   // root: Gust, §3.4.1
 enum        := "enum" declname generics? "{" variant ("," variant)* ","? "}"
 variant     := ident ( "{" fieldlist "}" )?
 fieldlist   := field ("," field)* ","?

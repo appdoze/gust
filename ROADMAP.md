@@ -327,7 +327,13 @@ the plain function.
 ## Phase 7: Expressiveness (months 12–16)
 
 - From Goose's own open items: moves for resizable values, more than one resizable per
-  struct, labeled `break`. **(Moves done: `a.move()` gives an array's elements as a fresh
+  struct, labeled `break`. **(More than one resizable per struct done as root structs:
+  `root struct` holds any number of resizable fields, each stored apart as a variable or
+  parameter of its own beside the owner (`src/roots.h`, spec §3.4.1,
+  `docs/design/root_structs.md`), so each is a region of its own to the lifetime rules and
+  the generated C is that of separate arrays; owners, `R&` parameters, bindings, generic
+  roots, globals and workers' copies in `test/storage/root_structs.goose` and
+  `test/threads/root_globals.goose`, 23 rejections in `test/errors_tc/root_*`.)** **(Moves done: `a.move()` gives an array's elements as a fresh
   value and leaves it empty, checked as `clear()` is (no view or reference into it may
   still be used) and known to the bounds-check pass as a clear; `a = a.move()` and
   elements with self-relative links are compile errors; `test/codegen/move_resizable.goose`

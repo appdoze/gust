@@ -12,6 +12,7 @@
 #include "parser.h"
 #include "resolve.h"
 #include "builtins.h"
+#include "roots.h"
 #include "gfx.h"
 #include "typecheck.h"
 #include "typecheck_types.h"
@@ -1695,6 +1696,10 @@ int Main(int argc, char **argv) {
             if (!quiet) fprintf(msgs, "roundtrip ok: %d bytes of dump\n", (int)dumped.size());
         }
         if (parseonly) return 0;
+        // Gust: each root struct's resizable fields stored apart (roots.h),
+        // whose errors are the checker's kind.
+        LowerRootStructs(ast);
+        if (!ast.errors.empty()) return 1;
         TypeCheckProgram(ast, library, nocgen);
         // The checker reported the errors it went on past, root by root.
         if (!ast.errors.empty()) return 1;

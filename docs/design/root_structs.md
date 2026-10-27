@@ -1,9 +1,33 @@
 # Root structs: library state with independent storage
 
-Status: accepted direction, implementation planned. This document describes the
-target, not an implemented language feature. Establish root structs first;
-evaluating a stdlib replacement for `reusable` and `reusable[]` is a separate
-milestone and is not a prerequisite for shipping root structs.
+Status: implemented in Gust as field-by-field lowering (`src/roots.h`, spec
+§3.4.1), the second of the "more ambitious optimizations" below, chosen as the
+v1 representation. Before the checker runs, each resizable field becomes a
+variable or parameter of its own, named `owner.field`, beside the owner. The
+owner itself is the struct of the remaining fields. A call passes the owner,
+then each field. Component identity, per-field shrink checks, `index_of`,
+stack-top caching and bounds-check elimination therefore come from the
+existing rules for variables, and the generated C is the code for separate
+arrays. Covered by `test/storage/root_structs.goose`,
+`test/threads/root_globals.goose` and the `test/errors_tc/root_*` rejections.
+
+Where v1 differs from the target below:
+
+* A worker uses a root global as it uses any global, through its own copy of
+  each field it reaches (`test/threads/root_globals.goose`), rather than
+  being rejected. Each field is an ordinary global, so the copy is the
+  existing one, and no descriptor is ever copied.
+* References to an owner are parameters and bindings only. A reference in a
+  field, an element or an optional, a returned one and a branch-selected one
+  are rejected. Each would have to carry every field's reference.
+* A generic owner names its type arguments (`slot_pool<i64> { .. }`).
+
+The scalar-allocator probe from the investigation is accepted: a reference
+`alloc_ref` returned into `items` survives the next allocation's pop of
+`free_slots` (`test/storage/root_structs.goose`).
+
+The rest of this document is the design as it was accepted. Evaluating a
+stdlib replacement for `reusable` and `reusable[]` is a separate milestone.
 
 ## Motivation
 

@@ -278,6 +278,9 @@ struct Workspace {
                 // the check want a program without any.
                 ParseProgram(ast, r.path, stdlibdirs, DirOf(exe), sources);
                 ResolveTypeNames(ast);
+                // Gust: before the index, which then holds each root
+                // struct field's own name where it is written (roots.h).
+                if (ast.errors.empty()) LowerRootStructs(ast);
                 an->parsed = true;
                 // The source's indexes stand on the tree as written, which
                 // the check rewrites where it checks in place (a global's

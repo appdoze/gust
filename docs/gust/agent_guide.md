@@ -69,6 +69,8 @@ registers, on the native stack, or on **data stacks** the compiler assigns.
 4. **One growable value per data stack, topmost.** The compiler arranges the
    stacks; you only see it as rules: a struct has at most one resizable
    field and it is the last, and a resizable value is never an array element.
+   A `root struct` holds several, each stored apart: it is a variable its
+   literal constructs, passed as `R&` (section 8 of the reference).
 5. **Storage is freed at scope end**, all at once. A reference must not
    outlive the variable that owns its target (section 12 of the reference).
 
@@ -259,7 +261,8 @@ stored, the way Gust spells a tree in an array (reference section 11).
 | a recursive call with a growable local in scope | move the local into a block that ends before the call, or own it outside the cycle |
 | a function in a recursive cycle without `recursive` or a full signature | mark the cycle's entry `recursive fn` and write every signature in it |
 | an array of variable-size elements cannot be indexed | iterate it, keep an index of references, or use a capped element type (`u8[..16]`) |
-| a struct holds two resizable fields | keep one resizable field, last; make the others `T[..k]`, `T[]`, or separate variables |
+| a struct holds two resizable fields | declare it `root struct`, construct it as a variable (`var s = S { .. }`) and pass it as `S&`; or keep one resizable field, last |
+| a root struct used as a value (copied, printed, returned, a field's type) | name one of its fields (`s.items`), or pass it to an `S&` parameter |
 | a write through a read-only parameter or slot | take `const` off where the data is yours, or copy it into a builder |
 | ambiguous call (`sqrt(n)`, an integer argument) | convert the argument: `sqrt(n as f64)` |
 | redundant `as` (a warning) | delete the cast: the conversion is implicit there |

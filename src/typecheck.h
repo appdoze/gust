@@ -697,8 +697,10 @@ struct TypeCheck {
         }
         if (listed) s += ">";
         s += "(";
-        for (size_t j = 0; j < argtypes.size(); j++) {
-            if (j) s += ", ";
+        for (size_t j = 0, shown = 0; j < argtypes.size(); j++) {
+            // Gust: a root struct parameter's fields go unsaid (roots.h).
+            if (j < sf->params.size() && sf->params[j].rootcomp) continue;
+            if (shown++) s += ", ";
             for (auto li : litparams) if (li == (int)j) s += "literal ";
             DumpShort(s, argtypes[j]);
         }

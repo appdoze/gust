@@ -347,6 +347,22 @@ git log upstream/master..main
   `test/optimizer/basecase_copied_shrink.goose` also calls `f(0)`: with
   only `f(3)` its original base case is provably dead (1 <= n at every
   call) and its check is now elided, while the inlined copy keeps its own.
+- Root structs (spec §3.4.1, `docs/design/root_structs.md`): `root struct`
+  (`root` a word only before `struct`, `src/parser.h`; `src/dump.h`) holds
+  any number of resizable fields, each stored apart. `src/roots.h` (new)
+  lowers it after name resolution and before the checker. Each resizable
+  field becomes a variable or parameter of its own named `owner.field`, the
+  owner the struct of the other fields (`SStruct::rootfields` keeps the set
+  aside, `Param::rootcomp` marks the parameters added). A call passes the
+  owner and then each field, and `x.f(...)` becomes such a call. Every other
+  use of a root value or type is an error there, the type positions found
+  among `Ast::alltypes`. The checker is unchanged but for a message naming
+  a field stored apart (`src/typecheck_exprs.h`), and for traces and hovers
+  that leave the added parameters out (`src/typecheck.h`,
+  `src/lsp_features.h`). Codegen names `a.b` `a_b_gr1` (`Sanitize`), a form
+  no other name takes. `test/storage/root_structs.goose`,
+  `test/threads/root_globals.goose` (new) and 23 rejections
+  `test/errors_tc/root_*` (new).
 
 ## Safety checks
 

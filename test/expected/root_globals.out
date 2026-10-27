@@ -1,0 +1,2 @@
+worker sw 2 mmm [0, 1, 2]
+main s 1 [0]

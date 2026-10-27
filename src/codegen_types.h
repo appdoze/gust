@@ -357,6 +357,14 @@ inline string CodeGen::Sanitize(string_view name) {
     // `result#1`, a name the parser makes that no program can write
     // (Parser::ParseMultiAssign); a local's C name is unique either way.
     for (auto &c : s) if (c == '#') c = '_';
+    // Gust: `owner.field`, a root struct's field stored apart (roots.h),
+    // which may be a global: `_gr` and the owner's length end it, as no
+    // other form ends, so `a.b_c` and `a_b.c` differ, and neither is the
+    // global `a_b_c`.
+    if (auto dot = s.find('.'); dot != string::npos) {
+        for (auto &c : s) if (c == '.') c = '_';
+        return cat(s, "_gr", dot);
+    }
     return s + "_g";
 }
 
@@ -367,6 +375,9 @@ inline string CodeGen::Sanitize(string_view name) {
 // replace.
 inline string CodeGen::Sanitize(string_view ns, string_view name) {
     if (ns.empty()) return Sanitize(name);
+    // A namespaced root struct field: the form above, then `n` and the
+    // namespace's length.
+    if (name.find('.') != string_view::npos) return cat(ns, "_", Sanitize(name), "n", ns.size());
     return cat(ns, "_", name, "_g", ns.size());
 }
 

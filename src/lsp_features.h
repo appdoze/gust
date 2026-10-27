@@ -53,7 +53,9 @@ inline string GenericsText(const vector<GenericParam> &gs) {
 }
 
 // A type's declaration as its header line.
-inline string DeclDetail(const SStruct *st) { return cat("struct ", st->qname, GenericsText(st->generics)); }
+inline string DeclDetail(const SStruct *st) {
+    return cat(st->isroot ? "root struct " : "struct ", st->qname, GenericsText(st->generics));
+}
 inline string DeclDetail(const SEnum *en) { return cat("enum ", en->qname, GenericsText(en->generics)); }
 inline string DeclDetail(const SAlias *al) { return cat("type ", al->qname, " = ", TypeText(al->type)); }
 
@@ -74,9 +76,10 @@ inline string FnHeader(const SFunction *sf) {
     if (sf->isrec) s += "recursive ";
     s += sf->isthread ? "thread_fn " : "fn ";
     Append(s, sf->qname, GenericsText(sf->generics), "(");
-    for (size_t i = 0; i < sf->params.size(); i++) {
+    for (size_t i = 0, shown = 0; i < sf->params.size(); i++) {
         auto &p = sf->params[i];
-        if (i) s += ", ";
+        if (p.rootcomp) continue;   // A root struct parameter's field (roots.h).
+        if (shown++) s += ", ";
         if (p.isvar) s += "var ";
         s += p.name;
         if (p.type) Append(s, ": ", TypeText(p.type));

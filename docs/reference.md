@@ -1313,6 +1313,54 @@ main [7] 1
 
 Spec §3.4, Appendix C.2.
 
+### Root structs: several resizable fields (Gust)
+
+A `root struct` holds any number of resizable fields, in any order, beside
+ordinary ones. Each resizable field is stored apart, growing on a data stack
+of its own, so growing or shrinking one never disturbs what points into
+another, even one of the same type. The owner is a variable that its literal
+constructs where it is declared (local or global). A function takes it as
+`R&` or `const R&`, also through method syntax, and reaches a field as
+`x.field`.
+
+```goose
+root struct Parser {
+    tokens: u8[>..] = [],
+    depth: i64[>..<] = [],
+    lines: i64 = 1
+}
+
+fn feed(p: Parser&, s: const u8[:]) {
+    for c in s {
+        if c == '(' { p.depth.push(p.tokens.len); }
+        if c == ')' && p.depth.len > 0 { p.depth.pop(); }
+        if c == '\n' { p.lines += 1; }
+        p.tokens.push(c);
+    }
+}
+
+fn main() {
+    var p = Parser { .. };
+    let first .= p.tokens.push('>');
+    p.feed("(a (b)\n c)");
+    first = '<';                  // tokens' element; depth shrank meanwhile
+    print(p.tokens.len, " ", p.depth.len, " ", p.lines, " ", p.tokens[0]);
+}
+```
+
+```
+11 0 2 60
+```
+
+A root struct value is a name, and nothing else: an owner, a parameter, or a
+binding of one (`let q = p;` binds by reference, `q .= other` rebinds every
+field). It is not copied, assigned whole, compared, printed, returned, or
+handed to a builtin. It is never a field's, an element's, a result's, an
+optional's or a type argument's type, through an alias or not. A function
+value or an untyped parameter does not take it either. A worker uses a root
+global as it uses any global, through its own copy of each field. Spec
+§3.4.1; the design is in `docs/design/root_structs.md`.
+
 ### Generic structs
 
 ```goose
