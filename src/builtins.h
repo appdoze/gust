@@ -91,6 +91,7 @@ inline int RecvKindOf(TypeExpr *t) {
     F(B_COPY,             "copy",             1,  1,   "",   "",  0,              "",            0) \
     F(B_TO_BYTES,         "to_bytes",         1,  2,   "",   "",  BR_ANY,         "append to",   BF_MEMBER | BF_OUTARG) \
     F(B_BYTES_OF,         "bytes_of",         1,  1,   "",   "",  BR_ANY,         "",            BF_MEMBER) \
+    F(B_FREEZE,           "freeze",           1,  1,   "",   "",  BR_INDEXABLE | BR_SLICE, "",   BF_MEMBER) \
     F(B_FROM_BYTES,       "from_bytes",       1,  1,   "",   "",  0,              "",            BF_TYARGS) \
     F(B_EMBED_SHADER,     "embed_shader",     1, 99,   "",   "",  0,              "",            0) \
     F(B_EMBED_FILE,       "embed_file",       1,  1,   "",   "",  0,              "",            0) \

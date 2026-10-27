@@ -4432,6 +4432,12 @@ relative of the Linda tuple-space / coordination style.
   queues' rules (flat, copied, no index types). A mailbox and the queue are
   apart, and a mailbox has no limit; it is made on first use and kept until
   the program ends. A `parallel for` body (§6.5) uses neither.
+* **Frozen data** (Gust): `freeze(a) -> const T[:]`, for an array or slice
+  `a` whose elements are of a fixed size and flat, copies the elements into
+  storage kept until the program ends and returns a read-only view of
+  them, which is static data (§1.2). A `thread_fn` parameter may be such a
+  view, `const T[:]` with flat `T`, and every spawn passes static data
+  there, checked at the spawn; the worker reads the same bytes in place.
 
 ### 11.3 Dynamic stacks (future)
 
@@ -4459,6 +4465,7 @@ The language's own functions:
 | `qput(v) -> bool`, `qget<T>() -> T`, `qget<T>(ms) -> T, bool`, `qpoll<T>() -> T, bool` | the typed queues (§11.2) |
 | `qlimit<T>(n)` | a queue's limit of messages (§11.2) |
 | `thread_self() -> i64`, `qsend(id, v) -> bool`, `qrecv<T>() -> T`, `qrecv<T>(ms) -> T, bool` | Gust: a thread's id and its mailboxes (§11.2) |
+| `freeze(a) -> const T[:]` | Gust: a read-only copy kept until the program ends, static data a worker may be handed (§11.2) |
 | `to_bytes(a) -> u8[>..]`, `to_bytes(a, out)` | an array's image (a varint byte count, then its element region), either fresh or appended to a growable `u8` array (§3.9, `design/serialization.md`) |
 | `bytes_of(a) -> u8[:]` | the element region alone, as a view: no copy, and never writable |
 | `from_bytes<T[>..]>(b: u8[:]) -> T[>..], bool` | a *verified* array from an untrusted image; empty and `false` if it is not one. Also builds `T[>..<]` and the `T[]` family |

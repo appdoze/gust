@@ -213,8 +213,13 @@ Write the spec first; these change the language.
 - **Freeze-then-share**: large read-only data built at run time, read by every worker in
   place. **(For a `parallel for`'s duration, done: its workers read the enclosing code's
   data and the globals in place, which the checker keeps every iteration from writing.
-  Freezing data for threads that outlive a loop, `thread_spawn`'s, is not done.)** The API example (`docs/gust/backend_api.md`) needs it for any shared data not
-  known at compile time.
+  For `thread_spawn` done too: `freeze(a)` copies an array of flat elements once into
+  storage kept until the program ends and returns a read-only `const T[:]` of it, which
+  is static data as a string literal's is; a `thread_fn` parameter may be such a view,
+  and each spawn must pass static data there, so every worker reads the same bytes in
+  place; `test/threads/freeze_share.goose`, clean under ThreadSanitizer.)** The API
+  example (`docs/gust/backend_api.md`) needs it for any shared data not known at compile
+  time.
 - **Addressed mailboxes**: replies a worker can wait for itself. **(Done: `thread_self()`,
   `qsend(id, v)` and `qrecv<T>()`/`qrecv<T>(ms)`, a mailbox per thread and type beside
   the shared queue; `test/threads/mailboxes.goose`.)** (A **non-blocking

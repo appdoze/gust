@@ -123,6 +123,18 @@ git log upstream/master..main
   body uses none of them (`src/typecheck_parallel.h`).
   `test/threads/mailboxes.goose`, `test/errors_tc/parallel_mailbox.goose`
   and `test/errors_tc/qsend_id.goose` (new).
+- Frozen data (`src/builtins.h`, `src/typecheck_builtins.h`,
+  `src/typecheck_calls.h`, `src/codegen_builtins.h`,
+  `src/runtime/runtime_impl.h`): `freeze(a)` copies an array's or slice's
+  fixed-size flat elements into storage the runtime never frees
+  (`gs_freeze`) and returns a `const T[:]` of them rooted in static data. A
+  `thread_fn` parameter may be a `const` slice of flat elements
+  (`EnsureThreadSpec`), and a spawn checks that its argument there leads
+  only to static data; the spawn packet carries the view as it does any
+  fixed value. `test/threads/freeze_share.goose`,
+  `test/errors_tc/thread_view_not_static.goose`,
+  `test/errors_tc/freeze_references.goose` and
+  `test/errors_tc/freeze_write.goose` (new); the editor grammars name it.
 - `test/mir_runs.py`: a failure shows the head of MIR's stderr, where its
   first error is, rather than the tail.
 - `docs/gust/agent_guide.md` (new): the language for an AI coding agent in

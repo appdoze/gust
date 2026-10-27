@@ -693,6 +693,16 @@ static GS_NORETURN void gs_end(int code) {
     _Exit(code);
 }
 
+/* Gust: freeze(a)'s copy, never freed: it is static data to the program
+   (§11.2), which any thread may hold a view of at any time. One byte at
+   least, so that an empty array's view points at something. */
+GS_API void *gs_freeze(const void *p, int64_t n) {
+    void *q = malloc(n > 0 ? (size_t)n : 1);
+    if (!q) gs_panic("out of memory in freeze");
+    if (n > 0) memcpy(q, p, (size_t)n);
+    return q;
+}
+
 /* The smallest a region gets before a refusal is fatal. */
 #define GS_REGION_MIN (1u << 20)
 

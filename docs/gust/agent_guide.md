@@ -297,7 +297,10 @@ fn main() {
 Whichever thread takes first gets the next value on a shared queue. For an
 answer only one worker should get, send its `thread_self()` with the
 request: `qsend(id, v)` puts the answer in that thread's own mailbox, and
-the worker takes it with `qrecv<T>()`. `main`'s id is `-1`.
+the worker takes it with `qrecv<T>()`. `main`'s id is `-1`. A large table
+every worker reads goes to them once rather than copied per worker:
+`let t = freeze(a);` makes a read-only `const T[:]` that lives until the
+program ends, and a `thread_fn` parameter of that type takes it.
 
 `parallel for i in n { ... }` (or `in a..b`) runs iterations on every core
 with the result of running them in order, which the checker proves: the body

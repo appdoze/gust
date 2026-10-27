@@ -3721,8 +3721,13 @@ inline FnSpec *TypeCheck::EnsureThreadSpec(SFunction *sf, Line l) {
             Error(l, cat("thread_fn ", sf->name, " needs fully typed parameters"));
         auto t = Subst(p.type);
         ValidateType(t, sf->line, VT_PARAM);
-        if (!IsFlat(t))
-            Error(l, cat("thread_fn parameters must be flat (§11.2), not ", TypeStr(t)));
+        // Gust: or a read-only view of flat elements, which each spawn hands
+        // static data (freeze, B_THREAD_SPAWN).
+        auto sharedview = t->kind == TY_SLICE && t->cq && ClassOf(t->sub) == SC_FIXED && IsFlat(t->sub);
+        if (!IsFlat(t) && !sharedview)
+            Error(l, cat("thread_fn parameters must be flat (§11.2), not ", TypeStr(t),
+                         ", or a read-only view of flat elements (const T[:]), which a spawn hands "
+                         "static data"));
         spec->argtypes.push_back(t);
     }
     spec->roots.resize(spec->argtypes.size());

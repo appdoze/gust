@@ -3635,6 +3635,7 @@ locks, atomics or memory orderings.
 | `thread_self() -> i64` | Gust: this worker's id, as `thread_spawn` returned it; `-1` in `main` |
 | `qsend(id, v) -> bool` | Gust: puts `v` in thread `id`'s mailbox for its type |
 | `qrecv<T>() -> T`, `qrecv<T>(ms) -> T, bool` | Gust: as `qget`, from this thread's own mailbox |
+| `freeze(a) -> const T[:]` | Gust: a copy of `a`'s elements kept until the program ends, read-only; a worker may be handed it |
 
 Values cross between programs through **typed queues**, one per type.
 Whatever crosses, including a worker's arguments, must be **flat**: it
@@ -3712,6 +3713,43 @@ limit of its own: `qlimit` bounds the shared queue only. A mailbox is made
 on its first use and lasts until the program ends, so what is sent to a
 thread that never takes it stays queued. A `parallel for`'s body can use
 neither, as it can use no queue.
+
+### Frozen data (Gust)
+
+A worker copies what it is handed, which is wasteful for a large table
+every worker only reads. `freeze(a)` copies the elements of an array or
+slice once, into storage kept until the program ends, and returns a
+read-only view of it, `const T[:]`. That view is static data, as a string
+literal's is, so a worker may be handed it: a `thread_fn` parameter may be
+a `const` slice of flat elements, and each spawn must pass static data
+there. Every worker then reads the same bytes in place, and none can write
+them.
+
+<!-- check-only -->
+```goose
+thread_fn summer(table: const i64[:], from: i64, to: i64) {
+    var sum = 0;
+    for i in from..to { sum += table[i]; }
+    qput(sum);
+}
+
+fn main() {
+    var squares: i64[>..] = [];
+    for i in 1000 { squares.push(i * i); }
+    let table = freeze(squares);              // built at run time, then shared
+    var ids: i64[>..] = [];
+    for w in 4 { ids.push(thread_spawn(summer, table, w * 250, (w + 1) * 250)); }
+    var total = 0;
+    for w in 4 { total += qget<i64>(); }
+    for id in ids { thread_wait(id); }
+    print(total);
+}
+```
+
+The elements must be of a fixed size and hold no references. The copy is
+the program's until it ends, so freeze what is built once and read for
+long, not what is rebuilt in a loop. Handing a worker a view of anything
+else, such as a local array, is a compile error that names `freeze`.
 
 A worker's return releases everything it owned, whether or not anyone
 waits for it. Queued messages outlive their sender. Workers still running
@@ -4157,6 +4195,7 @@ standard library, written in Goose under `stdlib/` and documented in
 | `hardware_threads()`, `thread_spawn(worker, args…)`, `thread_spawn_contained(worker, args…)`, `thread_wait(id)`, `thread_wait(id, msg)` | workers | [22](#22-threads) |
 | `qput(v)`, `qget<T>()`, `qpoll<T>()`, `qlimit<T>(n)` | the typed queues | [22](#22-threads) |
 | `thread_self()`, `qsend(id, v)`, `qrecv<T>()`, `qrecv<T>(ms)` | Gust: a thread's id and its mailboxes | [22](#mailboxes-gust) |
+| `freeze(a)` | Gust: a read-only copy that lives until the program ends, which workers may share | [22](#frozen-data-gust) |
 | `to_bytes(a)`, `to_bytes(a, out)`, `bytes_of(a)`, `from_bytes<T[>..]>(b)` | serialization | [23](#23-serialization) |
 | `embed_file(path)`, `embed_shader(…)` | a file's bytes, or a compiled shader, read at compile time | [21](#embed_file) |
 | `c_callback(f) -> u64` | Gust: export fn `f`'s C address, for C to call back | [24](#callbacks-gust) |

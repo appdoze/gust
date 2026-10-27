@@ -101,6 +101,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
         }
         case B_TO_BYTES: return EmitToBytes(an, d0, ln);
         case B_BYTES_OF: return EmitBytesOf(c, an, ln);
+        case B_FREEZE: return EmitFreeze(c, an);
         case B_FROM_BYTES: return EmitFromBytes(c, an, d0, ln);
         case B_DEFAULT: {
             auto t = c->rettypes[0];
@@ -1307,6 +1308,30 @@ inline vector<string> CodeGen::EmitBytesOf(Call *c, vector<Node *> &an, Line ln)
     PayloadOf(an[0], src, sz);
     auto s = T();
     L(CT(c->rettypes[0]), " ", s, " = { (uint8_t *)", src, ", ", sz, " };");
+    return { s };
+}
+
+// Gust: freeze(a): the elements copied into storage the runtime keeps until
+// the program ends (gs_freeze), as a const T[:] of them. Its elements are of
+// a fixed size, so the view's count is the array's.
+inline vector<string> CodeGen::EmitFreeze(Call *c, vector<Node *> &an) {
+    auto n = an[0];
+    auto nt = n->exprtype;
+    auto rt = nt->kind == TY_REF ? nt->ref->sub : nt;
+    auto elem = rt->kind == TY_SLICE ? rt->sub : rt->arr->sub;
+    SrcElems se;
+    if (rt->kind == TY_ARRAY || nt->kind == TY_REF) {
+        auto v = ArrayView(RecvLoc(n));
+        auto cnt = T();
+        L("int64_t ", cnt, " = ", v.len, ";");
+        se.elems = v.elems;
+        se.n = cnt;
+    } else {
+        se = GenSrcElems(n);
+    }
+    auto s = T();
+    L(CT(c->rettypes[0]), " ", s, " = { (", CT(elem), " *)gs_freeze(", se.elems, ", (", se.n,
+      ") * ", FixedSize(elem), "), ", se.n, " };");
     return { s };
 }
 

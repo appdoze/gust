@@ -275,6 +275,9 @@ GS_API GS_NORETURN void gs_asfail_u(const char *why, uint64_t v, const char *typ
 /* f32: d is an f32's value, and takes that type's text form. */
 GS_API GS_NORETURN void gs_asfail_f(const char *why, double d, int f32, const char *type,
                                     const char *file, int line);
+/* Gust: freeze(a) (§11.2): n bytes at p copied into storage kept until the
+   program ends, which every thread may read. */
+GS_API void *gs_freeze(const void *p, int64_t n);
 
 /* Bounds check as one unsigned compare; the index operand must be side-effect
    free (the compiler guarantees this at emission). The failing arm's int64_t

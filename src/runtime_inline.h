@@ -289,6 +289,9 @@ GS_API GS_NORETURN void gs_asfail_u(const char *why, uint64_t v, const char *typ
 /* f32: d is an f32's value, and takes that type's text form. */
 GS_API GS_NORETURN void gs_asfail_f(const char *why, double d, int f32, const char *type,
                                     const char *file, int line);
+/* Gust: freeze(a) (§11.2): n bytes at p copied into storage kept until the
+   program ends, which every thread may read. */
+GS_API void *gs_freeze(const void *p, int64_t n);
 
 /* Bounds check as one unsigned compare; the index operand must be side-effect
    free (the compiler guarantees this at emission). The failing arm's int64_t
@@ -361,13 +364,13 @@ static inline void gs_cpuid(uint32_t leaf, uint32_t r[4]) {
     __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(0));
 }
 
-/* The highest level both the CPU and the operating system support (the OS
+)GSRT"
+R"GSRT(/* The highest level both the CPU and the operating system support (the OS
    has to save the wider registers: XGETBV's XCR0), capped at GS_SIMD. */
 static inline int gs_simd_detect(void) {
     uint32_t r[4], b7, xcr0, xhi;
     gs_cpuid(0, r);
-)GSRT"
-R"GSRT(    if (r[0] < 7) return 0;
+    if (r[0] < 7) return 0;
     gs_cpuid(1, r);
     /* OSXSAVE, AVX, POPCNT, FMA. */
     if ((r[2] & (1u << 27 | 1u << 28 | 1u << 23 | 1u << 12)) !=
@@ -529,14 +532,14 @@ static GS_NOINLINE int gs_memeq_long(const uint8_t *p, const uint8_t *q, size_t 
         if ((gs_ld64(p + i) ^ gs_ld64(q + i)) | (gs_ld64(p + i + 8) ^ gs_ld64(q + i + 8)))
             return 0;
     return ((gs_ld64(p + n - 16) ^ gs_ld64(q + n - 16)) |
-            (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
+)GSRT"
+R"GSRT(            (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
 }
 
 static int gs_memeq(const void *a, const void *b, size_t n) {
     const uint8_t *p = (const uint8_t *)a, *q = (const uint8_t *)b;
     if (n >= 8 && n <= 16)
-)GSRT"
-R"GSRT(        return ((gs_ld64(p) ^ gs_ld64(q)) | (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
+        return ((gs_ld64(p) ^ gs_ld64(q)) | (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
     if (n >= 4 && n < 8)
         return ((gs_ld32(p) ^ gs_ld32(q)) | (gs_ld32(p + n - 4) ^ gs_ld32(q + n - 4))) == 0;
     if (n < 4)
@@ -695,12 +698,12 @@ static int64_t gs_shl_i64(int64_t a, int64_t n) {
 static int64_t gs_shr_i64(int64_t a, int64_t n) { return a >> (n & 63); }
 static uint64_t gs_add_u64(uint64_t a, uint64_t b) { return a + b; }
 static uint64_t gs_sub_u64(uint64_t a, uint64_t b) { return a - b; }
-static uint64_t gs_mul_u64(uint64_t a, uint64_t b) { return a * b; }
+)GSRT"
+R"GSRT(static uint64_t gs_mul_u64(uint64_t a, uint64_t b) { return a * b; }
 static uint64_t gs_shl_u64(uint64_t a, int64_t n) { return a << (n & 63); }
 static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 
-)GSRT"
-R"GSRT(#else  /* release: each operation is the expression the function returned */
+#else  /* release: each operation is the expression the function returned */
 
 #define gs_add_i8(a, b, f, l)  ((int8_t)((int64_t)(a) + (int64_t)(b)))
 #define gs_sub_i8(a, b, f, l)  ((int8_t)((int64_t)(a) - (int64_t)(b)))
@@ -890,14 +893,14 @@ static int64_t gs_f2iwrap(double d) {
 /* `as` conversion checks (§6.3): abort in debug builds whenever the
    conversion would change the value, naming the value, the target type and
    the cast's file and line; identity/plain casts in release, which drop all
-   three unevaluated. A conversion to a float is a plain C cast in every build
+)GSRT"
+R"GSRT(   three unevaluated. A conversion to a float is a plain C cast in every build
    and has none. */
 #if GS_DEBUG
 
 static int64_t gs_rangechk(int64_t v, int64_t lo, int64_t hi, const char *type,
                            const char *file, int line) {
-)GSRT"
-R"GSRT(    if (v < lo || v > hi) gs_asfail_i("out of range", v, type, file, line);
+    if (v < lo || v > hi) gs_asfail_i("out of range", v, type, file, line);
     return v;
 }
 static uint64_t gs_rangechk_u(uint64_t v, uint64_t hi, const char *type, const char *file,
@@ -1057,15 +1060,15 @@ GS_API gs_qnode *gs_qget(gs_queue *q);
 GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms);
 GS_API gs_qnode *gs_qpoll(gs_queue *q);
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
-/* Gust: thread `id`'s own queue of q's type (qsend, qrecv), and this
+)GSRT"
+R"GSRT(/* Gust: thread `id`'s own queue of q's type (qsend, qrecv), and this
    thread's id (thread_self: main's is -1). */
 GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id);
 GS_API int64_t gs_thread_self(void);
 
 #ifndef GS_RUNTIME_OBJECT
 
-)GSRT"
-R"GSRT(/* The current thread program's stack block: every stack the compiler
+/* The current thread program's stack block: every stack the compiler
    counted for it, reserved as the program starts (gs_stack_block).
    gs_sp-relative indices resolve through it. */
 static GS_TLS gs_stack *gs_stks;
@@ -1276,7 +1279,8 @@ static int64_t gs_uleb_write(uint8_t *p, uint64_t v) {
 }
 
 static int64_t gs_zig_read(const uint8_t *p) {
-    uint64_t u = (uint64_t)gs_uleb_read(p);
+)GSRT"
+R"GSRT(    uint64_t u = (uint64_t)gs_uleb_read(p);
     return (int64_t)((u >> 1) ^ (0u - (u & 1)));
 }
 
@@ -1284,8 +1288,7 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
     return gs_uleb_write(p, ((uint64_t)v << 1) ^ (uint64_t)(v >> 63));
 }
 
-)GSRT"
-R"GSRT(/* ---------------------------------------------------------------------------
+/* ---------------------------------------------------------------------------
    Verified loading (docs/design/serialization.md): what the generated
    gs_verify_<T> walkers are built from. The bytes are untrusted until the
    walk finishes, so every read here is bounded by the image end and reports
@@ -2066,6 +2069,16 @@ static GS_NORETURN void gs_end(int code) {
     _Exit(code);
 }
 
+/* Gust: freeze(a)'s copy, never freed: it is static data to the program
+   (§11.2), which any thread may hold a view of at any time. One byte at
+   least, so that an empty array's view points at something. */
+GS_API void *gs_freeze(const void *p, int64_t n) {
+    void *q = malloc(n > 0 ? (size_t)n : 1);
+    if (!q) gs_panic("out of memory in freeze");
+    if (n > 0) memcpy(q, p, (size_t)n);
+    return q;
+}
+
 /* The smallest a region gets before a refusal is fatal. */
 #define GS_REGION_MIN (1u << 20)
 
@@ -2146,7 +2159,8 @@ GS_API uint8_t gs_trim_memory(void) {
             ok = 0;
 #elif defined(GS_POSIX_COMMIT_ON_FAULT)
         /* Reusable while writable, which XNU requires; then closed, so that
-           growth faults and gs_commit_chunk declares them reused. A growth
+)GSRT"
+R"GSRT(           growth faults and gs_commit_chunk declares them reused. A growth
            that skipped pages can leave a closed stretch below the mark, so
            the range is opened first (which commits nothing). */
         if (mprotect((void *)start, len, PROT_READ | PROT_WRITE) ||
@@ -2155,8 +2169,7 @@ GS_API uint8_t gs_trim_memory(void) {
             continue;
         }
         if (mprotect((void *)start, len, PROT_NONE)) {
-)GSRT"
-R"GSRT(            /* Still open, so nothing would declare them reused: undo. */
+            /* Still open, so nothing would declare them reused: undo. */
             madvise((void *)start, len, MADV_FREE_REUSE);
             ok = 0;
             continue;
@@ -2355,7 +2368,8 @@ static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
 
 /* Puts the entry for node `child` at position k of the inner node at level
    l of the path, splitting full nodes on the way up. */
-static void gs_sp_addchild(gs_sppath *p, int64_t l, int64_t k, int64_t child, int leaf) {
+)GSRT"
+R"GSRT(static void gs_sp_addchild(gs_sppath *p, int64_t l, int64_t k, int64_t child, int leaf) {
     for (;;) {
         gs_spinner *in = GS_SPINNER(p, p->node[l]), *o = in;
         int64_t key = gs_sp_key(p, child, leaf), max = gs_sp_max(p, child, leaf, INT64_MAX);
@@ -2366,8 +2380,7 @@ static void gs_sp_addchild(gs_sppath *p, int64_t l, int64_t k, int64_t child, in
             nn = gs_sp_newnode(p);
             r = GS_SPINNER(p, nn);
             r->n = in->n - half;
-)GSRT"
-R"GSRT(            memcpy(r->key, in->key + half, (size_t)r->n * 8);
+            memcpy(r->key, in->key + half, (size_t)r->n * 8);
             memcpy(r->max, in->max + half, (size_t)r->n * 8);
             memcpy(r->child, in->child + half, (size_t)r->n * 8);
             in->n = half;
@@ -2590,7 +2603,8 @@ static void gs_sp_near(gs_sppath *p, gs_sppath *q, int64_t idx, int64_t end, gs_
         s->nk = s->k + 1;
         return;
     }
-    for (l = p->h - 1; l >= 0 && p->pos[l] + 1 >= GS_SPINNER(p, p->node[l])->n; l--) {}
+)GSRT"
+R"GSRT(    for (l = p->h - 1; l >= 0 && p->pos[l] + 1 >= GS_SPINNER(p, p->node[l])->n; l--) {}
     if (l < 0 || GS_SPINNER(p, p->node[l])->key[p->pos[l] + 1] != end) return;
     q->base = p->base;
     q->n = p->n;
@@ -2603,8 +2617,7 @@ static void gs_sp_near(gs_sppath *p, gs_sppath *q, int64_t idx, int64_t end, gs_
         q->pos[l + 1] = 0;
     }
     s->np = q;
-)GSRT"
-R"GSRT(    s->nl = GS_SPLEAF(q, q->node[q->h]);
+    s->nl = GS_SPLEAF(q, q->node[q->h]);
     s->nk = 0;
 }
 
@@ -2800,7 +2813,8 @@ static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
     } else if (k == 2) {
         r = _mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b));
     } else if (k == 3) {
-        r = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b)),
+)GSRT"
+R"GSRT(        r = _mm_or_si128(_mm_or_si128(_mm_cmpeq_epi8(x, m->a), _mm_cmpeq_epi8(x, m->b)),
                          _mm_cmpeq_epi8(x, m->c));
     } else {
         t = _mm_sub_epi8(x, m->a);
@@ -2813,8 +2827,7 @@ static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
    hi[x & 15] where not (it gives 0 for an index with its top bit set), and
    the bit for x's bits 4 to 6, which the entry has or not. */
 static GS_SSSE3 GS_INLINE __m128i gs_bsm_tables(const gs_bsm *m, __m128i x) {
-)GSRT"
-R"GSRT(    __m128i lo = _mm_shuffle_epi8(m->a, x);
+    __m128i lo = _mm_shuffle_epi8(m->a, x);
     __m128i hi = _mm_shuffle_epi8(m->b, _mm_xor_si128(x, _mm_set1_epi8((char)0x80)));
     __m128i bit = _mm_shuffle_epi8(m->c, _mm_and_si128(_mm_srli_epi16(x, 4), _mm_set1_epi8(7)));
     return _mm_cmpeq_epi8(_mm_and_si128(_mm_or_si128(lo, hi), bit), bit);
@@ -2964,7 +2977,8 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
         uint64_t total = per ? budget / per : 0;
         int64_t spare = total > (uint64_t)INT64_MAX ? INT64_MAX : (int64_t)total;
         spare -= mainregions;
-        gs_thread_cap = spare > workerregions ? spare / workerregions : 1;
+)GSRT"
+R"GSRT(        gs_thread_cap = spare > workerregions ? spare / workerregions : 1;
     }
     // Unbuffered stdout: output is never lost to an abort or a killed run,
     // and interleaves correctly with stderr diagnostics. Revisit if print
@@ -2974,8 +2988,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
         // The bytes a program writes are the bytes that come out, '\n' one
         // byte as on every other platform, rather than a "\r\n" the CRT's
         // text mode makes of it byte by byte; and the bytes it reads are
-)GSRT"
-R"GSRT(        // the bytes that came in, where text mode would make "\r\n" '\n'
+        // the bytes that came in, where text mode would make "\r\n" '\n'
         // and stop at the first Ctrl-Z.
         _setmode(_fileno(stdin), _O_BINARY);
         _setmode(_fileno(stdout), _O_BINARY);
@@ -3179,7 +3192,8 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
 /* The text of a finite float from its fields: the sign, the significand
    without its implicit bit and the biased exponent, for a type of `bits`
    significant bits and least exponent emin. The digits are laid out as C's
-   %g lays them out at a precision of max(15, digits): in exponent form, with
+)GSRT"
+R"GSRT(   %g lays them out at a precision of max(15, digits): in exponent form, with
    at least two exponent digits, below 1e-4 or from that power of ten up. */
 static int64_t gs_fmt_float(uint8_t *dst, int neg, uint64_t frac, int bexp, int bits,
                             int emin) {
@@ -3191,8 +3205,7 @@ static int64_t gs_fmt_float(uint8_t *dst, int neg, uint64_t frac, int bexp, int 
         return p + 3 - (char *)dst;
     }
     n = gs_float_digits(bexp ? frac | (uint64_t)1 << (bits - 1) : frac,
-)GSRT"
-R"GSRT(                        (bexp ? bexp - 1 : 0) + emin, bits, emin, dig, &k);
+                        (bexp ? bexp - 1 : 0) + emin, bits, emin, dig, &k);
     x = k - 1;
     if (x < -4 || x >= (n > 15 ? n : 15)) {
         *p++ = dig[0];

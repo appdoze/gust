@@ -95,7 +95,15 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                 DestScope ds(*this, Dest {});
                 for (size_t i = 0; i < spec->argtypes.size(); i++) {
                     if (HoldsIndexT(spec->argtypes[i])) ThreadIndexError(c, spec->argtypes[i]);
-                    CheckArg(args[1 + i], spec->argtypes[i]);
+                    auto av = CheckArg(args[1 + i], spec->argtypes[i]);
+                    // Gust: a read-only view the worker reads in place, which
+                    // only static data can be (freeze, a string literal):
+                    // nothing else outlives the spawning thread's frames.
+                    if (IsFlat(spec->argtypes[i])) continue;
+                    if (av.unknown || !av.All([](const RootAlt &a) { return !a.root && a.exact; }))
+                        Error(args[1 + i], cat(wsf->name, "'s parameter ", wsf->params[i].name,
+                                               " is a view, which a worker may be handed only of "
+                                               "static data: freeze(a) makes some (§11.2)"));
                 }
             }
             c->spec = spec;
@@ -425,6 +433,20 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
         Val v;
         v.type = t;
         v.Set(TempRoot(), false);
+        return v;
+    }
+    // Gust: freeze(a) (§11.2): a copy of the elements in storage kept until
+    // the program ends, viewed read-only. It is static data, as a string
+    // literal's is: a worker may be handed it and read it in place.
+    if (d.kind == B_FREEZE) {
+        if (ClassOf(elem) != SC_FIXED || !IsFlat(elem))
+            Error(c, cat("freeze copies elements of a fixed size that hold no references (§11.2), "
+                         "not ", TypeStr(elem)));
+        Val v;
+        v.type = ast.ConstOf(ast.SliceOf(elem, c->line));
+        v.Set(nullptr, true);   // Static data owns what it holds.
+        v.writable = false;
+        c->rettypes.push_back(v.type);
         return v;
     }
     // format(out, a, b, ...): the arguments' text appended to a growable
