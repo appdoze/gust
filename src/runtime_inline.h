@@ -1076,11 +1076,15 @@ R"GSRT(    int64_t c = n / (t > 0 ? t * 8 : 8);
     return c > 0 ? c : 1;
 }
 
-/* The next chunk's first iteration, or -1 once none is left. */
+/* The next chunk's first iteration, or -1 once none is left. The program's
+   own C need not include windows.h, so MSVC's is its intrinsic. */
+#if GS_NEED_THREADS && defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
 static int64_t gs_pfor_take(gs_pfor_job *j) {
 #if GS_NEED_THREADS
 #if defined(_MSC_VER) && !defined(__clang__)
-    int64_t a = InterlockedExchangeAdd64((volatile LONG64 *)&j->next, j->chunk);
+    int64_t a = _InterlockedExchangeAdd64((volatile __int64 *)&j->next, j->chunk);
 #else
     int64_t a = __atomic_fetch_add(&j->next, j->chunk, __ATOMIC_SEQ_CST);
 #endif
@@ -1279,11 +1283,11 @@ GS_API int64_t gs_fmt_bool(uint8_t *dst, int64_t v);
 GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
+)GSRT"
+R"GSRT(GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
-)GSRT"
-R"GSRT(   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
+   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
    (i + d < n); -1 if there is none. A set is std's ByteSet. */
 GS_API int64_t gs_scan_any(const uint8_t *p, int64_t n, const void *set);
 GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t d,

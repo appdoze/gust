@@ -1057,11 +1057,15 @@ static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
     return c > 0 ? c : 1;
 }
 
-/* The next chunk's first iteration, or -1 once none is left. */
+/* The next chunk's first iteration, or -1 once none is left. The program's
+   own C need not include windows.h, so MSVC's is its intrinsic. */
+#if GS_NEED_THREADS && defined(_MSC_VER) && !defined(__clang__)
+#include <intrin.h>
+#endif
 static int64_t gs_pfor_take(gs_pfor_job *j) {
 #if GS_NEED_THREADS
 #if defined(_MSC_VER) && !defined(__clang__)
-    int64_t a = InterlockedExchangeAdd64((volatile LONG64 *)&j->next, j->chunk);
+    int64_t a = _InterlockedExchangeAdd64((volatile __int64 *)&j->next, j->chunk);
 #else
     int64_t a = __atomic_fetch_add(&j->next, j->chunk, __ATOMIC_SEQ_CST);
 #endif
