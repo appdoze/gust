@@ -4081,7 +4081,7 @@ inline bool Call::BceWalk(BCE &b) {
                 b.CheckedFacts(nt, lt, 0);
                 break;
             }
-            case B_CLEAR: {
+            case B_CLEAR: case B_MOVE: {   // Gust: move leaves its source as clear does.
                 auto pid = b.GrowShrinkKill(rn, -1);
                 if (pid >= 0) b.ExactLenIs(pid, BCE::Term { true, BCE::Zero(), 0 });
                 break;

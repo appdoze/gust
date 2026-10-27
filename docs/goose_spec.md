@@ -1137,8 +1137,14 @@ where its body's value names a variable (§9.2).
 
 There is no ownership transfer beyond the return move, no destructors, no
 `Drop`, no reference counting. The only deallocation is scope exit resetting
-stack pointers. (A `move` operation for resizable arrays, which assigns and
-leaves the source empty, is anticipated but not in v1.)
+stack pointers. (Gust: `a.move()` is the assignment that leaves its source
+empty: the elements of an array that can shrink, as a fresh value `copy(a)`
+would give, after which `a` is empty as `a.clear()` leaves it, with the same
+checks that nothing still refers into it (§5.1, §5.2). It copies: each
+resizable has a stack of its own, so the elements change stacks. Elements
+holding self-relative references cannot be moved, as they cannot be
+copied, and `a = a.move()` is rejected as building `a` where the move
+frees it.)
 
 Copying a variable or resizable value costs O(size). The explicit `copy`
 marks that cost in the source.
@@ -4488,6 +4494,7 @@ And the array members, ordinary functions of their receiver per UFCS
 | `.push(v) -> T&` | limited, grow-only, grow-shrink | one element, constructed in place (§3.3) |
 | `.append(src)` | limited, grow-only, grow-shrink | an array or slice of elements (§3.3) |
 | `.pop() -> T`, `.pop_n(n)`, `.resize(n, v?)`, `.clear()` | limited, grow-shrink; grow-only where §5.1 allows a shrink | shrinking, and growing with a fill value (§3.3, §5) |
+| `.move()` | the same | Gust: the elements as a fresh value, the array then emptied as by `.clear()` (§4.1) |
 | `.index_of(r) -> i64` | fixed, limited, grow-only, grow-shrink | the index of the element `r` refers to (§3.3) |
 | `.alloc_index(v) -> i64`, `.alloc_ref(v) -> T&`, `.free(i)` | `reusable` pools | slot reuse (§5.4) |
 | `.alloc_slice(n) -> T[:]`, `.realloc_slice(s, n) -> T[:]`, `.free_slice(s)` | `reusable[]` pools | slice reuse (§5.4) |
@@ -4682,7 +4689,9 @@ its resolution is described.
    whether a convention/sugar layer (a `try`-alike) is wanted once idioms
    emerge.
 3. **Move operation for resizables** — an assignment that leaves the source
-   empty, as the only sanctioned "move".
+   empty, as the only sanctioned "move". (Gust: `a.move()`, §4.1's
+   paragraph on ownership; what remains open is a move that hands over
+   the stack instead of copying the elements.)
 5. **Cycle store rule refinement** (§7.8) — the pass-down-only rule is
    conservative. Parameters that the cycle passes on as they were given
    are exempt. A parameter that a recursive call gives other storage stays

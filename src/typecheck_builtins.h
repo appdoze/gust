@@ -480,6 +480,26 @@ inline Val TypeCheck::CheckBuiltin(Call *c, const BuiltinDef &d, vector<Node *> 
                       IsPlainRef(rv.type) ? rv.type->ref->sub : rv.type,
                       d.kind == B_RESIZE && ResizesToMark(args[0], args[1]) ? SB_BALANCED
                                                                             : SB_UNBALANCED);
+    // Gust: a.move() (§5.1; Goose's open item 3), the assignment that leaves
+    // its source empty: the array's elements as a fresh value, as copy(a)
+    // gives them, and the array then cleared, its shrink checked above as
+    // clear's is.
+    if (d.kind == B_MOVE) {
+        if (HasRelRefT(elem))
+            Error(c, cat(".move copies the elements out: copying a value of type ", TypeStr(elem),
+                         ", which contains self-relative references, is not supported"));
+        auto v = DecayRef(rv);
+        if (!v.holderset && HoldsPlainRef(v.type)) {
+            v.contents = Bounds(v);
+            v.holderfrom = HolderSource(v);
+            v.holderset = true;
+        }
+        v.lvalue = false;
+        v.Set(TempRoot(), true);
+        v.writable = false;
+        c->rettypes.push_back(v.type);
+        return v;
+    }
     // resize has two forms (§3.3); a target below zero is caught at runtime.
     if (d.kind == B_RESIZE) {
         CheckIntAny(args[1]);

@@ -135,6 +135,15 @@ git log upstream/master..main
   `test/errors_tc/thread_view_not_static.goose`,
   `test/errors_tc/freeze_references.goose` and
   `test/errors_tc/freeze_write.goose` (new); the editor grammars name it.
+- `a.move()` (`src/builtins.h`, `src/typecheck_builtins.h`,
+  `src/codegen_builtins.h`, `src/bce.h`), Goose's open item 3: a member
+  of the arrays that shrink, checked as `clear()` for its receiver and as
+  `copy()` for its result; codegen builds the elements at the destination
+  as `from_bytes` does (`OpenRzDest`), then clears the source (`EmitClear`,
+  factored out of `clear`), and the bounds-check pass takes it for a clear.
+  `test/codegen/move_resizable.goose`, `test/errors_tc/move_live_view.goose`,
+  `move_live_ref.goose`, `move_self.goose` and `move_self_relative.goose`
+  (new); the editor grammars name it.
 - Linked arrays through queues (`src/typecheck_types.h`,
   `src/typecheck_builtins.h`, `src/codegen_builtins.h`): a queue element may
   be a fixed or grow-only array whose fixed-size elements hold only

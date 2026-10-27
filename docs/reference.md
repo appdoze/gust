@@ -897,6 +897,7 @@ read the same way.
 | `.pop_n(n)` | the same | drops the last `n` elements |
 | `.resize(n, v)`, `.resize(n)` | the same | grows with copies of `v`, or shrinks |
 | `.clear()` | the same | empties the array |
+| `.move() -> T[…]` | the same | Gust: the elements as a fresh value, and the array emptied, checked as `.clear()` is |
 | `.index_of(r) -> i64` | arrays of fixed-size elements | the index of the element `r` refers to |
 
 Growth always supplies element values: there is no operation that exposes

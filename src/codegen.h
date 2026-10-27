@@ -1414,6 +1414,8 @@ struct CodeGen {
     void AppendBytes(const Loc &lv, const string &src, const string &n, Line ln);
     vector<string> EmitBytesOf(Call *c, vector<Node *> &an, Line ln);
     vector<string> EmitFreeze(Call *c, vector<Node *> &an);
+    void EmitClear(Loc lv);
+    vector<string> EmitMove(Call *c, vector<Node *> &an, Dst d0, Line ln);
     vector<string> EmitToBytes(vector<Node *> &an, Dst d0, Line ln);
     vector<string> EmitFromBytes(Call *c, vector<Node *> &an, Dst d0, Line ln);
 

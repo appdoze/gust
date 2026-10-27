@@ -456,21 +456,8 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
             L("}");
             return {};
         }
-        case B_CLEAR: {
-            auto lv = RecvLoc(an[0]);
-            auto v = ArrayView(lv);
-            // A resizable is the topmost value on its stack for its whole
-            // life (§1.3), so both flavors hand the element region back by
-            // dropping the top to the base; a limited array's capacity is
-            // reserved and only its length moves.
-            auto ak = lv.t->arr->akind;
-            if (ak == A_GROWSHRINK || ak == A_GROW) {
-                NoteLen(lv.stk, v.lenlv);
-                L(TopW(lv.stk), " = (uint8_t *)(", v.elems, ");");
-            }
-            L(v.lenlv, " = 0;");
-            return {};
-        }
+        case B_CLEAR: EmitClear(RecvLoc(an[0])); return {};
+        case B_MOVE: return EmitMove(c, an, d0, ln);
         case B_ALLOC_INDEX: case B_ALLOC_REF: return EmitAlloc(c, an, ln);
         case B_ALLOC_SLICE: case B_REALLOC_SLICE: case B_FREE_SLICE:
             return EmitSlicePool(c, an, ln);
@@ -1310,6 +1297,44 @@ inline CodeGen::RzDest CodeGen::OpenRzDest(TypeExpr *t, Dst d0, Line ln, const c
 inline void CodeGen::CloseRzDest(RzDest &rd, const string &count) {
     if (!rd.pref.empty()) EmitPrefixPatch(rd.pref, rd.ls, rd.stk, count, rd.elems);
     else L(rd.lenlv, " = ", count, ";");
+}
+
+// clear(): a resizable is the topmost value on its stack for its whole life
+// (§1.3), so both flavors hand the element region back by dropping the top
+// to the base; a limited array's capacity is reserved and only its length
+// moves.
+inline void CodeGen::EmitClear(Loc lv) {
+    auto v = ArrayView(lv);
+    auto ak = lv.t->arr->akind;
+    if (ak == A_GROWSHRINK || ak == A_GROW) {
+        NoteLen(lv.stk, v.lenlv);
+        L(TopW(lv.stk), " = (uint8_t *)(", v.elems, ");");
+    }
+    L(v.lenlv, " = 0;");
+}
+
+// Gust: a.move(): the elements built at the destination as copy(a) builds
+// them (from_bytes's way to a resizable destination), then a cleared. A
+// limited array's value is fixed-size, and is taken whole.
+inline vector<string> CodeGen::EmitMove(Call *c, vector<Node *> &an, Dst d0, Line ln) {
+    auto t = c->rettypes[0];
+    if (!IsResz(t)) {
+        auto lv = RecvLoc(an[0]);
+        auto val = T();
+        FixedLocal(t, val, LoadLoc(lv, t, ln));
+        EmitClear(lv);
+        return { val };
+    }
+    string src, sz;
+    PayloadOf(an[0], src, sz);
+    auto cnt = T();
+    L("int64_t ", cnt, " = ", ArrayView(RecvLoc(an[0])).len, ";");
+    auto rd = OpenRzDest(t, d0, ln, "move");
+    L(CopyFn(), "(", Top(rd.stk), ", ", src, ", (size_t)", sz, ");");
+    Bump(rd.stk, sz);
+    CloseRzDest(rd, cnt);
+    EmitClear(RecvLoc(an[0]));
+    return rd.hdr.empty() ? vector<string> {} : vector<string> { rd.hdr };
 }
 
 // bytes_of(a): the element region as a u8[:], no copy. The view is never
