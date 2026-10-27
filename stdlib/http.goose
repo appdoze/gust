@@ -270,7 +270,7 @@ struct Request {
 // What a handler sets besides the body it writes.
 struct Response {
     status: i64 = 200,
-    allow: const u8[:] = "",     // the methods a 405 names
+    allow: u8[..64] = "",        // the methods a 405 names
     close: bool = false,         // end the connection after this response
     stream: bool = false,        // the body goes on with what G produces
     content_type: const u8[:] = "application/json",
@@ -573,4 +573,114 @@ fn hex(n: i64) -> u8[>..] {
     var out: u8[>..] = [];
     for k in digits.len { out.push(digits[digits.len - 1 - k]); }
     return out;
+}
+
+// Gust: routing resolved at compile time. The routes are the variants of a
+// program's enum R; for each one the program writes its method and path
+// pattern, and its handler, overloaded on the variant:
+//
+//     fn endpoint(r: Route.Item) -> const u8[:] { "GET /v1/items/{id}" }
+//     fn handle(r: Route.Item, s: S&, req: Request&, res: Response&, out: u8[>..]&)
+//
+// route tries the variants in the order they are declared, a const for
+// expanding into one test of each pattern. A {name} in a pattern stands for
+// one path segment that is not empty, which goes into the variant's field
+// of that name (param: an integer or an inline string). The first variant
+// whose pattern matches the path, whose method is the request's and whose
+// fields take their segments is handled, and route returns 0. Else, where a
+// pattern matches the path with another method, res.status is 405 and
+// res.allow those methods, as Go's ServeMux answers, and route returns 405;
+// else 404. The body of either is the caller's to write.
+fn route<R, S>(s: S&, req: Request&, res: Response&, out: u8[>..]&) -> i64 {
+    var allow: u8[..64] = "";
+    const for <N, V> in variants<R> {
+        let e = endpoint(default<V>());
+        var sp = 0;
+        while sp < e.len && e[sp] != ' ' { sp += 1; }
+        if sp == e.len { abort(str("the route ", N, "'s endpoint is \"", e, "\", not a method and a path")); }
+        let method = e[..sp];
+        var r = default<V>();
+        let m = bind(e[sp + 1..], req.path, r);
+        if m != 0 {
+            if req.method == method {
+                if m == 1 {
+                    handle(r, s, req, res, out);
+                    return 0;
+                }
+            } else if !has_token(allow, method) && allow.len + 2 + method.len <= allow.cap {
+                if allow.len > 0 { allow.append(", "); }
+                allow.append(method);
+            }
+        }
+    }
+    if allow.len > 0 {
+        res.status = 405;
+        res.allow = allow;
+        return 405;
+    }
+    return 404;
+}
+
+// Whether path matches pattern: 0 when it does not, 1 when it does and
+// each {name} segment went into r's field of that name, 2 when it does but
+// one of them is not of its field's type.
+fn bind<V>(pattern: const u8[:], path: const u8[:], r: V&) -> i64 {
+    let n = segments(pattern);
+    if segments(path) != n { return 0; }
+    var converted = true;
+    for k in n {
+        let want = segment(pattern, k);
+        let got = segment(path, k);
+        if want.len >= 2 && want[0] == '{' && want[want.len - 1] == '}' {
+            if got.len == 0 { return 0; }
+            let name = want[1..want.len - 1];
+            var found = false;
+            const for <F, A> in fields<V> {
+                if name == F {
+                    found = true;
+                    if !param(got, r.A) { converted = false; }
+                }
+            }
+            if !found { abort(str("the route pattern ", pattern, " names {", name, "}, which is none of its fields")); }
+        } else if want != got {
+            return 0;
+        }
+    }
+    return if converted { 1 } else { 2 };
+}
+
+// The segments of a path, '/'-separated after its first '/': "/" has none,
+// "/a/" two, the second empty.
+fn segments(p: const u8[:]) -> i64 {
+    if p.len <= 1 { return 0; }
+    var n = 1;
+    for i in 1..p.len { if p[i] == '/' { n += 1; } }
+    return n;
+}
+
+// Segment k of p, from 0.
+fn segment(p: const u8[:], k: i64) -> const u8[:] {
+    var start = 1;
+    var n = 0;
+    for i in 1..p.len + 1 {
+        if i == p.len || p[i] == '/' {
+            if n == k { return p[start..i]; }
+            n += 1;
+            start = i + 1;
+        }
+    }
+    return p[0..0];
+}
+
+// A path parameter into a field of its type.
+fn param(text: const u8[:], v: i64&) -> bool {
+    let n, ok = parse_int(text);
+    v = n;
+    return ok;
+}
+// Text into an inline string (u8[..N]) that holds it.
+fn param<T>(text: const u8[:], v: T&) -> bool {
+    if text.len > v.cap { return false; }
+    v = text;
+    return true;
 }

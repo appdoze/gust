@@ -1002,7 +1002,7 @@ after `net::catch_signals`).
 ```goose
 struct Request { method: const u8[:], path: const u8[:], query: const u8[:], body: const u8[:],
                  keep_alive: bool, http11: bool, deadline: f64, stopping: bool }
-struct Response { status: i64 = 200, allow: const u8[:] = "", close: bool = false, stream: bool = false,
+struct Response { status: i64 = 200, allow: u8[..64] = "", close: bool = false, stream: bool = false,
                   content_type: const u8[:] = "application/json" }
 fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn, proto: S,
                   max_conns: i64, first_id: i64, id_step: i64) -> Counts
@@ -1012,6 +1012,31 @@ over one adopted connection (`first`, with no listener) it serves that
 connection on a thread of its own, where they may.
 `examples/api/api.gust` serves a JSON API on it both ways, and
 `test/threads/http_server.goose` answers its client.
+
+Gust: `http::route<R, S>(state, req, res, out)` routes a request at compile
+time. The routes are the variants of an enum `R`, and for each the program
+writes the method and path pattern, and its handler:
+<!-- fragment -->
+```goose
+enum Route { Health {}, Item { id: i64 }, Orders {} }
+fn endpoint(r: Route.Item) -> const u8[:] { "GET /v1/items/{id}" }
+fn handle(r: Route.Item, s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
+    format(out, "{\"id\":", r.id, "}");
+}
+```
+`route` tries the variants in the order they are declared, its `const for`
+expanding into one test of each pattern: no table, no function values.
+A pattern's `{name}` stands for one path segment that is not empty, which
+goes into the variant's field of that name, an integer or an inline
+string; a pattern naming no such field aborts. The first variant whose
+pattern matches the path, whose method is the request's and whose fields
+take their segments has its `handle` called, and `route` returns 0. When
+none does but some pattern matches the path with another method, it sets
+`res.status` to 405 and `res.allow` to those methods and returns 405, as
+Go's `ServeMux` answers; otherwise it returns 404. The body of either is
+the caller's to write. A literal pattern declared before a parameter one,
+`/v1/items/export` before `/v1/items/{id}`, takes its path first.
+`test/stdlib/http_route.goose` routes requests without a network.
 
 ## ffi
 

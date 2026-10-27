@@ -312,7 +312,14 @@ the plain function.
   spec §6.4, through the checker's flow, codegen's restores and the bounds-check pass;
   `test/codegen/labeled_jumps.goose`.)**
 - **Compile-time plugin registration** with `const for` (routers, event handlers resolved at
-  compile time), instead of closures-as-objects.
+  compile time), instead of closures-as-objects. **(The router done, in the language as it
+  is: `http::route<R, S>`, whose routes are the variants of an enum, each with an
+  `endpoint` overload giving its method and path pattern and a `handle` overload; a
+  `const for` over the variants expands into a test of each pattern, a `{name}` going into
+  the variant's field of that name, with 405 naming the methods a path has as Go's
+  ServeMux does. A generic library function reaching the program's own overloads per
+  variant is the registration. `examples/api/api.gust` routes on it;
+  `test/stdlib/http_route.goose`.)**
 - **Thread-per-core async I/O**: each worker owns its connections and event loop; then an
   HTTP server and client library on it. **(Both done, without async: `stdlib/http.goose`, HTTP/1.1 over
   `net`, a client, and `http::serve`, the server `examples/api/` serves its JSON API with, moved into the

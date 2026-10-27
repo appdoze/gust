@@ -96,12 +96,6 @@ fn not_found(res: http::Response&, out: u8[>..]&) {
     out.append("{\"detail\":\"Not Found\"}");
 }
 
-fn not_allowed(res: http::Response&, out: u8[>..]&, allow: const u8[:]) {
-    res.status = 405;
-    res.allow = allow;
-    out.append("{\"detail\":\"Method Not Allowed\"}");
-}
-
 // The value of name=<integer> in a query, or def where it has none; false
 // when it has one that is not an integer.
 fn query_int(query: const u8[:], name: const u8[:], def: i64) -> i64, bool {
@@ -137,57 +131,67 @@ fn item_at(k: i64) -> Item {
     return it;
 }
 
-// The routes. A path that names a resource but not this method is a 405
-// naming the ones it has, as Go 1.22's ServeMux answers.
+// The routes, resolved at compile time (http::route): one variant per
+// endpoint, its method and path pattern, and its handler. A path that names
+// a resource but not this method is a 405 naming the ones it has, as Go
+// 1.22's ServeMux answers.
+enum Route {
+    Health {},
+    Items {},
+    Export {},
+    Item { id: i64 },
+    Orders {},
+}
+fn endpoint(r: Route.Health) -> const u8[:] { "GET /health" }
+fn endpoint(r: Route.Items) -> const u8[:] { "GET /v1/items" }
+fn endpoint(r: Route.Export) -> const u8[:] { "GET /v1/items/export" }
+fn endpoint(r: Route.Item) -> const u8[:] { "GET /v1/items/{id}" }
+fn endpoint(r: Route.Orders) -> const u8[:] { "POST /v1/orders" }
+
+fn handle(r: Route.Health, s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
+    out.append("{\"status\":\"ok\"}");
+}
+
+fn handle(r: Route.Items, s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
+    let n = repeat_of(req, res, out, MAX_REPEAT);
+    if n == 0 { return; }
+    out.append("{\"items\":[");
+    for k in n * CATALOG.len {
+        if k > 0 { out.push(','); }
+        encode_value(out, item_at(k));
+    }
+    out.append("]}");
+}
+
+fn handle(r: Route.Export, s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
+    let n = repeat_of(req, res, out, MAX_EXPORT_REPEAT);
+    if n == 0 { return; }
+    out.append("{\"items\":[");
+    s.export_at = 0;
+    s.export_end = n * CATALOG.len;
+    res.stream = true;
+}
+
+fn handle(r: Route.Item, s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
+    if r.id < 1 || r.id > CATALOG.len { not_found(res, out); return; }
+    encode_value(out, CATALOG[r.id - 1]);
+}
+
+fn handle(r: Route.Orders, s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
+    create_order(s, req, res, out);
+}
+
 fn handle(s: Session&, req: http::Request&, res: http::Response&, out: u8[>..]&) {
-    let path = req.path;
-    if path == "/health" {
-        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
-        out.append("{\"status\":\"ok\"}");
-        return;
-    }
-    if path == "/v1/items" {
-        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
-        let n = repeat_of(req, res, out, MAX_REPEAT);
-        if n == 0 { return; }
-        out.append("{\"items\":[");
-        for k in n * CATALOG.len {
-            if k > 0 { out.push(','); }
-            encode_value(out, item_at(k));
-        }
-        out.append("]}");
-        return;
-    }
-    if path == "/v1/items/export" {
-        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
-        let n = repeat_of(req, res, out, MAX_EXPORT_REPEAT);
-        if n == 0 { return; }
-        out.append("{\"items\":[");
-        s.export_at = 0;
-        s.export_end = n * CATALOG.len;
-        res.stream = true;
-        return;
-    }
-    if starts_with(path, "/v1/items/") {
-        if req.method != "GET" { not_allowed(res, out, "GET"); return; }
-        let id, ok = parse_int(path[10..]);
-        if !ok || id < 1 || id > CATALOG.len { not_found(res, out); return; }
-        encode_value(out, CATALOG[id - 1]);
-        return;
-    }
-    if path == "/v1/orders" {
-        if req.method != "POST" { not_allowed(res, out, "POST"); return; }
-        create_order(s, req, res, out);
-        return;
-    }
-    if path == "/debug/crash" && s.crash_route {
+    if req.path == "/debug/crash" && s.crash_route {
         // A deliberate bug, to show what containment does with one: an index
         // past the end aborts this connection's thread and nothing else.
         let i = CATALOG.len + req.body.len;
         encode_value(out, CATALOG[i]);
         return;
     }
-    not_found(res, out);
+    let routed = http::route<Route, Session>(s, req, res, out);
+    if routed == 404 { not_found(res, out); }
+    if routed == 405 { out.append("{\"detail\":\"Method Not Allowed\"}"); }
 }
 
 // The export's next items, within limit: true once its last byte is out.

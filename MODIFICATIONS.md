@@ -339,6 +339,13 @@ git log upstream/master..main
   `reply_head`), and a response's `content_type`, JSON by default;
   `examples/api/api.gust` names them through `http::`, and
   `test/threads/http_server.goose` (new) serves the client from a thread.
+  Then `http::route<R, S>`, a router resolved at compile time: a `const for`
+  over the variants of the program's enum `R` tests each one's `endpoint`
+  pattern, binds `{name}` segments into its fields (`param`, for integers and
+  inline strings) and calls its `handle`, or answers 405 with the methods
+  the path has or 404. `Response.allow` is an inline string `u8[..64]`, so
+  that a 405 can name more than one method. `examples/api/api.gust` routes
+  on it; `test/stdlib/http_route.goose` (new).
 
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
   over a `reusable` pool: a handle names one allocation by index and serial
