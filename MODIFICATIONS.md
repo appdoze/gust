@@ -96,6 +96,15 @@ git log upstream/master..main
   (compress and uncompress round trip, crc32 as Python's zlib computes it,
   the version from the function and the macro, all 80 of zlib.h's
   functions but the variadic gzprintf).
+- `src/packages.h`, `src/main.cpp`, `docs/packages.md`: version ranges in a
+  git source (`@^1.2`, `@~1.2.3`, `@>=1.2`, `@1.x`), resolved to the
+  highest tag they allow with `git ls-remote`, and the program's lockfile,
+  `<root>.lock`: each declared git package's source, ref and commit, which
+  later builds take (a moved tag or branch in the shared cache leaves the
+  program at its commit, fetched by itself where needed) until `gust fetch
+  --update` resolves them again. Written atomically, and only for packages
+  the root declares, not the blessed ones the compiler pins.
+  `test/package_versions.py` (new).
 - Labeled `break` and `continue` (spec §6.4, Goose's open item 13): `name:`
   on a loop or `block`, and `break :name e?` / `continue :name` from inside
   it at any depth (`src/lexer.h`, `src/parser.h`, `src/ast.h`). The checker

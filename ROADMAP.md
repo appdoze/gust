@@ -221,6 +221,11 @@ the plain function.
   wheel; tested on Windows and Linux in `test/python_bindings.py`, installed with pip and
   imported.)**
 - Formatter, a package registry with version resolution and a lockfile, a docs site.
+  **(The formatter (`gust format`) and the docs site (`docs/site/`) came with Goose.
+  Version resolution and a lockfile done: `@^1.2`, `@~1.2.3`, `@>=1.2` and `@1.x` ranges
+  resolve to the highest tag they allow, and `<program>.lock` keeps each git package's
+  ref and commit until `gust fetch --update`. A registry beyond the compiler's blessed
+  table is not done.)**
 - Keep error output agent-friendly (`--diagnostics json` exists) and ship a compact
   language guide AI agents can load in one go.
 

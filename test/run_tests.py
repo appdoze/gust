@@ -2479,6 +2479,19 @@ def main():
             r.fail("packages from git", str(e))
     r.show_task(git_packages)
 
+    def package_versions():
+        from package_versions import check_package_versions
+        try:
+            skipped = check_package_versions(exe, gendir, jit=jit)
+            if skipped:
+                r.say(f"skip package versions ({skipped})")
+            else:
+                r.ok("package versions: ^, ~, >= and x ranges, the lockfile, update, a branch kept "
+                     "at its commit, no tag in range, offline")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("package versions", str(e))
+    r.show_task(package_versions)
+
     def runtime_cache():
         from runtime_cache import check_runtime_cache
         try:

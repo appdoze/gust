@@ -196,6 +196,9 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
     // The program is package 0; a standard library directory becomes a
     // package the first time a module in it is reached.
     auto rootdir = DirOf(rootpath);
+    // Gust: the program's lockfile (packages.h), which an editor's analysis,
+    // reading through `sources`, takes but never writes.
+    LoadLock(rootpath);
     ast.packages.push_back(Package { PathStem(rootpath), rootdir, false });
     LoadSidecar(ast.packages[0], true);
     auto stdlibpkg = [&](const string &dir) {
@@ -237,11 +240,11 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
             root = PackageRoot(src, be.package);
         } else {
             src = ParsePackageSource(cat(be.source, "@", be.ref), "");
-            root = PackageRoot(src, be.package);
+            root = PackageRoot(src, be.package, false);
         }
         ast.packages.push_back(Package { be.package, root, false });
         auto &p = ast.packages.back();
-        if (!src.ispath) p.cachekey = GitCacheKey(src);
+        if (!src.ispath) p.cachekey = GitCacheKeyOf(src, root);
         if (builtin && root == builtindir) p.builtin = BuiltinIndex(builtin);
         LoadSidecar(p, false);
         declared.emplace(be.package, DeclaredPackage { src, (int)ast.packages.size() - 1, 0 });
@@ -306,7 +309,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
                             ImportError(filename, imp, e.msg);
                         }
                         ast.packages.push_back(Package { imp.path, root, false });
-                        if (!src.ispath) ast.packages.back().cachekey = GitCacheKey(src);
+                        if (!src.ispath) ast.packages.back().cachekey = GitCacheKeyOf(src, root);
                         LoadSidecar(ast.packages.back(), false);
                         auto dp = DeclaredPackage { src, (int)ast.packages.size() - 1,
                                                     imp.line.line };
@@ -461,6 +464,7 @@ void ParseProgram(Ast &ast, const string &rootpath, const vector<string> &stdlib
     // modules this program does not import, which only a scan of them finds
     // (PackageExternNames); it is made only for a name no parsed block has.
     vector<set<string>> scanned(ast.packages.size());
+    if (!sources) SaveLock();
     vector<bool> isscanned(ast.packages.size());
     auto scannedlibs = [&](size_t p) -> const set<string> & {
         if (!isscanned[p]) {

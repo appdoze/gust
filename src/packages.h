@@ -114,7 +114,18 @@ inline string GitCacheKey(const PackageSource &s) {
     }
     auto ref = IsCommitHash(s.ref) ? s.ref.substr(0, 12) : s.ref;
     for (auto &c : ref) if (c == '/' || c == '\\') c = '_';
+    // Gust: a version range's characters that no Windows path takes.
+    for (auto &c : ref) if (strchr("<>:\"|?*", c)) c = '_';
     return cat(key, "/", ref);
+}
+
+// Gust: the cache key of a package's checkout, where its sources are: the
+// ref it was fetched at, not the range or lock entry that chose it.
+inline string GitCacheKeyOf(const PackageSource &s, const string &root) {
+    auto prefix = cat(GooseHome(), "/pkg/");
+    if (root.rfind(prefix, 0) == 0 && root.size() > prefix.size())
+        return root.substr(prefix.size(), root.size() - prefix.size() - (root.back() == '/' ? 1 : 0));
+    return GitCacheKey(s);
 }
 
 inline string GitCacheDir(const PackageSource &s) {
@@ -309,10 +320,219 @@ inline string FetchPackage(const PackageSource &s, const string &name) {
     return dir + "/";
 }
 
+// --- versions and the lockfile (Gust) ------------------------------------------------
+//
+// A git source's ref may be a version range, `owner/repo@^1.2`, which the
+// highest tag of the repository it allows satisfies: `^1.2.3` takes 1.x.y
+// from 1.2.3 on (0.2.x from 0.2.3 for a 0 major), `~1.2.3` takes 1.2.y from
+// 1.2.3, `>=1.2` any from 1.2.0, and `1.x` or `1.2.x` what the x leaves
+// open. Tags are read as versions with or without a `v` in front.
+//
+// The program's lockfile, `<root>.lock` beside its root file, holds for
+// each package from git the ref it was fetched at and the commit that
+// was: a range resolves once, and a tag or branch that moves in the shared
+// cache does not move the program, until `gust fetch --update` resolves
+// them all again and rewrites the file.
+
+struct Version { int64_t major = -1, minor = 0, patch = 0; };
+
+// The version a tag names, if it names one: `1.2.3`, `v1.2`.
+inline Version TagVersion(const string &tag) {
+    Version v;
+    auto s = tag;
+    if (!s.empty() && (s[0] == 'v' || s[0] == 'V')) s = s.substr(1);
+    int64_t parts[3] = { 0, 0, 0 };
+    size_t i = 0;
+    int n = 0;
+    for (; n < 3 && i < s.size(); n++) {
+        if (!isdigit((unsigned char)s[i])) return {};
+        int64_t x = 0;
+        while (i < s.size() && isdigit((unsigned char)s[i])) x = x * 10 + (s[i++] - '0');
+        parts[n] = x;
+        if (i < s.size()) {
+            if (s[i] != '.' || n == 2) return {};
+            i++;
+        }
+    }
+    if (n == 0 || i != s.size()) return {};
+    return { parts[0], parts[1], parts[2] };
+}
+
+inline bool Before(const Version &a, const Version &b) {
+    if (a.major != b.major) return a.major < b.major;
+    if (a.minor != b.minor) return a.minor < b.minor;
+    return a.patch < b.patch;
+}
+
+inline bool IsVersionRange(const string &ref) {
+    if (ref.empty()) return false;
+    if (ref[0] == '^' || ref[0] == '~' || ref.rfind(">=", 0) == 0) return true;
+    return ref.find(".x") != string::npos || ref.find(".*") != string::npos;
+}
+
+// Whether version v is in `range`; throws for a range of no known shape.
+inline bool InRange(const Version &v, const string &range) {
+    auto bad = [&] {
+        return CompileError { cat("the version range ", range, " is not ^1.2.3, ~1.2.3, >=1.2.3, "
+                                  "1.x or 1.2.x") };
+    };
+    if (range.find(".x") != string::npos || range.find(".*") != string::npos) {
+        auto parts = range;
+        auto star = parts.find_first_of("x*");
+        auto fixed = TagVersion(parts.substr(0, star - 1));
+        if (fixed.major < 0) throw bad();
+        auto dots = std::count(parts.begin(), parts.begin() + star, '.');
+        return v.major == fixed.major && (dots < 2 || v.minor == fixed.minor);
+    }
+    auto at = range[0] == '>' ? 2 : 1;
+    auto low = TagVersion(range.substr(at));
+    if (low.major < 0) throw bad();
+    if (Before(v, low)) return false;
+    if (range[0] == '>') return true;
+    if (range[0] == '~') return v.major == low.major && v.minor == low.minor;
+    // ^: the same major, and for 0.y the same minor.
+    if (low.major > 0) return v.major == low.major;
+    return v.major == 0 && v.minor == low.minor;
+}
+
+struct LockEntry { string source, ref, commit; };
+inline map<string, LockEntry> package_lock;   // By package name.
+inline string package_lockfile;               // Where it is read from and written to.
+inline bool package_lockdirty = false;
+
+// Reads `<root>.lock`, if there is one: each line `name source ref commit`,
+// tab-separated, after `//` comments.
+inline void LoadLock(const string &rootpath) {
+    package_lock.clear();
+    package_lockdirty = false;
+    auto dot = rootpath.find_last_of('.');
+    auto slash = rootpath.find_last_of("/\\");
+    package_lockfile = cat(dot == string::npos || (slash != string::npos && dot < slash)
+                               ? rootpath : rootpath.substr(0, dot), ".lock");
+    string text;
+    if (!LoadFile(package_lockfile, text)) return;
+    size_t at = 0;
+    while (at < text.size()) {
+        auto nl = text.find('\n', at);
+        auto line = text.substr(at, nl == string::npos ? string::npos : nl - at);
+        at = nl == string::npos ? text.size() : nl + 1;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line.empty() || line.rfind("//", 0) == 0) continue;
+        vector<string> f;
+        size_t p = 0;
+        for (;;) {
+            auto t = line.find('\t', p);
+            f.push_back(line.substr(p, t == string::npos ? string::npos : t - p));
+            if (t == string::npos) break;
+            p = t + 1;
+        }
+        if (f.size() == 4) package_lock[f[0]] = { f[1], f[2], f[3] };
+    }
+}
+
+// Writes the lockfile where anything in it changed.
+inline void SaveLock() {
+    if (!package_lockdirty || package_lockfile.empty()) return;
+    auto base = package_lockfile.substr(package_lockfile.find_last_of("/\\") + 1);
+    string text = cat("// The packages the program declares from git, as fetched: name, source,\n"
+                      "// ref, commit. Builds take these until `gust fetch --update` resolves them\n"
+                      "// again. Generated (", base, "): keep it with the program.\n");
+    for (auto &[name, e] : package_lock) Append(text, name, "\t", e.source, "\t", e.ref, "\t", e.commit, "\n");
+    // Whole or not at all, beside builds of the same program writing the
+    // same: one that cannot write it leaves it to the next.
+    auto tmp = cat(package_lockfile, ".tmp", Hex8(cat((uintptr_t)&text, package_lockfile)));
+    if (WriteFileMakingDirs(tmp, text) && !RenamePath(tmp, package_lockfile)) {
+        package_lockdirty = false;
+        return;
+    }
+    std::error_code ec;
+    filesystem::remove(tmp, ec);
+}
+
+// The highest tag of the repository the range allows, read with
+// `git ls-remote`.
+inline string ResolveRange(const PackageSource &s, const string &name) {
+    if (package_nofetch)
+        throw CompileError { cat("the package ", name, " from ", s.text, " has a version range that ",
+                                 "only the repository can resolve, and --offline asks it nothing: "
+                                 "`goose fetch` resolves it into the lockfile") };
+    auto git = FindOnPath("git");
+    if (git.empty()) throw CompileError { cat("cannot find `git` on PATH, needed to resolve ", s.text) };
+    auto r = RunProcess({ git, "ls-remote", "--tags", "--refs", s.url });
+    auto out = r.output;
+    if (!r.started || r.code != 0) throw CompileError { cat("cannot list the tags of ", s.url, ":\n", out) };
+    string best;
+    Version bestv;
+    vector<string> tags;
+    size_t at = 0;
+    while (at < out.size()) {
+        auto nl = out.find('\n', at);
+        auto line = out.substr(at, nl == string::npos ? string::npos : nl - at);
+        at = nl == string::npos ? out.size() : nl + 1;
+        auto p = line.find("refs/tags/");
+        if (p == string::npos) continue;
+        auto tag = line.substr(p + 10);
+        while (!tag.empty() && (tag.back() == '\r' || tag.back() == ' ')) tag.pop_back();
+        auto v = TagVersion(tag);
+        if (v.major < 0) continue;
+        tags.push_back(tag);
+        if (InRange(v, s.ref) && (best.empty() || Before(bestv, v))) {
+            best = tag;
+            bestv = v;
+        }
+    }
+    if (best.empty()) {
+        string list;
+        for (auto &t : tags) Append(list, list.empty() ? "" : ", ", t);
+        throw CompileError { cat("no tag of ", s.url, " is in the range ", s.ref, " (its version tags: ",
+                                 list.empty() ? string("none") : list, ")") };
+    }
+    return best;
+}
+
+// The commit a checkout is at.
+inline string CheckoutCommit(const string &dir) {
+    auto git = FindOnPath("git");
+    if (git.empty()) return "";
+    auto r = RunProcess({ git, "-C", dir, "rev-parse", "HEAD" });
+    if (!r.started || r.code != 0) return "";
+    auto out = r.output;
+    while (!out.empty() && (out.back() == '\n' || out.back() == '\r' || out.back() == ' ')) out.pop_back();
+    return out;
+}
+
+// The checkout of a git source as the lockfile has it, else as its ref
+// resolves now, which the lockfile then records.
+inline string LockedCheckout(const PackageSource &source, const string &name) {
+    auto it = package_lock.find(name);
+    auto locked = it != package_lock.end() && it->second.source == source.text && !package_update;
+    auto s = source;
+    if (locked) s.ref = it->second.ref;
+    else if (IsVersionRange(source.ref)) s.ref = ResolveRange(source, name);
+    auto dir = FetchPackage(s, name);
+    auto commit = CheckoutCommit(dir);
+    if (locked && !commit.empty() && commit != it->second.commit) {
+        // The ref moved in the cache, which another program updated: this
+        // one stays at its commit.
+        auto c = s;
+        c.ref = it->second.commit;
+        return FetchPackage(c, name);
+    }
+    if (!locked && !commit.empty()) {
+        auto &e = package_lock[name];
+        if (e.source != source.text || e.ref != s.ref || e.commit != commit) {
+            e = { source.text, s.ref, commit };
+            package_lockdirty = true;
+        }
+    }
+    return dir;
+}
+
 // The root directory of the package `name` from `source`: the directory
 // itself for a path, the checkout in the cache for a git source; either
-// must hold `<name>.goose`.
-inline string PackageRoot(const PackageSource &source, const string &name) {
+// must hold `<name>.goose`. Gust: a declared git package is the lockfile's
+// (`lockable`); a blessed one is pinned by the compiler's own table.
+inline string PackageRoot(const PackageSource &source, const string &name, bool lockable = true) {
     string dir;
     if (source.ispath) {
         std::error_code ec;
@@ -321,7 +541,8 @@ inline string PackageRoot(const PackageSource &source, const string &name) {
                                      " is not a directory (", source.dir, ")") };
         dir = source.dir;
     } else {
-        dir = FetchPackage(source, name);
+        dir = !lockable || package_lockfile.empty() || IsCommitHash(source.ref)
+                  ? FetchPackage(source, name) : LockedCheckout(source, name);
     }
     if (!PathExists(SourceFile(cat(dir, name))))
         throw CompileError { cat("the package ", name, " at ", dir, " has no ", name, ".goose (or ", name, ".gust)") };

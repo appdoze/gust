@@ -101,6 +101,23 @@ import mylib from "https://git.example.com/x/mylib.git@main";   // any git URL, 
 import mylib from "../mylib";                      // a directory, used in place
 ```
 
+Gust: a git source may also name a version range, which the highest tag
+of the repository it allows satisfies (tags read as versions with or
+without a `v`): `@^1.2.3` takes a 1.x.y from 1.2.3 on (a 0.2.x from 0.2.3
+where the major is 0), `@~1.2.3` a 1.2.y from 1.2.3, `@>=1.2` any from
+1.2.0, and `@1.x` or `@1.2.x` what the x leaves open:
+
+```goose
+import mylib from "joe/mylib@^2.1";                // the newest 2.x from 2.1.0
+```
+
+What each git package resolved to is kept in the program's lockfile,
+`program.lock` beside the root file: its source, the ref it was fetched at
+and the commit that was. Later builds take those, so a range resolves once
+and a branch or a moved tag does not move the program, until `gust fetch
+--update program.goose` resolves everything again and rewrites the file.
+Keep the lockfile with the program, as its pins.
+
 `import name from "source";` declares the package `name` and imports its
 module `name.goose`; its other modules are imported with
 `import name.other;`. A git source needs a ref after `@`. A tag or a commit
