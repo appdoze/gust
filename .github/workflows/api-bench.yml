@@ -41,7 +41,7 @@ jobs:
         run: |
           python -c "import sys; sys.path.insert(0, 'examples/api'); import bench; bench.build(['rustraw'])"
           python examples/api/test_api.py --exe build/api-bench/api_gust
-          python examples/api/test_api.py --exe build/api-bench/rust/release/rawserver_rust
+          python examples/api/test_api.py --go --exe build/api-bench/rust/release/rawserver_rust
 
       - name: Run the benchmark
         run: >-
