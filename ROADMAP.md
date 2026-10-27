@@ -276,8 +276,8 @@ the plain function.
   4.39x for Goose's TinyCC mode; MIR is MIT-licensed, ending the LGPL question).
   **(Begun: `gust run --mir` on Windows, Linux and macOS, `src/jit_mir.h`, MIR vendored
   from Lobster's copy into `third_party/mir`; TinyCC stays the default. On the compare
-  suite in WSL it runs 2.3x off a native gcc build as a geometric mean, against TinyCC's
-  4.1x. The runtime is compiled into the compiler (`src/runtime_native.c`) and MIR
+  suite in WSL it runs 2.0x off a native gcc build as a geometric mean (2.3x before the
+  frame's places were registers), against TinyCC's 4.1x. The runtime is compiled into the compiler (`src/runtime_native.c`) and MIR
   compiles only the program's own C against it, which it finds among the compiler's
   exports: an empty program starts in 0.026 s, as under TinyCC, where c2mir compiling the
   runtime each run took 0.28 s, and c2mir reads no platform header, which it could not on
@@ -288,9 +288,14 @@ the plain function.
   `#pragma pack`, c2mir's float to unsigned 64-bit conversions made right from 2^63 up,
   MIR's level 1 rather than its level 2, which kept a pointer stale past a loop, and a
   correct size bound for one x86-64 pattern. `test/mir_runs.py` holds every fixture with
-  an expected output to TinyCC's result, on all three platforms. Not yet: keeping small
-  structs' fields in registers, which n-body (6.5x off) and raytrace (4.4x) need for the
-  1.5x exit.)**
+  an expected output to TinyCC's result, on all three platforms. Then small structs'
+  fields in registers: c2mir keeps struct locals in the frame, and a pass before MIR's
+  generator (`MirPromoteFrame`) makes each 8-byte place of it a register where nothing
+  else can reach it, resolving every frame address from the definitions before it and
+  giving away what an escaping address reaches (c2mir reports each frame object for
+  that); n-body went from 6.5x to 3.3x off, raytrace from 4.4x to 1.8x, sort 1.4x,
+  interp 1.1x. Not yet: the 1.5x exit, which n-body (3.3x), bintrees (3.4x) and strings
+  (2.3x) are furthest from.)**
 - **Python bindings generator**: turn a library into a pip-installable module, the route
   Rust grew through with PyO3. **(Done: `scripts/gust_python.py` builds a library's
   exports into a ctypes package with checked integers, structs, slices read from

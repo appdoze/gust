@@ -8459,6 +8459,21 @@ static int decl_cmp (const void *v1, const void *v2) {
   return 0;
 }
 
+/* Gust: each function's frame objects -- its locals that are not registers, at their
+   offsets from fp, and whether an array is among what they hold -- for the promotion of
+   the frame's places to registers (src/jit_mir.h, MirPromoteFrame), which takes an address
+   that escapes to give away its object, and an indexed one any array. */
+void (*gs_c2mir_frame_object) (const char *func, size_t offset, size_t size, int array_p) = NULL;
+static const char *gs_frame_func;
+
+static int gs_holds_array (struct type *type) {
+  if (type->mode == TM_ARR) return TRUE;
+  if (type->mode != TM_STRUCT && type->mode != TM_UNION) return FALSE;
+  for (node_t el = NL_HEAD (NL_EL (type->u.tag_type->u.ops, 1)->u.ops); el != NULL; el = NL_NEXT (el))
+    if (el->code == N_MEMBER && gs_holds_array (((decl_t) el->attr)->decl_spec.type)) return TRUE;
+  return FALSE;
+}
+
 static void process_func_decls_for_allocation (c2m_ctx_t c2m_ctx) {
   check_ctx_t check_ctx = c2m_ctx->check_ctx;
   size_t i, j;
@@ -8514,6 +8529,13 @@ static void process_func_decls_for_allocation (c2m_ctx_t c2m_ctx) {
       if (ns->stack_var_p) curr_ns->stack_var_p = TRUE;
     }
   }
+  if (gs_c2mir_frame_object != NULL && gs_frame_func != NULL) /* Gust */
+    for (i = 0; i < VARR_LENGTH (decl_t, func_decls_for_allocation); i++) {
+      decl = VARR_GET (decl_t, func_decls_for_allocation, i);
+      type = decl->decl_spec.type;
+      gs_c2mir_frame_object (gs_frame_func, decl->offset, var_size (c2m_ctx, type),
+                             gs_holds_array (type));
+    }
 }
 
 static const char *check_attrs (c2m_ctx_t c2m_ctx, node_t r, decl_t decl, node_t attrs,
@@ -9783,6 +9805,7 @@ static void check (c2m_ctx_t c2m_ctx, node_t r, node_t context) {
              param_id->u.s.s);
     }
     add__func__def (c2m_ctx, block, id->u.s);
+    gs_frame_func = id->u.s.s; /* Gust: for gs_c2mir_frame_object */
     check (c2m_ctx, block, r);
     /* Process all label uses: */
     for (size_t i = 0; i < VARR_LENGTH (node_t, label_uses); i++) {
@@ -11243,10 +11266,11 @@ static void block_move (c2m_ctx_t c2m_ctx, op_t var, op_t val, mir_size_t size) 
   op_t index;
 
   if (MIR_op_eq_p (ctx, var.mir_op, val.mir_op) || size == 0) return;
-  if (size > 5 && size <= 64 && var.mir_op.mode == MIR_OP_MEM && val.mir_op.mode == MIR_OP_MEM) {
+  if (size <= 64 && var.mir_op.mode == MIR_OP_MEM && val.mir_op.mode == MIR_OP_MEM) {
     /* Gust: a small block (a struct of a few fields) as moves of 8, 4, 2 and 1 bytes, which
        the generator keeps in registers, rather than a call of memcpy, around which it spills
-       every live register. */
+       every live register; and, at 5 bytes and below, rather than a loop of byte moves through
+       an index, which keeps the frame's places in memory (jit_mir.h, MirPromoteFrame). */
     op_t d = var, s = val;
     mir_size_t off = 0, piece;
     d.mir_op.u.mem.alias = d.mir_op.u.mem.nonalias = 0;

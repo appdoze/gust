@@ -502,7 +502,18 @@ git log upstream/master..main
   than a page, top down, before sp passes it, as MSVC's __chkstk does
   (`target_make_prolog_epilog`), where the stack grows a guard page at a
   time; and c2mir rejects a call of an undeclared function rather than
-  declare it `int f()`, which returned garbage for a double.
+  declare it `int f()`, which returned garbage for a double. Then c2mir
+  copies a block of 1 to 5 bytes with moves too, rather than a loop of byte
+  moves through an index, and reports each function's frame objects (a
+  local's offset from fp, its size, whether it holds an array) to the
+  hook `gs_c2mir_frame_object`, for `src/jit_mir.h`'s `MirPromoteFrame`:
+  before generation, each 8-byte place of c2mir's frame read and written
+  only whole, at one type, through addresses resolved from the definitions
+  before them in their block, becomes a register; an escaping address gives
+  away its object (a memcpy or memset of a known size what it covers, fp
+  plus a scaled index the arrays), and one that cannot be resolved leaves
+  the function's frame alone. n-body runs 3.3x off a native gcc build
+  rather than 6.5x, raytrace 1.8x rather than 4.4x.
 - `third_party/mir` is built with `__WIN32` defined on Windows
   (`CMakeLists.txt`): its built-in headers test MinGW's macro, which MSVC
   and clang do not define, and c2mir's stdarg.h declared no `va_list`.

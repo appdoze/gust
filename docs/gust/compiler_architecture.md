@@ -112,9 +112,10 @@ and after, and keeps C as the one backend.
    compiles the program's own C against the runtime compiled into the
    compiler (`src/runtime_native.c`), which it finds by name among the
    compiler's exports, so a run starts as fast as TinyCC's. On the compare
-   suite in WSL it runs 2.3x off a native gcc build, as a geometric mean,
-   against TinyCC's 4.1x; n-body and raytrace stay furthest off, their
-   struct fields kept in memory by MIR where clang keeps them in registers.)**
+   suite in WSL it runs 2.0x off a native gcc build, as a geometric mean,
+   against TinyCC's 4.1x, struct locals' fields kept in registers by a pass
+   before MIR's generator (`MirPromoteFrame`); n-body (3.3x) and bintrees
+   (3.4x) stay furthest off.)**
 7. **Only then, and only if a measured case needs it: an LLVM IR backend**
    beside the C one, behind a flag, reading the same lowered form the C
    generator reads, so the two can be compared program by program. Its entry

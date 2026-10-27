@@ -4074,7 +4074,7 @@ on: those are compile errors at `c_callback`. Spec §7.11.
 
 `gust run --mir file.gust` runs a program in process as `gust run` does,
 with no build, but compiles its C with MIR's C front end and optimizing
-generator (`third_party/mir`) instead of TinyCC: faster code, about 2.3x off
+generator (`third_party/mir`) instead of TinyCC: faster code, about 2.0x off
 a build rather than TinyCC's 4.1x on the compare suite, and as quick a
 start. MIR compiles only the program's own C: the runtime is compiled into
 the compiler itself (`src/runtime_native.c`), and the program calls it there,
@@ -4084,7 +4084,8 @@ are refused, as `gust run` refuses them; build those. Calls of `sqrt` become
 an instruction MIR was given for it, c2mir copies small structs with moves
 rather than calls of `memcpy`, and on Windows MIR's code touches a large
 frame a page at a time, as the stack there grows; these are changes to MIR
-that MODIFICATIONS.md lists.
+that MODIFICATIONS.md lists. Struct locals' fields are kept in registers
+where nothing else reaches them, as a C compiler keeps them.
 
 ### C header import (Gust)
 
