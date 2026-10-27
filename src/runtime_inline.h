@@ -96,6 +96,23 @@ R"GSRT(/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS
 #ifndef GS_NEED_THREADS
 #define GS_NEED_THREADS 0
 #endif
+
+/* Gust: MIR's C front end (c2mir), the other in-process backend
+   (src/jit_mir.h), has none of GCC's __atomic builtins. Its runs have one
+   thread, as TinyCC's do, so plain loads, stores and additions do what the
+   atomic ones would. */
+#ifdef __MIRC__
+#define __ATOMIC_RELAXED 0
+#define __ATOMIC_ACQUIRE 2
+#define __ATOMIC_RELEASE 3
+#define __ATOMIC_SEQ_CST 5
+#define __atomic_load_n(p, o) (*(p))
+#define __atomic_store_n(p, v, o) ((void)(*(p) = (v)))
+#define __atomic_load(p, r, o) ((void)(*(r) = *(p)))
+#define __atomic_store(p, v, o) ((void)(*(p) = *(v)))
+#define __atomic_fetch_add(p, v, o) ((*(p) += (v)) - (v))
+#define __atomic_add_fetch(p, v, o) (*(p) += (v))
+#endif
 #ifndef GS_DEBUG
 #define GS_DEBUG 0          /* 1: overflow, `as` range, and tag checks (§9.3). */
 #endif
@@ -189,7 +206,8 @@ enum {
     GS_E_POP,          /* pop on empty array */
     GS_E_THREADID,     /* thread_wait on an unknown thread id */
     GS_E_THREADSELF,   /* a worker cannot wait for itself */
-    GS_E_TAG,          /* corrupt ADT tag (debug builds only) */
+)GSRT"
+R"GSRT(    GS_E_TAG,          /* corrupt ADT tag (debug builds only) */
     GS_E_ENDIAN,       /* serialization on a big-endian host */
     GS_E_SLICELEN,     /* slice pool length negative or beyond any data stack */
     GS_E_POOLSLICE,    /* a slice handed to a slice pool is not one of its runs */
@@ -200,8 +218,7 @@ enum {
 
 GS_API GS_NORETURN void gs_panic(const char *msg);
 GS_API GS_NORETURN void gs_abort(int err, const char *file, int line);
-)GSRT"
-R"GSRT(/* The program's own abort(msg) (§9.3): the message is Goose bytes, not a C
+/* The program's own abort(msg) (§9.3): the message is Goose bytes, not a C
    string, so it goes out with an explicit length. */
 GS_API GS_NORETURN void gs_abort_msg(const uint8_t *msg, int64_t len, const char *file,
                                      int line);
@@ -353,7 +370,8 @@ static inline int gs_simd_level(void) {
 
 /* The generated code's memcpy and memset of zeros. Most move or clear the
    1 to 32 bytes of a field, an element or a reference, a constant size the
-   optimizing backends turn into a few moves. TinyCC calls the C library for
+)GSRT"
+R"GSRT(   optimizing backends turn into a few moves. TinyCC calls the C library for
    every memcpy and memset, so under it a constant size of up to 32 bytes
    is written out as loads and stores, overlapping where the size is not a
    power of two (which needs the runs not to overlap, as memcpy's do not).
@@ -362,8 +380,7 @@ static inline int gs_simd_level(void) {
    stores name d and s several times, which the compiler's operands allow
    (addresses of locals, fields, elements and data-stack tops). */
 #ifdef __TINYC__
-)GSRT"
-R"GSRT(#define GS_KSZ(n, lo, hi) (__builtin_constant_p(n) && (n) >= (lo) && (n) <= (hi))
+#define GS_KSZ(n, lo, hi) (__builtin_constant_p(n) && (n) >= (lo) && (n) <= (hi))
 #define GS_AT(T, p, k) (*(T *)((uint8_t *)(p) + (k)))
 #define GS_CP(T, d, s, k) (GS_AT(T, d, k) = GS_AT(const T, s, k))
 #define GS_MEMCPY(d, s, n) \
@@ -510,7 +527,8 @@ static int gs_memeq(const void *a, const void *b, size_t n) {
 #define GS_MODS(T, t, a, b, f, l) \
     ((T)(b) == 0 ? (gs_divfail((f), (l)), (T)0) \
      : (T)(((t) = (int64_t)(T)(a) % (int64_t)(T)(b)) < 0 \
-               ? (t) + ((T)(b) < 0 ? -(int64_t)(T)(b) : (int64_t)(T)(b)) : (t)))
+)GSRT"
+R"GSRT(               ? (t) + ((T)(b) < 0 ? -(int64_t)(T)(b) : (int64_t)(T)(b)) : (t)))
 
 #define gs_div_u8(a, b, f, l)  GS_DIVU(uint8_t, a, b, f, l)
 #define gs_div_u16(a, b, f, l) GS_DIVU(uint16_t, a, b, f, l)
@@ -520,8 +538,7 @@ static int gs_memeq(const void *a, const void *b, size_t n) {
 #define gs_mod_u16(a, b, f, l) GS_MODU(uint16_t, a, b, f, l)
 #define gs_mod_u32(a, b, f, l) GS_MODU(uint32_t, a, b, f, l)
 #define gs_mod_u64(a, b, f, l) GS_MODU(uint64_t, a, b, f, l)
-)GSRT"
-R"GSRT(#define gs_mod_i8(t, a, b, f, l)  GS_MODS(int8_t, t, a, b, f, l)
+#define gs_mod_i8(t, a, b, f, l)  GS_MODS(int8_t, t, a, b, f, l)
 #define gs_mod_i16(t, a, b, f, l) GS_MODS(int16_t, t, a, b, f, l)
 #define gs_mod_i32(t, a, b, f, l) GS_MODS(int32_t, t, a, b, f, l)
 #define gs_div_i64(a, b, f, l) \
@@ -674,7 +691,8 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 #define gs_add_i64(a, b, f, l) ((int64_t)((uint64_t)(a) + (uint64_t)(b)))
 #define gs_sub_i64(a, b, f, l) ((int64_t)((uint64_t)(a) - (uint64_t)(b)))
 #define gs_mul_i64(a, b, f, l) ((int64_t)((uint64_t)(a) * (uint64_t)(b)))
-#define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
+)GSRT"
+R"GSRT(#define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
 #define gs_shl_i64(a, n) ((int64_t)((uint64_t)(a) << ((n) & 63)))
 #define gs_shr_i64(a, n) ((int64_t)((a) >> ((n) & 63)))
 
@@ -688,8 +706,7 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 
 /* Unsigned division by a divisor a loop does not change, in libdivide's
    form: computed once before the loop (gs_divu_gen), x / d is then the high
-)GSRT"
-R"GSRT(   half of a product, adjusted where GS_DIVU_ADD is in `more` and shifted
+   half of a product, adjusted where GS_DIVU_ADD is in `more` and shifted
    (gs_divu_q). A zero divisor, and a C compiler without 128-bit products,
    get GS_DIVU_NONE, and their divisions the plain operator, which reports a
    zero divisor where the division is. */
@@ -880,7 +897,8 @@ typedef struct {
 } gs_stack;
 
 /* The program defines what goose.h gives C compiled on its own (gs_stack
-   here, gs_rhdr, gs_rref and gs_bld_append after the generated types), so
+)GSRT"
+R"GSRT(   here, gs_rhdr, gs_rref and gs_bld_append after the generated types), so
    an --include header including it gets nothing more. */
 #define GOOSE_H 1
 
@@ -890,8 +908,7 @@ typedef struct {
    main program and any one worker hold (the compiler's static counts),
    which size their registries and give hardware_threads() its cap. */
 GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
-)GSRT"
-R"GSRT(                        uint64_t budget, int64_t mainregions, int64_t workerregions);
+                        uint64_t budget, int64_t mainregions, int64_t workerregions);
 /* A fresh region, registered to the calling thread program. */
 GS_API uint8_t *gs_reserve_region(gs_stack *stack);
 /* The calling thread program's stack use, on stderr (GS_STACK_STATS):
@@ -1059,7 +1076,8 @@ static void gs_thread_release(void) {
     gs_nstks = 0;
 }
 
-static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64_t argsize,
+)GSRT"
+R"GSRT(static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64_t argsize,
                                int contained) {
     return gs_thread_start(gs_thread_run, gs_thread_release, entry, args, argsize, contained);
 }
@@ -1071,8 +1089,7 @@ static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64
 static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
     int64_t n = hi > lo ? hi - lo : 0;
     int64_t t = gs_hardware_threads();
-)GSRT"
-R"GSRT(    int64_t c = n / (t > 0 ? t * 8 : 8);
+    int64_t c = n / (t > 0 ? t * 8 : 8);
     return c > 0 ? c : 1;
 }
 
@@ -1270,7 +1287,8 @@ static int gs_is_le(void) {
 /* ---------------------------------------------------------------------------
    Text forms (§3.7): the gs_fmt_* functions write a value's text at dst and
    return the byte count (at most GS_FMT_MAX); print/str/format are built on
-   them. A float takes the shortest form that still round-trips. */
+)GSRT"
+R"GSRT(   them. A float takes the shortest form that still round-trips. */
 
 #define GS_FMT_MAX 32
 
@@ -1283,8 +1301,7 @@ GS_API int64_t gs_fmt_bool(uint8_t *dst, int64_t v);
 GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
-)GSRT"
-R"GSRT(GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
    first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
@@ -1987,7 +2004,7 @@ static GS_NORETURN void gs_park(void) {
 static GS_NORETURN void gs_end(int code) {
     if (!gs_end_first()) gs_park();
     fflush(NULL);
-    #ifdef __TINYC__
+    #if defined(__TINYC__) || defined(__MIRC__)
         if (gs_current_thread_id < 0) exit(code);
     #endif
     _Exit(code);
@@ -2082,9 +2099,9 @@ GS_API uint8_t gs_trim_memory(void) {
             continue;
         }
         if (mprotect((void *)start, len, PROT_NONE)) {
-            /* Still open, so nothing would declare them reused: undo. */
 )GSRT"
-R"GSRT(            madvise((void *)start, len, MADV_FREE_REUSE);
+R"GSRT(            /* Still open, so nothing would declare them reused: undo. */
+            madvise((void *)start, len, MADV_FREE_REUSE);
             ok = 0;
             continue;
         }
@@ -2293,9 +2310,9 @@ static void gs_sp_addchild(gs_sppath *p, int64_t l, int64_t k, int64_t child, in
             nn = gs_sp_newnode(p);
             r = GS_SPINNER(p, nn);
             r->n = in->n - half;
-            memcpy(r->key, in->key + half, (size_t)r->n * 8);
 )GSRT"
-R"GSRT(            memcpy(r->max, in->max + half, (size_t)r->n * 8);
+R"GSRT(            memcpy(r->key, in->key + half, (size_t)r->n * 8);
+            memcpy(r->max, in->max + half, (size_t)r->n * 8);
             memcpy(r->child, in->child + half, (size_t)r->n * 8);
             in->n = half;
             if (k > half) {
@@ -2530,12 +2547,12 @@ static void gs_sp_near(gs_sppath *p, gs_sppath *q, int64_t idx, int64_t end, gs_
         q->pos[l + 1] = 0;
     }
     s->np = q;
-    s->nl = GS_SPLEAF(q, q->node[q->h]);
+)GSRT"
+R"GSRT(    s->nl = GS_SPLEAF(q, q->node[q->h]);
     s->nk = 0;
 }
 
-)GSRT"
-R"GSRT(/* [idx, idx + cnt) back on the freelist beside the spans gs_sp_near found
+/* [idx, idx + cnt) back on the freelist beside the spans gs_sp_near found
    around it, merged with the ones it touches. */
 static void gs_sp_release(gs_sppath *p, gs_spnear *s, int64_t idx, int64_t cnt) {
     gs_spleaf *lf = s->lf, *nl = s->nl;
@@ -2664,7 +2681,7 @@ static int64_t gs_scan_pair_bytes(const uint8_t *p, int64_t np, const gs_byteset
     return -1;
 }
 
-#if !defined(__TINYC__) && (defined(__x86_64__) || defined(_M_X64))
+#if !defined(__TINYC__) && !defined(__MIRC__) && (defined(__x86_64__) || defined(_M_X64))
 #define GS_SCAN_SSE2 1
 #include <emmintrin.h>
 #include <tmmintrin.h>
@@ -2740,9 +2757,9 @@ static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
    hi[x & 15] where not (it gives 0 for an index with its top bit set), and
    the bit for x's bits 4 to 6, which the entry has or not. */
 static GS_SSSE3 GS_INLINE __m128i gs_bsm_tables(const gs_bsm *m, __m128i x) {
-    __m128i lo = _mm_shuffle_epi8(m->a, x);
 )GSRT"
-R"GSRT(    __m128i hi = _mm_shuffle_epi8(m->b, _mm_xor_si128(x, _mm_set1_epi8((char)0x80)));
+R"GSRT(    __m128i lo = _mm_shuffle_epi8(m->a, x);
+    __m128i hi = _mm_shuffle_epi8(m->b, _mm_xor_si128(x, _mm_set1_epi8((char)0x80)));
     __m128i bit = _mm_shuffle_epi8(m->c, _mm_and_si128(_mm_srli_epi16(x, 4), _mm_set1_epi8(7)));
     return _mm_cmpeq_epi8(_mm_and_si128(_mm_or_si128(lo, hi), bit), bit);
 }
@@ -2901,9 +2918,9 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
         // The bytes a program writes are the bytes that come out, '\n' one
         // byte as on every other platform, rather than a "\r\n" the CRT's
         // text mode makes of it byte by byte; and the bytes it reads are
-        // the bytes that came in, where text mode would make "\r\n" '\n'
 )GSRT"
-R"GSRT(        // and stop at the first Ctrl-Z.
+R"GSRT(        // the bytes that came in, where text mode would make "\r\n" '\n'
+        // and stop at the first Ctrl-Z.
         _setmode(_fileno(stdin), _O_BINARY);
         _setmode(_fileno(stdout), _O_BINARY);
         _setmode(_fileno(stderr), _O_BINARY);
@@ -3118,10 +3135,10 @@ static int64_t gs_fmt_float(uint8_t *dst, int neg, uint64_t frac, int bexp, int 
         return p + 3 - (char *)dst;
     }
     n = gs_float_digits(bexp ? frac | (uint64_t)1 << (bits - 1) : frac,
-                        (bexp ? bexp - 1 : 0) + emin, bits, emin, dig, &k);
-    x = k - 1;
 )GSRT"
-R"GSRT(    if (x < -4 || x >= (n > 15 ? n : 15)) {
+R"GSRT(                        (bexp ? bexp - 1 : 0) + emin, bits, emin, dig, &k);
+    x = k - 1;
+    if (x < -4 || x >= (n > 15 ? n : 15)) {
         *p++ = dig[0];
         if (n > 1) *p++ = '.';
         for (i = 1; i < n; i++) *p++ = dig[i];
@@ -4895,11 +4912,13 @@ typedef WSAPOLLFD gs_pollfd;
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
-#if defined(__linux__) && !defined(__TINYC__)
+#if defined(__linux__) && !defined(__TINYC__) && !defined(__MIRC__)
 /* Not under TinyCC, the in-process backend: on CI's Ubuntu 24.04 runner its
    programs saw an epoll wait come back empty in the middle of a transfer
    (run 40385045807), which no local run reproduced (WSL2, a newer glibc).
-   poll, which every platform keeps, serves it until that is understood. */
+   poll, which every platform keeps, serves it until that is understood.
+   Nor under MIR's C front end, which may not keep glibc's struct
+   epoll_event packed. */
 #include <sys/epoll.h>
 #define GS_NET_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || \
@@ -4978,10 +4997,10 @@ static int gs_net_start(void) {
     GS_WS_LOAD(getsockname); GS_WS_LOAD(WSAPoll); GS_WS_LOAD(WSAIoctl);
 #undef GS_WS_LOAD
     WSADATA wsa;
-    if (ok && gs_ws.WSAStartup(MAKEWORD(2, 2), &wsa) != 0) ok = 0;
-    InterlockedExchange(&gs_net_state, ok ? 1 : 2);
 )GSRT"
-R"GSRT(    return ok;
+R"GSRT(    if (ok && gs_ws.WSAStartup(MAKEWORD(2, 2), &wsa) != 0) ok = 0;
+    InterlockedExchange(&gs_net_state, ok ? 1 : 2);
+    return ok;
 }
 static int gs_net_wouldblock(void) {
     int e = gs_ws.WSAGetLastError();
@@ -5177,11 +5196,11 @@ static volatile int gs_net_used;
 
 static gs_net_lst *gs_net_lst_of(int64_t h) {
     if (gs_net_kind(h) != GS_NET_K_LISTENER) return NULL;
-    int64_t i = gs_net_index_of(h);
+)GSRT"
+R"GSRT(    int64_t i = gs_net_index_of(h);
     if (i >= gs_net_nlsts) return NULL;
     gs_net_lst *l = &gs_net_lsts[i];
-)GSRT"
-R"GSRT(    return l->live && !l->closing && l->gen == gs_net_gen_of(h) ? l : NULL;
+    return l->live && !l->closing && l->gen == gs_net_gen_of(h) ? l : NULL;
 }
 /* Advanced whenever a listener is closed, so that a poller looks for closed
    listeners it watches only when one has closed since it last did. Written
@@ -5361,10 +5380,10 @@ typedef BOOL (WINAPI *gs_GetQueuedCompletionStatusEx)(HANDLE, gs_ovl_entry *, UL
 typedef BOOL (WINAPI *gs_PostQueuedCompletionStatus)(HANDLE, DWORD, ULONG_PTR, LPOVERLAPPED);
 typedef BOOL (WINAPI *gs_SetFileCompletionNotificationModes)(HANDLE, UCHAR);
 static struct {
-    gs_NtCreateFile NtCreateFile;
-    gs_NtDeviceIoControlFile NtDeviceIoControlFile;
 )GSRT"
-R"GSRT(    gs_NtCancelIoFileEx NtCancelIoFileEx;
+R"GSRT(    gs_NtCreateFile NtCreateFile;
+    gs_NtDeviceIoControlFile NtDeviceIoControlFile;
+    gs_NtCancelIoFileEx NtCancelIoFileEx;
     gs_CreateIoCompletionPort CreateIoCompletionPort;
     gs_GetQueuedCompletionStatusEx GetQueuedCompletionStatusEx;
     gs_SetFileCompletionNotificationModes SetFileCompletionNotificationModes;
@@ -5557,11 +5576,11 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     if (!k) return 1;
     if (!now) {
         p->kst[f] = NULL;
-        k->deleted = 1;
+)GSRT"
+R"GSRT(        k->deleted = 1;
         gs_afd_cancel(p, k);
         gs_afd_free_if_done(k);
-)GSRT"
-R"GSRT(        return 1;
+        return 1;
     }
     k->want = now;
     if (k->pending && k->pending != now) gs_afd_cancel(p, k);
@@ -5784,11 +5803,11 @@ GS_API int64_t gs_net_poller(void) {
         i = gs_net_npls++;
     }
     gs_net_pl *p = &gs_net_pls[i];
-    uint32_t gen = gs_net_nextgen(p->gen);
+)GSRT"
+R"GSRT(    uint32_t gen = gs_net_nextgen(p->gen);
     memset(p, 0, sizeof *p);
     p->gen = gen;
-)GSRT"
-R"GSRT(    p->live = 1;
+    p->live = 1;
     p->kfd = -1;
 #if GS_NET_EPOLL
     if (!gs_net_force_poll()) p->kfd = epoll_create1(EPOLL_CLOEXEC);
@@ -6016,11 +6035,11 @@ GS_API int64_t gs_net_connect(int64_t ph, sl_u8 host, int64_t port, int64_t time
     if (!gs_net_parse_ip(host, &ip) || port <= 0 || port > 65535) return GS_NET_ADDRESS;
     gs_sock s = GS_NET_CALL(socket)(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == GS_BAD_SOCK) { gs_net_noteerr(); return GS_NET_ERROR; }
-    if (!gs_net_nonblock(s)) { gs_net_noteerr(); gs_net_closesock(s); return GS_NET_ERROR; }
+)GSRT"
+R"GSRT(    if (!gs_net_nonblock(s)) { gs_net_noteerr(); gs_net_closesock(s); return GS_NET_ERROR; }
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
-)GSRT"
-R"GSRT(    a.sin_family = AF_INET;
+    a.sin_family = AF_INET;
     a.sin_addr.s_addr = (uint32_t)((ip >> 24) | (ip >> 8 & 0xff00) | (ip << 8 & 0xff0000) | (ip << 24));
     a.sin_port = (uint16_t)((port >> 8 & 0xff) | (port << 8 & 0xff00));
     if (GS_NET_CALL(connect)(s, (struct sockaddr *)&a, sizeof a) != 0) {
@@ -6221,11 +6240,11 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
         return GS_NET_ERROR;
     }
     for (ULONG j = 0; j < n; j++) {
-        struct gs_net_ks *s = (struct gs_net_ks *)es[j].ovl;
+)GSRT"
+R"GSRT(        struct gs_net_ks *s = (struct gs_net_ks *)es[j].ovl;
         if (!s) {   /* a stop's wake: this wait returns */
             woke = 1;
-)GSRT"
-R"GSRT(            continue;
+            continue;
         }
         s->pending = 0;
         p->kpending--;
@@ -6430,13 +6449,13 @@ GS_API void gs_net_request_stop(void) {
     int one = 1;
     __atomic_store(&gs_net_stop, &one, __ATOMIC_SEQ_CST);
     /* Every epoll and kqueue poller's wait returns: a write, which a
-       signal handler may make. */
+)GSRT"
+R"GSRT(       signal handler may make. */
     int w = gs_net_wakefd[1];
     if (w >= 0) {
         char c = 1;
         ssize_t r = write(w, &c, 1);
-)GSRT"
-R"GSRT(        (void)r;
+        (void)r;
     }
 }
 static int gs_net_stopping(void) { return gs_net_stop_requested(); }

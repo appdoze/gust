@@ -76,11 +76,13 @@ typedef WSAPOLLFD gs_pollfd;
 #include <netinet/in.h>
 #include <netinet/tcp.h>
 #include <poll.h>
-#if defined(__linux__) && !defined(__TINYC__)
+#if defined(__linux__) && !defined(__TINYC__) && !defined(__MIRC__)
 /* Not under TinyCC, the in-process backend: on CI's Ubuntu 24.04 runner its
    programs saw an epoll wait come back empty in the middle of a transfer
    (run 40385045807), which no local run reproduced (WSL2, a newer glibc).
-   poll, which every platform keeps, serves it until that is understood. */
+   poll, which every platform keeps, serves it until that is understood.
+   Nor under MIR's C front end, which may not keep glibc's struct
+   epoll_event packed. */
 #include <sys/epoll.h>
 #define GS_NET_EPOLL 1
 #elif defined(__APPLE__) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || \

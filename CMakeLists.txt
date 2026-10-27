@@ -157,6 +157,30 @@ add_dependencies(goose tcc_runtime)
 set(GOOSE_TCC_LIB_PATH "${TCC_STAGE}" CACHE PATH "TinyCC's runtime directory")
 target_compile_definitions(goose PRIVATE GOOSE_TCC_LIB_PATH="${GOOSE_TCC_LIB_PATH}")
 
+# Gust: the other in-process backend, `gust run --mir`: MIR's C front end
+# and optimizing generator, vendored under third_party/mir (MIT, src/jit_mir.h).
+add_library(goose_mir STATIC
+    third_party/mir/mir.c
+    third_party/mir/mir-gen.c
+    third_party/mir/c2mir/c2mir.c)
+target_include_directories(goose_mir PUBLIC third_party/mir)
+set_target_properties(goose_mir PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
+if(WIN32)
+    # MIR's built-in headers test __WIN32, which MinGW's gcc defines and
+    # MSVC and clang do not: without it c2mir's stdarg.h declares no va_list.
+    target_compile_definitions(goose_mir PRIVATE __WIN32=1)
+endif()
+if(MSVC)
+    target_compile_options(goose_mir PRIVATE /w)
+    target_compile_definitions(goose_mir PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(goose_mir PRIVATE -w)
+endif()
+target_link_libraries(goose PRIVATE goose_mir)
+if(UNIX)
+    target_link_libraries(goose PRIVATE ${CMAKE_DL_LIBS})
+endif()
+
 # The blessed packages GOOSE_BUILTIN_LIBS names (src/blessed.txt; `all`, or
 # a list of their names), compiled into the compiler (cmake/package.cmake),
 # so that their programs run with nothing else installed. Empty by default:

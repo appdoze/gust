@@ -51,6 +51,12 @@ public:
 // with `err` saying why, when it cannot be loaded or has no such table.
 bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &out, string &err);
 
+// Gust: a function of the C library or the system's by name, for an
+// in-process run's imports (jit_mir.h): this process's own and libm's, or on
+// Windows those of the C runtime's and the system's DLLs. nullptr where none
+// has it.
+void *SystemSymbol(const char *name);
+
 // The macOS SDK this machine has active, where the C library's headers are;
 // "" elsewhere, or where none is installed.
 string MacSdkPath();

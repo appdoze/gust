@@ -83,6 +83,23 @@
 #ifndef GS_NEED_THREADS
 #define GS_NEED_THREADS 0
 #endif
+
+/* Gust: MIR's C front end (c2mir), the other in-process backend
+   (src/jit_mir.h), has none of GCC's __atomic builtins. Its runs have one
+   thread, as TinyCC's do, so plain loads, stores and additions do what the
+   atomic ones would. */
+#ifdef __MIRC__
+#define __ATOMIC_RELAXED 0
+#define __ATOMIC_ACQUIRE 2
+#define __ATOMIC_RELEASE 3
+#define __ATOMIC_SEQ_CST 5
+#define __atomic_load_n(p, o) (*(p))
+#define __atomic_store_n(p, v, o) ((void)(*(p) = (v)))
+#define __atomic_load(p, r, o) ((void)(*(r) = *(p)))
+#define __atomic_store(p, v, o) ((void)(*(p) = *(v)))
+#define __atomic_fetch_add(p, v, o) ((*(p) += (v)) - (v))
+#define __atomic_add_fetch(p, v, o) (*(p) += (v))
+#endif
 #ifndef GS_DEBUG
 #define GS_DEBUG 0          /* 1: overflow, `as` range, and tag checks (§9.3). */
 #endif

@@ -687,7 +687,7 @@ static GS_NORETURN void gs_park(void) {
 static GS_NORETURN void gs_end(int code) {
     if (!gs_end_first()) gs_park();
     fflush(NULL);
-    #ifdef __TINYC__
+    #if defined(__TINYC__) || defined(__MIRC__)
         if (gs_current_thread_id < 0) exit(code);
     #endif
     _Exit(code);
@@ -1361,7 +1361,7 @@ static int64_t gs_scan_pair_bytes(const uint8_t *p, int64_t np, const gs_byteset
     return -1;
 }
 
-#if !defined(__TINYC__) && (defined(__x86_64__) || defined(_M_X64))
+#if !defined(__TINYC__) && !defined(__MIRC__) && (defined(__x86_64__) || defined(_M_X64))
 #define GS_SCAN_SSE2 1
 #include <emmintrin.h>
 #include <tmmintrin.h>

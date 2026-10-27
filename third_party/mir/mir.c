@@ -178,6 +178,8 @@ static const struct insn_desc insn_descs[] = {
   {MIR_FNEG, "fneg", {MIR_OP_FLOAT | OUT_FLAG, MIR_OP_FLOAT, MIR_OP_BOUND}},
   {MIR_DNEG, "dneg", {MIR_OP_DOUBLE | OUT_FLAG, MIR_OP_DOUBLE, MIR_OP_BOUND}},
   {MIR_LDNEG, "ldneg", {MIR_OP_LDOUBLE | OUT_FLAG, MIR_OP_LDOUBLE, MIR_OP_BOUND}},
+  {MIR_FSQRT, "fsqrt", {MIR_OP_FLOAT | OUT_FLAG, MIR_OP_FLOAT, MIR_OP_BOUND}},    /* Gust */
+  {MIR_DSQRT, "dsqrt", {MIR_OP_DOUBLE | OUT_FLAG, MIR_OP_DOUBLE, MIR_OP_BOUND}}, /* Gust */
   {MIR_ADDR, "addr", {MIR_OP_INT | OUT_FLAG, MIR_OP_REG, MIR_OP_BOUND}},     /* MIR_OP_REG! */
   {MIR_ADDR8, "addr8", {MIR_OP_INT | OUT_FLAG, MIR_OP_REG, MIR_OP_BOUND}},   /* MIR_OP_REG! */
   {MIR_ADDR16, "addr16", {MIR_OP_INT | OUT_FLAG, MIR_OP_REG, MIR_OP_BOUND}}, /* MIR_OP_REG! */

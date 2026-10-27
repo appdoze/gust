@@ -214,6 +214,28 @@ bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &o
     return true;
 }
 
+void *SystemSymbol(const char *name) {
+    #ifdef _WIN32
+        static const char *const dlls[] = { "ucrtbase.dll", "msvcrt.dll", "kernel32.dll", "ws2_32.dll",
+                                            "advapi32.dll", "user32.dll", "shell32.dll", "ntdll.dll" };
+        for (auto d : dlls) {
+            auto h = GetModuleHandleA(d);
+            if (!h) h = LoadLibraryA(d);
+            if (h)
+                if (auto p = GetProcAddress(h, name)) return (void *)p;
+        }
+        return nullptr;
+    #else
+        if (auto p = dlsym(RTLD_DEFAULT, name)) return p;
+        #ifdef __APPLE__
+            static void *libm = dlopen("/usr/lib/libSystem.B.dylib", RTLD_NOW | RTLD_GLOBAL);
+        #else
+            static void *libm = dlopen("libm.so.6", RTLD_NOW | RTLD_GLOBAL);
+        #endif
+        return libm ? dlsym(libm, name) : nullptr;
+    #endif
+}
+
 string MacSdkPath() {
     string sdk;
     #ifdef __APPLE__

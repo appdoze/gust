@@ -2456,6 +2456,20 @@ def main():
     if cc and not extra and sys.platform.startswith("linux"):
         r.show_task(cimport_libs)
 
+    # Gust: in-process runs through MIR (gust run --mir) against TinyCC's, on
+    # the fixtures with an expected output; on Windows, that --mir says it is
+    # not there.
+    def mir_runs():
+        from mir_runs import check_mir_runs
+        try:
+            n = check_mir_runs(exe, max(1, r.jobs // 2))
+            r.ok(f"mir runs: {n} fixtures through gust run --mir, each as TinyCC runs it" if n else
+                 "mir runs: gust run --mir says it is not available on Windows")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("mir runs", str(e))
+    if jit and not extra:
+        r.show_task(mir_runs)
+
     # Gust: a library's exports as a Python package. Its shared library is
     # loaded into Python itself, which the sanitizers' runtimes are not, so
     # only a build without them.

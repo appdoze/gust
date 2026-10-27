@@ -147,3 +147,5 @@ is. Files changed for Gust say so at their top, and
   ([third_party/tinycc/COPYING](third_party/tinycc/COPYING)); a binary
   distribution of the compiler must let users relink it with their own
   TinyCC. The programs Gust builds with clang, gcc or MSVC do not contain it.
+- MIR, Vladimir Makarov's JIT compiler, which `gust run --mir` uses, is MIT
+  ([third_party/mir/LICENSE](third_party/mir/LICENSE)).

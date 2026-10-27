@@ -1682,6 +1682,10 @@ static struct pattern patterns[] = {
 
   {MIR_FNEG, "r 0", "Y 0F 57 r0 c0000000080000000", 0},    /* xorps r0,80000000 */
   {MIR_DNEG, "r 0", "66 Y 0F 57 r0 c8000000000000000", 0}, /* xorpd r0,0x8000000000000000 */
+  {MIR_FSQRT, "r r", "F3 Y 0F 51 r0 R1", 0},  /* sqrtss r0,r1 (Gust) */
+  {MIR_FSQRT, "r mf", "F3 Y 0F 51 r0 m1", 0}, /* sqrtss r0,m1 */
+  {MIR_DSQRT, "r r", "F2 Y 0F 51 r0 R1", 0},  /* sqrtsd r0,r1 */
+  {MIR_DSQRT, "r md", "F2 Y 0F 51 r0 m1", 0}, /* sqrtsd r0,m1 */
   {MIR_LDNEG, "mld mld", "DB /5 m1; D9 E0; DB /7 m0", 0},  /* fld m1; fchs; fstp m0 */
 
   IOP (MIR_ADD, "03", "01", "83 /0", "81 /0") /* x86_64 int additions */
@@ -2480,7 +2484,9 @@ static int get_max_insn_size (gen_ctx_t gen_ctx MIR_UNUSED, const char *replacem
       }
     }
     if (prefix_p) size++;
-    if (rex_p) size++;
+    /* Gust: an operand in r8-r15 or xmm8-xmm15 takes a REX prefix the pattern does not
+       spell (ucomiss r1,R2 in a float compare), so one may come with any ModRM byte. */
+    if (rex_p || modrm_p) size++;
     if (opcode0_p) size++;
     if (opcode1_p) size++;
     if (opcode2_p) size++;

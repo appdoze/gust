@@ -1709,6 +1709,8 @@ static const struct pattern patterns[] = {
   {MIR_NEGS, "r r", "4b0003e0:ff2003e0 rd0 rm1"}, /* neg Wd,Wm */
   {MIR_FNEG, "r r", "1e214000:fffffc00 vd0 vn1"}, /* fneg Sd,Sn */
   {MIR_DNEG, "r r", "1e614000:fffffc00 vd0 vn1"}, /* fneg Dd,Dn */
+  {MIR_FSQRT, "r r", "1e21c000:fffffc00 vd0 vn1"}, /* fsqrt Sd,Sn (Gust) */
+  {MIR_DSQRT, "r r", "1e61c000:fffffc00 vd0 vn1"}, /* fsqrt Dd,Dn (Gust) */
   // ldneg is a builtin
 
   {MIR_LSH, "r r r", "9ac02000:ffe0fc00 rd0 rn1 rm2"},  /* lsl Rd,Rn,Rm */

@@ -99,6 +99,7 @@ typedef enum {
   REP3 (INSN_EL, F2I, D2I, LD2I),    /* Float or (long) double to integer conversion */
   REP6 (INSN_EL, F2D, F2LD, D2F, D2LD, LD2F, LD2D), /* Float, (long) double conversions */
   REP5 (INSN_EL, NEG, NEGS, FNEG, DNEG, LDNEG),     /* Changing sign */
+  REP2 (INSN_EL, FSQRT, DSQRT),                     /* Square root (Gust) */
   REP4 (INSN_EL, ADDR, ADDR8, ADDR16, ADDR32), /* reg addr in natural mode or given integer mode */
   /* 3 operand insn: */
   REP5 (INSN_EL, ADD, ADDS, FADD, DADD, LDADD),              /* Addition */

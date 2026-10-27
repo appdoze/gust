@@ -2542,12 +2542,82 @@ static pos_t check_line_directive_args (c2m_ctx_t c2m_ctx, VARR (token_t) * buff
   return no_pos;
 }
 
+/* Gust: #pragma pack (push, n), (pop), (n) and (), which Gust's generated C lays its types
+   out with. The preprocessor runs ahead of the parser, so each change of the packing in
+   force is kept with the file and line it is at, and a struct's layout looks up the packing
+   at its own definition. */
+struct gs_pack_change {
+  const char *fname;
+  int lno, pack;
+};
+static struct gs_pack_change *gs_packs;
+static size_t gs_npacks, gs_packs_cap;
+static int gs_pack_stack[64], gs_pack_sp, gs_pack_cur;
+
+static void gs_pack_reset (void) {
+  free (gs_packs);
+  gs_packs = NULL;
+  gs_npacks = gs_packs_cap = 0;
+  gs_pack_sp = gs_pack_cur = 0;
+}
+
+static void gs_pragma_pack (pos_t pos, token_t *toks, size_t n) {
+  size_t i = 0;
+  int pushed = FALSE, popped = FALSE, value = -1;
+
+#define GS_SKIP_SPACE() \
+  while (i < n && (toks[i]->code == ' ' || toks[i]->code == '\n')) i++
+  GS_SKIP_SPACE ();
+  if (i >= n || toks[i]->code != '(') return;
+  for (i++;; i++) {
+    GS_SKIP_SPACE ();
+    if (i >= n || toks[i]->code == ')') break;
+    if (toks[i]->code == T_ID && strcmp (toks[i]->repr, "push") == 0) pushed = TRUE;
+    else if (toks[i]->code == T_ID && strcmp (toks[i]->repr, "pop") == 0) popped = TRUE;
+    else if (toks[i]->code == T_NUMBER) value = atoi (toks[i]->repr);
+    else if (toks[i]->code != ',') return;
+  }
+#undef GS_SKIP_SPACE
+  if (pushed) {
+    if (gs_pack_sp < (int) (sizeof (gs_pack_stack) / sizeof (gs_pack_stack[0])))
+      gs_pack_stack[gs_pack_sp++] = gs_pack_cur;
+    if (value >= 0) gs_pack_cur = value;
+  } else if (popped) {
+    gs_pack_cur = gs_pack_sp > 0 ? gs_pack_stack[--gs_pack_sp] : 0;
+  } else {
+    gs_pack_cur = value > 0 ? value : 0;
+  }
+  if (gs_npacks == gs_packs_cap) {
+    gs_packs_cap = gs_packs_cap ? gs_packs_cap * 2 : 16;
+    gs_packs = realloc (gs_packs, gs_packs_cap * sizeof (gs_packs[0]));
+    if (gs_packs == NULL) abort ();
+  }
+  gs_packs[gs_npacks].fname = pos.fname;
+  gs_packs[gs_npacks].lno = pos.lno;
+  gs_packs[gs_npacks++].pack = gs_pack_cur;
+}
+
+/* The packing in force at pos: 0 for none. */
+static int gs_pack_at (pos_t pos) {
+  int pack = 0;
+
+  for (size_t i = 0; i < gs_npacks; i++)
+    if (gs_packs[i].fname != NULL && pos.fname != NULL && strcmp (gs_packs[i].fname, pos.fname) == 0
+        && gs_packs[i].lno < pos.lno)
+      pack = gs_packs[i].pack;
+  return pack;
+}
+
 static void check_pragma (c2m_ctx_t c2m_ctx, token_t t, VARR (token_t) * tokens) {
   token_t *tokens_arr = VARR_ADDR (token_t, tokens);
   size_t i, tokens_len = VARR_LENGTH (token_t, tokens);
 
   i = 0;
   if (i < tokens_len && tokens_arr[i]->code == ' ') i++;
+  if (i < tokens_len && tokens_arr[i]->code == T_ID && strcmp (tokens_arr[i]->repr, "pack") == 0) {
+    gs_pragma_pack (t->pos, tokens_arr + i + 1, tokens_len - i - 1); /* Gust */
+    return;
+  }
 #ifdef _WIN32
   if (i + 1 == tokens_len && tokens_arr[i]->code == T_ID
       && strcmp (tokens_arr[i]->repr, "once") == 0) {
@@ -6117,6 +6187,9 @@ static void aux_set_type_align (c2m_ctx_t c2m_ctx, struct type *type) {
           member_align = type_align (decl->decl_spec.type);
           if (align < member_align) align = member_align;
         }
+      /* Gust: the packing in force where the struct is defined. */
+      int pack = gs_pack_at (POS (type->u.tag_type));
+      if (pack > 0 && align > pack) align = pack;
     }
   }
   type->align = align;
@@ -6243,6 +6316,7 @@ static void set_type_layout (c2m_ctx_t c2m_ctx, struct type *type) {
     if (incomplete_type_p (c2m_ctx, type)) {
       overall_size = MIR_SIZE_MAX;
     } else {
+      int pack = gs_pack_at (POS (type->u.tag_type)); /* Gust */
       for (node_t el = NL_HEAD (NL_EL (type->u.tag_type->u.ops, 1)->u.ops); el != NULL;
            el = NL_NEXT (el))
         if (el->code == N_MEMBER) {
@@ -6266,6 +6340,7 @@ static void set_type_layout (c2m_ctx_t c2m_ctx, struct type *type) {
                to the current (aligned) running offset; do not grow the type. */
             member_align = type_align (decl->decl_spec.type);
             if (decl->decl_spec.align > member_align) member_align = decl->decl_spec.align;
+            if (pack > 0 && member_align > pack) member_align = pack;
             decl->offset = type->mode == TM_UNION
                              ? 0
                              : (overall_size + member_align - 1) / member_align * member_align;
@@ -6274,6 +6349,7 @@ static void set_type_layout (c2m_ctx_t c2m_ctx, struct type *type) {
             continue;
           }
           member_align = type_align (decl->decl_spec.type);
+          if (pack > 0 && member_align > pack) member_align = pack;
           bits
             = width->code == N_IGNORE || !(expr = width->attr)->const_p ? -1 : (int) expr->c.u_val;
           update_field_layout (&bf_p, &overall_size, &offset, &bound_bit, prev_size, member_size,
@@ -10619,6 +10695,40 @@ static op_t cast (c2m_ctx_t c2m_ctx, op_t op, MIR_type_t t, int new_op_p) {
   assert (t == MIR_T_I8 || t == MIR_T_U8 || t == MIR_T_I16 || t == MIR_T_U16 || t == MIR_T_I32
           || t == MIR_T_U32 || t == MIR_T_I64 || t == MIR_T_U64 || t == MIR_T_F || t == MIR_T_D
           || t == MIR_T_LD);
+  {
+    /* Gust: a float to unsigned 64 bits. MIR converts to signed integers only, which leaves a
+       value from 2^63 up to 2^64, in range for the unsigned type, at the conversion's
+       indefinite value; such a value converts less 2^63, with the top bit set after. */
+    MIR_type_t src = op.mir_op.mode == MIR_OP_REG       ? reg_type (c2m_ctx, op.mir_op.u.reg)
+                     : op.mir_op.mode == MIR_OP_MEM     ? op.mir_op.u.mem.type
+                     : op.mir_op.mode == MIR_OP_FLOAT   ? MIR_T_F
+                     : op.mir_op.mode == MIR_OP_DOUBLE  ? MIR_T_D
+                     : op.mir_op.mode == MIR_OP_LDOUBLE ? MIR_T_LD
+                                                        : MIR_T_UNDEF;
+    if (t == MIR_T_U64 && (src == MIR_T_F || src == MIR_T_D || src == MIR_T_LD)) {
+      MIR_context_t ctx = c2m_ctx->ctx;
+      MIR_label_t big = MIR_new_label (ctx), done = MIR_new_label (ctx);
+      MIR_insn_code_t to_i = src == MIR_T_F ? MIR_F2I : src == MIR_T_D ? MIR_D2I : MIR_LD2I;
+      MIR_insn_code_t bge = src == MIR_T_F ? MIR_FBGE : src == MIR_T_D ? MIR_DBGE : MIR_LDBGE;
+      MIR_insn_code_t sub = src == MIR_T_F ? MIR_FSUB : src == MIR_T_D ? MIR_DSUB : MIR_LDSUB;
+      MIR_op_t lim = src == MIR_T_F   ? MIR_new_float_op (ctx, 9223372036854775808.0f)
+                     : src == MIR_T_D ? MIR_new_double_op (ctx, 9223372036854775808.0)
+                                      : MIR_new_ldouble_op (ctx, 9223372036854775808.0L);
+      op_t v = get_new_temp (c2m_ctx, src);
+
+      res = get_new_temp (c2m_ctx, MIR_T_U64);
+      emit2 (c2m_ctx, tp_mov (src), v.mir_op, op.mir_op);
+      emit3 (c2m_ctx, bge, MIR_new_label_op (ctx, big), v.mir_op, lim);
+      emit2 (c2m_ctx, to_i, res.mir_op, v.mir_op);
+      emit1 (c2m_ctx, MIR_JMP, MIR_new_label_op (ctx, done));
+      emit_label_insn_opt (c2m_ctx, big);
+      emit3 (c2m_ctx, sub, v.mir_op, v.mir_op, lim);
+      emit2 (c2m_ctx, to_i, res.mir_op, v.mir_op);
+      emit3 (c2m_ctx, MIR_XOR, res.mir_op, res.mir_op, MIR_new_uint_op (ctx, (uint64_t) 1 << 63));
+      emit_label_insn_opt (c2m_ctx, done);
+      return res;
+    }
+  }
   switch (op.mir_op.mode) {
   case MIR_OP_MEM:
     op_type = op.mir_op.u.mem.type;
@@ -11129,6 +11239,24 @@ static void block_move (c2m_ctx_t c2m_ctx, op_t var, op_t val, mir_size_t size) 
   op_t index;
 
   if (MIR_op_eq_p (ctx, var.mir_op, val.mir_op) || size == 0) return;
+  if (size > 5 && size <= 64 && var.mir_op.mode == MIR_OP_MEM && val.mir_op.mode == MIR_OP_MEM) {
+    /* Gust: a small block (a struct of a few fields) as moves of 8, 4, 2 and 1 bytes, which
+       the generator keeps in registers, rather than a call of memcpy, around which it spills
+       every live register. */
+    op_t d = var, s = val;
+    mir_size_t off = 0, piece;
+    d.mir_op.u.mem.alias = d.mir_op.u.mem.nonalias = 0;
+    s.mir_op.u.mem.alias = s.mir_op.u.mem.nonalias = 0;
+    for (; off < size; off += piece) {
+      piece = size - off >= 8 ? 8 : size - off >= 4 ? 4 : size - off >= 2 ? 2 : 1;
+      d.mir_op.u.mem.disp = var.mir_op.u.mem.disp + (MIR_disp_t) off;
+      s.mir_op.u.mem.disp = val.mir_op.u.mem.disp + (MIR_disp_t) off;
+      d.mir_op.u.mem.type = s.mir_op.u.mem.type
+        = piece == 8 ? MIR_T_I64 : piece == 4 ? MIR_T_I32 : piece == 2 ? MIR_T_I16 : MIR_T_I8;
+      emit2 (c2m_ctx, MIR_MOV, d.mir_op, s.mir_op);
+    }
+    return;
+  }
   if (size > 5) {
     var = mem_to_address (c2m_ctx, var, TRUE);
     assert (var.mir_op.mode == MIR_OP_REG);
@@ -14321,6 +14449,7 @@ int c2mir_compile (MIR_context_t ctx, struct c2mir_options *ops, int (*getc_func
   MIR_module_t m;
 
   if (c2m_ctx == NULL) return 0;
+  gs_pack_reset (); /* Gust */
   if (setjmp (c2m_ctx->env)) {
     compile_finish (c2m_ctx);
     return 0;

@@ -44,6 +44,7 @@
 #include "runtime_inline.h"
 #include "process.h"
 #include "jit.h"
+#include "jit_mir.h"
 #include "progress.h"
 #include "buildfile.h"
 #include "json.h"
@@ -741,7 +742,9 @@ starts threads needs gust build.
 Options:
   -O0, -O1, -O2         Inlining level (default -O2).
 )", DEBUGOPTION, COMPILEOPTIONS,
-R"(  --cc name|path        The C compiler for packages' native parts: msvc,
+R"(  --mir                 Compile with MIR's code generator instead of
+                        TinyCC: a slower start, faster code (Gust).
+  --cc name|path        The C compiler for packages' native parts: msvc,
                         clang-cl, clang, gcc, cc or a path (or GOOSE_CC).
   -v                    Print each command that builds a native part, and
                         what it prints.
@@ -1380,7 +1383,7 @@ int Main(int argc, char **argv) {
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
     auto stacks = false;
     auto quiet = false;
-    auto forcejit = false, standalone = false;
+    auto forcejit = false, standalone = false, usemir = false;
     auto json = false, refresh = false, debug = false, verbose = false, dryrun = false;
     auto jsondiag = false;
     string ccrequest;
@@ -1429,6 +1432,7 @@ int Main(int argc, char **argv) {
         // Unsound; a measurement aid only (see CodeGen::norfcheck).
         else if (arg == "--unsafe-no-rf-check") norfcheck = true;
         else if (arg == "--jit") forcejit = true;
+        else if (arg == "--mir") usemir = true;
         else if (arg == "--standalone") standalone = true;
         else if (arg == "--multi-test") multitest = true;
         else if (arg == "--gen-runtime-header") {
@@ -1936,6 +1940,8 @@ int Main(int argc, char **argv) {
             // The program shares this process, so its exit code becomes ours
             // and whatever it wrote is already on the same streams.
             fflush(msgs);
+            if (usemir)
+                return RunMir(JitSource(program, filename), JitLibPath(DirOf(exe)), filename, progargs, symbols);
             return RunJit(program, JitLibPath(DirOf(exe)), filename, progargs, symbols);
         };
         auto code = 0;

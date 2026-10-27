@@ -3959,6 +3959,18 @@ It may grow storage outside it, but not shrink it or rebind an optional
 outside it, which the caller, suspended in the extern call, may still rely
 on: those are compile errors at `c_callback`. Spec §7.11.
 
+### In-process runs with MIR (Gust)
+
+`gust run --mir file.gust` runs a program in process as `gust run` does,
+with no build, but compiles its C with MIR's C front end and optimizing
+generator (`third_party/mir`) instead of TinyCC: a longer start (tenths of a
+second for the compiler's own runtime) and faster code, about 2.3x off a
+build rather than TinyCC's 4.1x on the compare suite. It runs on Linux and
+macOS; on Windows MIR's front end cannot yet read the system headers the
+runtime needs, and `--mir` says so. Calls of `sqrt` become an instruction
+MIR was given for it, and c2mir copies small structs with moves rather than
+calls of `memcpy`; both are changes to MIR that MODIFICATIONS.md lists.
+
 ### C header import (Gust)
 
 `gust cimport zlib.h --lib z` writes a package of what a C header

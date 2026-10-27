@@ -141,6 +141,18 @@ git log upstream/master..main
   libcrypto (SHA-256 and HMAC as Python's hashlib computes them) under the
   JIT and built, on Linux where their headers are installed; CI installs
   them.
+- `gust run --mir` (new, `src/jit_mir.h`, `src/main.cpp`, `CMakeLists.txt`):
+  the C an in-process run compiles (`JitSource`, now shared with TinyCC's
+  `RunJit` in `src/jit.h`), compiled by MIR's c2mir and generated at its
+  level 1 (its level 2 kept a stack-top pointer stale past a loop), each
+  function as it is first called, its imports resolved from the packages'
+  native functions and then the C library's (`SystemSymbol`,
+  `src/process.cpp`); calls of sqrt and sqrtf become MIR's square root
+  first. The runtime takes c2mir (`__MIRC__`) for a compiler without GCC's
+  atomics, its SSE scan and epoll, as it takes TinyCC (`src/runtime/`).
+  Linux and macOS; Windows says it is not available yet.
+  `test/mir_runs.py` (new) runs the fixtures with an expected output both
+  ways and requires the same output and outcome.
 - `src/packages.h`, `src/main.cpp`, `docs/packages.md`: version ranges in a
   git source (`@^1.2`, `@~1.2.3`, `@>=1.2`, `@1.x`), resolved to the
   highest tag they allow with `git ls-remote`, and the program's lockfile,
@@ -357,6 +369,24 @@ git log upstream/master..main
   typedef of void marked as such (`V`), which TinyCC's types otherwise
   forget. Nothing else in TinyCC changed, and nothing calls the hook but
   `gust cimport`.
+- `third_party/mir` (new, MIT): Vladimir Makarov's MIR at commit
+  `a8ab7c31cd5f9b23b77d84c60b3d83e62d9d304c`, the subset Lobster vendors
+  (its `dev/external/mir`: the IR, the generator for x86-64 and arm64, and
+  c2mir), copied from Lobster's checkout. Changed, each change marked
+  `Gust`: square-root instructions `MIR_FSQRT` and `MIR_DSQRT` (`mir.h`,
+  `mir.c`, the interpreter, `sqrtss`/`sqrtsd` in `mir-gen-x86_64.c`,
+  `fsqrt` in `mir-gen-aarch64.c`); c2mir copying a block of 6 to 64
+  bytes (a small struct) with moves rather than a call of `memcpy`
+  (`c2mir/c2mir.c`, `block_move`); c2mir keeping `#pragma pack` (push, pop
+  and a value), which Gust lays its types out with and c2mir ignored: each
+  change is kept by file and line and a struct's layout caps its members'
+  and its own alignment at the packing where it is defined; and the x86-64
+  generator's upper bound on an instruction's size counting the REX prefix
+  a register from r8 or xmm8 up takes (`get_max_insn_size`), which a float
+  comparison's ucomiss passed by a byte.
+- `third_party/mir` is built with `__WIN32` defined on Windows
+  (`CMakeLists.txt`): its built-in headers test MinGW's macro, which MSVC
+  and clang do not define, and c2mir's stdarg.h declared no `va_list`.
 
 ## Scripts and tests
 
