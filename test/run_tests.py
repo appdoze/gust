@@ -2442,6 +2442,20 @@ def main():
     if cc and not extra:
         r.show_task(cimport)
 
+    # Gust: cimport on SQLite, libcurl and OpenSSL, where their headers are
+    # installed (Linux with the -dev packages).
+    def cimport_libs():
+        from cimport_libs import check_cimport_libs
+        try:
+            ran = check_cimport_libs(exe, cc, gendir)
+            if ran:
+                r.ok("cimport libraries: " + ", ".join(ran) + " through generated packages, with callbacks, "
+                     "run and built")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("cimport libraries", str(e))
+    if cc and not extra and sys.platform.startswith("linux"):
+        r.show_task(cimport_libs)
+
     # Gust: a library's exports as a Python package. Its shared library is
     # loaded into Python itself, which the sanitizers' runtimes are not, so
     # only a build without them.

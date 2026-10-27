@@ -805,7 +805,8 @@ the header's own declarations are imported, and those of the headers
 
 Options:
   --name n              The package and namespace (default: the header's stem).
-  --lib l               The library to link, by name (`z` for libz).
+  --lib l               The library to link, by name (`z` for libz); a function
+                        it does not define is left out.
   --also a.h,b.h        Headers the header includes whose declarations count too.
   --source f.c          C the package compiles as its own (a library shipped as
                         source, such as SQLite's amalgamation), copied into it.

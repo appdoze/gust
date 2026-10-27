@@ -117,7 +117,20 @@ git log upstream/master..main
   program through it under the JIT and built; checked on zlib in WSL
   (compress and uncompress round trip, crc32 as Python's zlib computes it,
   the version from the function and the macro, all 80 of zlib.h's
-  functions but the variadic gzprintf).
+  functions but the variadic gzprintf). Then: a variadic function as
+  itself and six forms taking one more argument (`_int`, `_f64`, `_ptr`,
+  `_str`, `_buf`, `_out`), a pointer to a typedef of void and a `void *`
+  no length follows as `u64` handles, function pointers passed as `void *`
+  (TinyCC's spelling of their types is not always C's), pointer-constant
+  macros as `u64`, glue locals that no parameter name can shadow, and with
+  `--lib` the functions linked against the library first, those it does not
+  define left out. `test/cimport_libs.py` (new) uses SQLite (prepared
+  statements, sqlite3_exec's row callback, an error message SQLite
+  allocated and frees), libcurl (a fetch from a local server through its
+  write callback, options through curl_easy_setopt's forms) and OpenSSL's
+  libcrypto (SHA-256 and HMAC as Python's hashlib computes them) under the
+  JIT and built, on Linux where their headers are installed; CI installs
+  them.
 - `src/packages.h`, `src/main.cpp`, `docs/packages.md`: version ranges in a
   git source (`@^1.2`, `@~1.2.3`, `@>=1.2`, `@1.x`), resolved to the
   highest tag they allow with `git ls-remote`, and the program's lockfile,
@@ -330,8 +343,10 @@ git log upstream/master..main
   declaration as it is parsed, a function, typedef, enum constant,
   object-like macro or struct layout per line with the file it is in, for
   `gust cimport` (`libtcc.h`, `libtcc.c`, `tcc.h`, `tccgen.c`, `tccpp.c`, each
-  change marked `Gust:`). Nothing else in TinyCC changed, and nothing calls
-  the hook but `gust cimport`.
+  change marked `Gust:`), a function parameter whose type is a pointer to a
+  typedef of void marked as such (`V`), which TinyCC's types otherwise
+  forget. Nothing else in TinyCC changed, and nothing calls the hook but
+  `gust cimport`.
 
 ## Scripts and tests
 

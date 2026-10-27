@@ -148,6 +148,7 @@ static int decl(int l);
 static void gs_decl_function(int v, CType *type);
 static void gs_decl_typedef(int v, CType *type);
 static void gs_decl_enumval(int v, long long val);
+static int gs_void_typedef; /* whether parse_btype's type was a typedef of void */
 static void expr_eq(void);
 static void vpush_type_size(CType *type, int *a);
 static int is_compatible_unqualified_types(CType *type1, CType *type2);
@@ -663,6 +664,10 @@ static inline Sym *sym_malloc(void)
 
 ST_INLN void sym_free(Sym *sym)
 {
+    int i; /* Gust: a freed parameter is no longer a handle the report names */
+    for (i = 0; i < tcc_state->nb_decl_handles; i++)
+        if (tcc_state->decl_handles[i] == sym)
+            tcc_state->decl_handles[i] = NULL;
 #ifndef SYM_DEBUG
     sym->next = sym_free_first;
     sym_free_first = sym;
@@ -4737,6 +4742,7 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
     t = VT_INT;
     bt = st = -1;
     type->ref = NULL;
+    gs_void_typedef = 0; /* Gust */
 
     while(1) {
         switch(tok) {
@@ -4966,6 +4972,7 @@ static int parse_btype(CType *type, AttributeDef *ad, int ignore_label)
             u = t & ~(VT_CONSTANT | VT_VOLATILE), t ^= u;
             type->t = (s->type.t & ~VT_TYPEDEF) | u;
             type->ref = s->type.ref;
+            gs_void_typedef = (s->type.t & VT_BTYPE) == VT_VOID; /* Gust */
             if (t)
                 parse_btype_qualify(type, t);
             t = type->t;
@@ -5070,6 +5077,7 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
         arg_size = 0;
         if (l) {
             for(;;) {
+                int handle = gs_void_typedef; /* Gust: before type_decl parses more */
                 /* read param name and compute offset */
                 if (l != FUNC_OLD) {
                     if ((pt.t & VT_BTYPE) == VT_VOID && tok == ')')
@@ -5094,6 +5102,9 @@ static int post_type(CType *type, AttributeDef *ad, int storage, int td)
                 s = sym_push(n, &pt, VT_LOCAL|VT_LVAL, 0);
                 *plast = s;
                 plast = &s->next;
+                if (handle && l != FUNC_OLD && tcc_state->decl_func && (pt.t & VT_BTYPE) == VT_PTR
+                    && (pt.ref->type.t & VT_BTYPE) == VT_VOID) /* Gust */
+                    dynarray_add(&tcc_state->decl_handles, &tcc_state->nb_decl_handles, s);
                 if (tok == ')')
                     break;
                 skip(',');
@@ -9011,8 +9022,9 @@ static int decl(int l)
    u<n> (a signed / unsigned integer of n bytes), e<n> (an enum of n
    bytes), f<n> (a float of n bytes), K<type> (const), p<type> (pointer),
    a<count>,<type> (array), s<name> / U<name> (a struct / union, which gets
-   a line of its own the first time), F{<C spelling>} (a function) and ?
-   (anything else). Lines: "f file name ret kind params..." (kind 0 for a
+   a line of its own the first time), F{<C spelling>} (a function), V (a
+   parameter's pointer target that is a typedef of void, as libcurl's CURL:
+   a handle, not bytes) and ? (anything else). Lines: "f file name ret kind params..." (kind 0 for a
    prototype, 1 with `...`, 2 without a prototype; a param is name:type),
    "t file name type", "e file name value", "d file name" (in tccpp.c),
    "s kind name size align field@offset:type..." (kind s or U; a bitfield's
@@ -9134,7 +9146,7 @@ static void gs_decl_function(int v, CType *type)
 {
     GsBuf *o;
     Sym *s = type->ref, *p;
-    int i = 0;
+    int i = 0, h;
     if (!tcc_state->decl_func || !file)
         return;
     o = tcc_malloc(sizeof *o);
@@ -9155,10 +9167,16 @@ static void gs_decl_function(int v, CType *type)
         else
             gs_putn(o, "p%lld", i);
         gs_put(o, ":");
-        gs_type(o, &p->type);
+        for (h = 0; h < tcc_state->nb_decl_handles && tcc_state->decl_handles[h] != p; h++)
+            ;
+        if (h < tcc_state->nb_decl_handles) {
+            gs_put(o, (p->type.ref->type.t & VT_CONSTANT) ? "pKV" : "pV");
+        } else
+            gs_type(o, &p->type);
     }
     gs_decl_report(tcc_state, o->b);
     tcc_free(o);
+    tcc_state->nb_decl_handles = 0;
 }
 
 static void gs_decl_typedef(int v, CType *type)

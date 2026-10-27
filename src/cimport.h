@@ -14,20 +14,26 @@
 //
 //   C                                  Goose
 //   integers, float, double, _Bool     i8 .. u64, f32, f64, bool
-//   char *, void *, unsigned char *    u8[:], whose data pointer C gets
+//   char *, unsigned char *, and a     u8[:], whose data pointer C gets
+//   void * its length follows
+//   any other void *                   u64: user data, memory C allocated
 //   const char *                       const u8[:], copied with a NUL
 //   const void *, const uint8_t *      const u8[:]
 //   const T *  (T a number)            const T[:]
 //   T *        (T a number)            T[:], an out parameter an array of one
 //   struct S *, struct S (by value)    S&, where S is laid out here
-//   anything else behind a pointer     u64, a handle C owns
+//   anything else behind a pointer     u64, a handle C owns, as is a
+//                                      typedef of void's (libcurl's CURL *)
 //   a function pointer                 u64, from c_callback(f)
 //   a struct returned by value         an `out: S&` first parameter
 //
-// A variadic function, one without a prototype, and one whose types have
-// no Goose form (a union by value, long double, a struct with bitfields)
-// are left out, with a comment saying so. A function returning `const char
-// *` also gets a `<fn>_str` form returning its string, read with ffi::cstr.
+// A function without a prototype, and one whose types have no Goose form (a
+// union by value, long double, a struct with bitfields) are left out, with a
+// comment saying so. A function returning `const char *` also gets a
+// `<fn>_str` form returning its string, read with ffi::cstr. A variadic
+// function is imported with no argument more, and as forms taking one more
+// of each kind C's promotions leave (VarForm): curl_easy_setopt's options.
+// A macro of a pointer constant (SQLite's SQLITE_TRANSIENT) is a u64.
 
 #pragma once
 
@@ -312,13 +318,19 @@ struct CImport {
     // it passes, what the glue does before and after the call. False where
     // it has no form here.
     struct Crossing { string gtype, cparam, carg, pre, post; };
-    bool Cross(const CTy &t, const string &pn, Crossing &x, string &why) {
+    // lennext: whether an integer parameter follows, which makes a `void *`
+    // a buffer of that length (gzread's) rather than a pointer C gave out
+    // or a callback's user data (sqlite3_free's, sqlite3_exec's).
+    bool Cross(const CTy &t, const string &pn, Crossing &x, string &why, bool lennext) {
         if (auto g = Number(t); !g.empty() && t.k != 'p') {
             x = { g, cat(CNumber(t), " ", pn), pn, "", "" };
             return true;
         }
         if (t.k == 'P') {
-            x = { "u64", cat("uint64_t ", pn), cat("(", t.spell, ")(uintptr_t)", pn), "", "" };
+            // As a void *, which C compilers convert to the parameter's
+            // function pointer type: TinyCC's spelling of that type is not
+            // always C's (`enum <anonymous>`, `long long` for LP64's long).
+            x = { "u64", cat("uint64_t ", pn), cat("(void *)(uintptr_t)", pn), "", "" };
             return true;
         }
         if (t.k == 's' && Mappable(t.name)) {
@@ -331,13 +343,17 @@ struct CImport {
             return false;
         }
         auto &s = *t.sub;
+        if (s.k == 'v' && !s.cnst && !lennext) {
+            x = { "u64", cat("uint64_t ", pn), cat("(void *)(uintptr_t)", pn), "", "" };
+            return true;
+        }
         if (Byte(s) && !s.cnst) {
             x = { "u8[:]", cat("gs_cimp_bytes ", pn), cat("(void *)", pn, ".data"), "", "" };
             return true;
         }
         if ((s.k == 'c' || s.k == 'C') && s.n == 1 && s.cnst) {
-            x = { "const u8[:]", cat("gs_cimp_bytes ", pn), cat(pn, "_z"),
-                  cat("    char *", pn, "_z = gs_cimp_cstr(", pn, ");\n"), cat("    free(", pn, "_z);\n") };
+            x = { "const u8[:]", cat("gs_cimp_bytes ", pn), cat("gs_z_", pn),
+                  cat("    char *gs_z_", pn, " = gs_cimp_cstr(", pn, ");\n"), cat("    free(gs_z_", pn, ");\n") };
             return true;
         }
         if (Byte(s)) {
@@ -365,14 +381,57 @@ struct CImport {
         return true;
     }
 
+    // The argument a variadic function's form takes one more of, by its
+    // suffix: an integer, a double, a handle or function pointer, a C string
+    // (copied with a NUL, for the call only), a byte buffer C fills, and an
+    // integer C writes (long *, curl_off_t *, or char ** read as an address).
+    static constexpr const char *VARFORMS[] = { "_int", "_f64", "_ptr", "_str", "_buf", "_out" };
+    Crossing VarForm(int k, const string &pn) {
+        switch (k) {
+            case 0: return { "i64", cat("int64_t ", pn), cat("(long long)", pn), "", "" };
+            case 1: return { "f64", cat("double ", pn), pn, "", "" };
+            case 2: return { "u64", cat("uint64_t ", pn), cat("(void *)(uintptr_t)", pn), "", "" };
+            case 3:
+                return { "const u8[:]", cat("gs_cimp_bytes ", pn), cat("gs_z_", pn),
+                         cat("    char *gs_z_", pn, " = gs_cimp_cstr(", pn, ");\n"), cat("    free(gs_z_", pn, ");\n") };
+            case 4: return { "u8[:]", cat("gs_cimp_bytes ", pn), cat("(void *)", pn, ".data"), "", "" };
+            default: {
+                CTy i64;
+                i64.k = 'i';
+                i64.n = 8;
+                return { "i64[:]", cat(SliceC(i64, false), " ", pn), cat("(void *)", pn, ".data"), "", "" };
+            }
+        }
+    }
+
+    set<string> declared;   // Every function the header declares, so no form takes one's name.
+    string lib;             // --lib, and what of the header it does not define:
+    set<string> undefined;  // SQLite's snapshot functions, without SQLITE_ENABLE_SNAPSHOT.
     void EmitFunc(const Func &f) {
-        auto gname = GooseName(f.name);
-        auto cname = cat("gs_cimp_", name, "_", f.name);
+        if (undefined.count(f.name)) {
+            Append(goose, "// ", f.name, ": not imported, since the library ", lib, " does not define it.\n");
+            return;
+        }
+        if (f.kind == 2) {
+            Append(goose, "// ", f.name, ": not imported, since it is declared without a prototype.\n");
+            return;
+        }
+        if (f.kind != 1) return EmitForm(f, "", -1);
+        Append(goose, "// ", f.name, " takes a variable number of arguments: imported with none more, and as ",
+               f.name, "_int, _f64, _ptr, _str, _buf and _out, each with one more.\n");
+        EmitForm(f, "", -1);
+        for (int k = 0; k < 6; k++)
+            if (!declared.count(cat(f.name, VARFORMS[k]))) EmitForm(f, VARFORMS[k], k);
+    }
+
+    // One extern of f, with one more argument of VarForm kind `extra` where
+    // that is not -1.
+    void EmitForm(const Func &f, const string &suffix, int extra) {
+        auto gname = GooseName(f.name + suffix);
+        auto cname = cat("gs_cimp_", name, "_", f.name, suffix);
         auto skip = [&](const string &why) {
-            Append(goose, "// ", f.name, ": not imported, since ", why, ".\n");
+            Append(goose, "// ", f.name, suffix, ": not imported, since ", why, ".\n");
         };
-        if (f.kind == 1) return skip("it takes a variable number of arguments");
-        if (f.kind == 2) return skip("it is declared without a prototype");
         vector<string> gparams, cparams, cargs;
         string pre, post, why;
         set<string> used;
@@ -391,7 +450,20 @@ struct CImport {
             while (used.count(pn)) pn += "_";
             used.insert(pn);
             Crossing x;
-            if (!Cross(*p.ty, pn, x, why)) return skip(cat("parameter ", p.name, " has no Goose form"));
+            auto lennext = i + 1 < f.params.size() && !Number(*f.params[i + 1].ty).empty() &&
+                           f.params[i + 1].ty->k != 'b';
+            if (!Cross(*p.ty, pn, x, why, lennext))
+                return skip(cat("parameter ", p.name, " has no Goose form"));
+            gparams.push_back(cat(pn, ": ", x.gtype));
+            cparams.push_back(x.cparam);
+            cargs.push_back(x.carg);
+            pre += x.pre;
+            post += x.post;
+        }
+        if (extra >= 0) {
+            string pn = "v";
+            while (used.count(pn)) pn += "_";
+            auto x = VarForm(extra, pn);
             gparams.push_back(cat(pn, ": ", x.gtype));
             cparams.push_back(x.cparam);
             cargs.push_back(x.carg);
@@ -423,7 +495,7 @@ struct CImport {
                 return skip("its result has no Goose form");
             }
             body = post.empty() ? cat(pre, "    return ", call, ";\n")
-                                : cat(pre, "    ", cret, " r = ", call, ";\n", post, "    return r;\n");
+                                : cat(pre, "    ", cret, " gs_r = ", call, ";\n", post, "    return gs_r;\n");
         }
         string gp, cp;
         for (size_t i = 0; i < gparams.size(); i++) Append(gp, i ? ", " : "", gparams[i]);
@@ -431,8 +503,9 @@ struct CImport {
         Append(goose, "extern fn ", gname, "(", gp, ")", gret.empty() ? "" : cat(" -> ", gret), " = \"", cname,
                "\";\n");
         Append(glue, cret, " ", cname, "(", cp.empty() ? "void" : cp, ") {\n", body, "}\n");
-        // A C string result, read as a Goose string too.
-        if (r.k == 'p' && r.sub && (r.sub->k == 'c' || r.sub->k == 'C') && r.sub->n == 1) {
+        // A C string result, read as a Goose string too (where `_str` is not
+        // a variadic function's form).
+        if (f.kind != 1 && r.k == 'p' && r.sub && (r.sub->k == 'c' || r.sub->k == 'C') && r.sub->n == 1) {
             string names;
             for (auto &gpar : gparams) Append(names, names.empty() ? "" : ", ", gpar.substr(0, gpar.find(':')));
             Append(goose, "fn ", f.name, "_str(", gp, ") -> u8[>..] { return ffi::cstr(", gname, "(", names,
@@ -459,6 +532,7 @@ struct CImport {
             Append(goose, "let ", gn, " = ", v, ";\n");
         }
         if (!consts.empty()) goose += "\n";
+        for (auto &f : funcs) declared.insert(f.name);
         set<string> done;
         for (auto &f : funcs) {
             if (!Mine(f.file) || !done.insert(f.name).second) continue;
@@ -493,8 +567,9 @@ struct CImportProbe {
         return s;
     }
 
-    // Kind 0: an integer (`long long`), 1: unsigned, 2: a string. Fills
-    // vals for those in names that compile as that kind.
+    // Kind 0: an integer (`long long`), 1: unsigned, 2: a string, 3: a
+    // pointer constant, as a number. Fills vals for those in names that
+    // compile as that kind.
     void Try(const vector<string> &names, int kind, map<string, string> &vals) {
         if (names.empty()) return;
         string src = prelude;
@@ -503,6 +578,14 @@ struct CImportProbe {
             if (kind == 2) {
                 Append(src, "const char *gs_v", i, " = _Generic((", n, "), char *: (", n, "), const char *: (", n,
                        "));\n");
+            } else if (kind == 3) {
+                // What is left that converts to a number and is not a float
+                // is a pointer; an enum value takes only a constant, so one
+                // holding an address (`(void *)&f`, known only at run time)
+                // does not compile.
+                Append(src, "typedef char gs_t", i, "[_Generic((", n, "), float: -1, double: -1, long double: -1, ",
+                       "default: 1)];\nenum { gs_e", i, " = (int)((unsigned long long)(", n, ") & 1) };\n",
+                       "unsigned long long gs_v", i, " = (unsigned long long)(", n, ");\n");
             } else {
                 // Floats and pointers are no integer constants: they leave the
                 // _Generic without a match, which does not compile. An
@@ -534,7 +617,7 @@ struct CImportProbe {
                         } else lit += *c;
                     }
                     vals[names[i]] = lit + "\"";
-                } else if (kind == 1) {
+                } else if (kind == 1 || kind == 3) {
                     vals[names[i]] = cat(*(unsigned long long *)p);
                 } else {
                     vals[names[i]] = cat(*(long long *)p);
@@ -613,6 +696,30 @@ inline int RunCimport(const string &exe, const vector<string> &args) {
     }
     tcc_delete(s);
     ci.Read();
+    // What the library defines, where TinyCC can load it (a shared library
+    // where it runs programs): a header may declare more, which no program
+    // could link. Each function's address in one table, each one the
+    // library lacks an unresolved reference.
+    ci.lib = lib;
+    if (!lib.empty()) {
+        string ldiags;
+        auto ls = probe.New(ldiags);
+        if (tcc_add_library(ls, lib.c_str()) == 0) {
+            auto src = cat(probe.prelude, "void *gs_cimp_defined[] = {\n");
+            set<string> seen;
+            for (auto &f : ci.funcs)
+                if (ci.Mine(f.file) && seen.insert(f.name).second) Append(src, "    (void *)&", f.name, ",\n");
+            src += "    0 };\n";
+            if (tcc_compile_string(ls, src.c_str()) >= 0 && tcc_relocate(ls) < 0) {
+                const string mark = "unresolved reference to '";
+                for (auto p = ldiags.find(mark); p != string::npos; p = ldiags.find(mark, p + 1)) {
+                    auto b = p + mark.size(), e = ldiags.find('\'', b);
+                    if (e != string::npos) ci.undefined.insert(ldiags.substr(b, e - b));
+                }
+            }
+        }
+        tcc_delete(ls);
+    }
     // The constants: the header's own macros, then its enum constants.
     vector<string> names;
     set<string> named;
@@ -626,11 +733,16 @@ inline int RunCimport(const string &exe, const vector<string> &args) {
     vector<string> rest2;
     for (auto &n : rest) if (!uns.count(n)) rest2.push_back(n);
     probe.Try(rest2, 2, strs);
+    vector<string> rest3;
+    for (auto &n : rest2) if (!strs.count(n)) rest3.push_back(n);
+    map<string, string> ptrs;
+    probe.Try(rest3, 3, ptrs);
     vector<pair<string, string>> consts;
     for (auto &n : names) {
         if (ints.count(n)) consts.push_back({ n, ints[n] });
         else if (uns.count(n)) consts.push_back({ n, uns[n] });
         else if (strs.count(n)) consts.push_back({ n, strs[n] });
+        else if (ptrs.count(n)) consts.push_back({ n, cat(ptrs[n], " as u64") });
     }
     for (auto &[file, n, v] : ci.enums)
         if (ci.Mine(file) && !ints.count(n)) consts.push_back({ n, cat(v) });

@@ -935,6 +935,7 @@ LIBTCCAPI void tcc_delete(TCCState *s1)
     /* free sections */
     tccelf_delete(s1);
     tcc_free(s1->decl_structs); /* Gust: the structs reported, not owned */
+    tcc_free(s1->decl_handles);
 
     /* free library paths */
     dynarray_reset(&s1->library_paths, &s1->nb_library_paths);

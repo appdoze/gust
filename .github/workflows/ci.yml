@@ -48,7 +48,8 @@ jobs:
       # talk to (SDL's docs/README-linux.md, less OpenGL, which it is built
       # without); with no window system at all the package builds nothing.
       # Mesa's lavapipe is a Vulkan device with no GPU, for the gfx tests to
-      # run on.
+      # run on. SQLite's, libcurl's and OpenSSL's headers are for the test of
+      # gust cimport on them (test/cimport_libs.py).
       - name: Install SDL build dependencies
         if: runner.os == 'Linux'
         run: >-
@@ -58,6 +59,7 @@ jobs:
           libxss-dev libxtst-dev libxkbcommon-dev libdrm-dev libgbm-dev libdbus-1-dev
           libibus-1.0-dev libudev-dev libthai-dev libpipewire-0.3-dev libwayland-dev
           libdecor-0-dev liburing-dev mesa-vulkan-drivers libvulkan1
+          libsqlite3-dev libcurl4-openssl-dev libssl-dev
 
       # CMAKE_BUILD_TYPE is what the single-config generators read and --config
       # is what the Visual Studio generator reads; passing both builds Debug

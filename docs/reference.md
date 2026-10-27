@@ -3975,26 +3975,58 @@ import zlib from "./zlib";
 
 fn main() {
     let text = "hello hello hello hello";
-    var packed: u8[64] = [];
+    var packed: u8[64] = [0; 64];
     var size: u64[1] = [64];
     let rc = zlib::compress(packed, size, text, text.len as u64);
     print(rc == zlib::Z_OK, " ", size[0] < text.len as u64);
 }
 ```
 
-A number is itself, `char *` and `void *` are a `u8[:]` C writes into, a
-`const char *` is a `const u8[:]` the glue copies with a terminating NUL,
-`T *` of another number is a `T[:]` (an out parameter is an array of one),
-a pointer to a struct the package lays out, or such a struct by value, is a
-reference to it, a struct returned by value fills an `out` first parameter,
-and any other pointer, a function pointer included (`c_callback(f)`), is a
-`u64` handle. A function returning `const char *` also gets an `_str` form
-returning its string. A variadic function, one without a prototype and one
-with a union, a struct with bitfields or a `long double` crossing by value
-are left out, each with a comment in the module saying why. Only the
-header's own declarations are imported, and those of headers `--also`
-names. The externs are a boundary like any hand-written ones: `gust
---externs` lists them and `--deny-externs` refuses them.
+A number is itself; `char *`, `unsigned char *` and a `void *` its length
+follows are a `u8[:]` C writes into; a `const char *` is a `const u8[:]`
+the glue copies with a terminating NUL, for the call only; `T *` of another
+number is a `T[:]` (an out parameter is an array of one); a pointer to a
+struct the package lays out, or such a struct by value, is a reference to
+it; a struct returned by value fills an `out` first parameter; a `T **` is a
+`u64&` C writes a handle into; and any other pointer is a `u64` handle: a
+`void *` with no length after it (user data, memory C allocated, as
+`sqlite3_free` takes), a pointer to a typedef of void (libcurl's `CURL *`),
+and a function pointer (`c_callback(f)`). A function returning `const char
+*` also gets an `_str` form returning its string. A macro whose value is a
+pointer constant, as SQLite's `SQLITE_TRANSIENT`, is a `u64`.
+
+A variadic function is imported with no argument more, and as six forms
+that take one more: `_int` (an `i64`), `_f64`, `_ptr` (a `u64` handle or
+callback), `_str` (a C string), `_buf` (a `u8[:]` C fills) and `_out` (an
+`i64[:]` C writes, for a `long *` or a `char **` read as an address), which
+is how libcurl's options are set:
+
+<!-- fragment -->
+```goose
+import curl from "./curl";
+
+export fn take(p: u64, size: u64, n: u64, user: u64) -> u64 { return size * n; }
+
+fn main() {
+    let h = curl::curl_easy_init();
+    curl::curl_easy_setopt_str(h, curl::CURLOPT_URL, "http://127.0.0.1:8080/");
+    curl::curl_easy_setopt_ptr(h, curl::CURLOPT_WRITEFUNCTION, c_callback(take));
+    print(curl::curl_easy_perform(h) == curl::CURLE_OK);
+    curl::curl_easy_cleanup(h);
+}
+```
+
+With `--lib`, each function is linked against the library first, where
+TinyCC can load it, and one the library does not define (SQLite's snapshot
+functions, compiled in only with `SQLITE_ENABLE_SNAPSHOT`) is left out, as
+are a function without a prototype and one with a union, a struct with
+bitfields or a `long double` crossing by value, each with a comment in the
+module saying why. Only the header's own declarations are imported, and
+those of headers `--also` names; a library whose interface is several
+headers is imported through one of its own that includes them. The externs
+are a boundary like any hand-written ones: `gust --externs` lists them and
+`--deny-externs` refuses them. `test/cimport_libs.py` uses SQLite, libcurl
+and OpenSSL's libcrypto this way, with no `extern fn` written by hand.
 
 ### Python bindings (Gust)
 

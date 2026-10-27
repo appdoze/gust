@@ -739,6 +739,10 @@ struct TCCState {
     void (*decl_func)(void *opaque, const char *line);
     void **decl_structs;
     int nb_decl_structs;
+    /* The parameters whose type is a pointer to a typedef of void (libcurl's
+       CURL *), a handle rather than a buffer, since the report is made. */
+    void **decl_handles;
+    int nb_decl_handles;
 
     unsigned char verbose; /* if true, display some information during compilation */
     unsigned char nostdinc; /* if true, no standard headers are added */

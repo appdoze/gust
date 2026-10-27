@@ -162,16 +162,23 @@ interp at Lobster's 0.419.)**
   compiler's TinyCC through a declaration report added to it; the module is imported as
   any package and its externs are what `--externs` lists, rather than names a program
   gets from an `import c` line no audit sees.)**
-- Prove it on four real libraries: SQLite, libcurl, zlib, OpenSSL. **(zlib done, in WSL:
-  80 of zlib.h's 81 functions, a round trip through compress and uncompress, crc32 as
-  Python's zlib computes it. SQLite, libcurl and OpenSSL wait on their headers, which
-  this machine has not got: their runtime libraries are installed, their -dev packages
-  are not.)**
+- Prove it on four real libraries: SQLite, libcurl, zlib, OpenSSL. **(Done, on Linux:
+  zlib in WSL, a round trip through compress and uncompress and crc32 as Python's zlib
+  computes it; SQLite (326 functions, 13 the library does not define left out), libcurl
+  (160) and OpenSSL's libcrypto (990, through a header including evp.h, sha.h, hmac.h
+  and rand.h), each with nothing else left out, in `test/cimport_libs.py`, which CI
+  runs: SQLite's prepared statements and sqlite3_exec's row callback, a libcurl fetch
+  through its write callback with options set through curl_easy_setopt's variadic
+  forms, SHA-256 and HMAC as Python's hashlib computes them. What they needed: variadic
+  functions as forms taking one more argument, handles for a typedef of void and a
+  `void *` without a length, pointer-constant macros, and a link check against
+  `--lib`.)**
 - **Licensing**: move TinyCC to a separate DLL (satisfies LGPL relinking) or plan its
   replacement by MIR in Phase 6.
 
 **Exit:** a program using SQLite and libcurl with no hand-written `extern fn`; C libraries
-that need callbacks (libcurl's write callback) work.
+that need callbacks (libcurl's write callback) work. **(Met on Linux, by
+`test/cimport_libs.py`; the TinyCC licensing item remains.)**
 
 ## Phase 4: Multicore (months 5–8)
 
