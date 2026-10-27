@@ -1408,7 +1408,7 @@ struct Parser {
         Expect(T_PLUSEQ, "reduce");
         auto e = ParseExpr();
         Expect(T_SEMI, "reduce");
-        auto slots = ast.Intern(cat("reduce#", parallelfors, "#", var));
+        auto slots = ast.Intern(cat("parallel_reduce_", parallelfors, "_v_", var));
         pforreduces.push_back({ var, slots, line });
         // The slots come from the standard library's parallel_reduce_slots.
         auto hasstd = false;
@@ -1515,7 +1515,7 @@ struct Parser {
         // parallel for i in n { .. slots[i] += e; .. } for j in n { x += slots[j]; }`.
         auto id = [&](string_view name) { return New<Ident>(line, name); };
         auto bound = [&](const char *what, Node *e) {
-            auto name = ast.Intern(cat("reduce#", k, "#", what));
+            auto name = ast.Intern(cat("parallel_reduce_", k, "_", what));
             auto vd = New<VarDecl>(line, false);
             vd->names.push_back(name);
             vd->inits.push_back(e);
@@ -1544,7 +1544,7 @@ struct Parser {
         outer->stmts.push_back(New<FnDecl>(line, sf));
         outer->stmts.push_back(f);
         for (auto &r : reduces) {
-            auto j = ast.Intern(cat("reduce#", k, "#", r.var, "#j"));
+            auto j = ast.Intern(cat("parallel_reduce_", k, "_j_", r.var));
             auto body = New<Block>(r.line);
             body->stmts.push_back(New<Assign>(r.line, T_PLUSEQ, id(r.var), New<Index>(r.line, id(r.slots), id(j))));
             Node *iter = lo.empty() ? (Node *)id(hi) : New<RangeExpr>(r.line, id(lo), id(hi));

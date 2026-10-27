@@ -111,7 +111,11 @@ git log upstream/master..main
   += e;` in the body (`src/parser.h`, `ParseReduce`): an iteration's slot of
   an array `parallel_reduce_slots` (`stdlib/std.goose`, which the parser
   imports for it) makes before the loop, added into `x` in order after it,
-  the bounds evaluated once; two rejection fixtures in `test/errors/`.
+  the bounds evaluated once; two rejection fixtures in `test/errors/`. The
+  slots and bounds carry plain names, `parallel_reduce_<k>_…`, so the
+  dump of a program with a reduce parses again.
+- `test/mir_runs.py`: a failure shows the head of MIR's stderr, where its
+  first error is, rather than the tail.
 - `docs/gust/agent_guide.md` (new): the language for an AI coding agent in
   one file: commands and JSON diagnostics, syntax, the memory model in five
   rules, the arrays, references and optionals, functions, function values

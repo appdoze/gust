@@ -37,7 +37,7 @@ def check_mir_runs(exe, jobs=1):
         mcode, mout, merr = run(f, True)
         if mout != tout or (mcode == 0) != (tcode == 0):
             return (f"{f.parent.name}/{f.name}: exit {mcode} under MIR, {tcode} under TinyCC\n--- MIR:\n"
-                    f"{mout[-500:]}\n--- TinyCC:\n{tout[-500:]}\n--- MIR stderr:\n{merr[-500:]}")
+                    f"{mout[-500:]}\n--- TinyCC:\n{tout[-500:]}\n--- MIR stderr:\n{merr[:1500]}")
         return None
 
     with ThreadPoolExecutor(max_workers=max(1, jobs)) as pool:
