@@ -496,12 +496,19 @@ inline void MatchExpr::Dump(string &s, int ind) const {
     s += "}";
 }
 
+// Gust: a loop's or block's label, ahead of its keyword.
+inline void DumpLabel(string &s, string_view label) {
+    if (!label.empty()) Append(s, label, ": ");
+}
+
 inline void EarlyBlock::Dump(string &s, int ind) const {
+    DumpLabel(s, label);
     s += "block ";
     body->Dump(s, ind);
 }
 
 inline void While::Dump(string &s, int ind) const {
+    DumpLabel(s, label);
     s += "while ";
     DumpOperand(s, cond, ind);
     s += " ";
@@ -509,11 +516,13 @@ inline void While::Dump(string &s, int ind) const {
 }
 
 inline void LoopExpr::Dump(string &s, int ind) const {
+    DumpLabel(s, label);
     s += "loop ";
     body->Dump(s, ind);
 }
 
 inline void ForLoop::Dump(string &s, int ind) const {
+    DumpLabel(s, label);
     s += "for ";
     if (byref) s += "&";
     s += var;
@@ -545,6 +554,7 @@ inline void Return::Dump(string &s, int ind) const {
 
 inline void Break::Dump(string &s, int ind) const {
     s += "break";
+    if (!label.empty()) Append(s, " :", label);
     if (val) {
         s += " ";
         // A return would read a following comma, such as a match arm's, as
@@ -557,7 +567,10 @@ inline void Break::Dump(string &s, int ind) const {
     }
 }
 
-inline void Continue::Dump(string &s, int) const { s += "continue"; }
+inline void Continue::Dump(string &s, int) const {
+    s += "continue";
+    if (!label.empty()) Append(s, " :", label);
+}
 
 // Optimizer output only (--specs); this form does not reparse.
 inline void InlineBlock::Dump(string &s, int ind) const {

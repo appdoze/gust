@@ -824,7 +824,7 @@ These trip people up in the first afternoon.
 | Signed overflow is UB / panics in debug | Aborts in debug, wraps in release. Unsigned always wraps |
 | `for (auto& x : v) x *= 2;` | `for &x in xs { x *= 2; }`. Plain `for x in xs` gives a read-only copy for fixed-size elements |
 | `printf("%d %s", …)` | `print("n=", n, " s=", s)`; `format_int` / `format_flt` for padding and precision |
-| Labelled `break 'outer` | No labels in v1. Use a `block`, a nested function with `return`, or a flag |
+| Labelled `break 'outer` | Gust: `outer: for …` and `break :outer` (or `continue :outer`); in Goose, a `block`, a nested function with `return`, or a flag |
 | Recursion "just works" | Mark the cycle `recursive fn`, write full signatures, keep growable locals out of the recursive path |
 | Separate compilation, `.so` plugins | Whole-program compilation to C. Goose libraries come as source packages (`goose build`) |
 

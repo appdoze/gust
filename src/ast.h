@@ -1256,6 +1256,7 @@ NODE_END
 
 NODE(EarlyBlock)                // "block { }": breakable early-out construct.
     BCE_WALK
+    string_view label;          // Gust: `name: block`, for `break :name`.
     Block *body;
     vector<Break *> breaks;     // Filled by typecheck: the breaks giving it a value.
     EarlyBlock(Line l, Block *_body) : Node(l, NKind), body(_body) {}
@@ -1278,6 +1279,7 @@ NODE(While)
     // body can write, so its trip count is v's value at entry and codegen
     // runs it as a counted loop.
     bool countdown = false;
+    string_view label;            // Gust: `name: while`, for `break :name` and `continue :name`.
     Node *cond;
     Block *body;
     While(Line l, Node *_cond, Block *_body) : Node(l, NKind), cond(_cond), body(_body) {}
@@ -1287,6 +1289,7 @@ NODE(LoopExpr)
     BCE_WALK
     vector<VarDef *> hoistrefs;   // See While.
     vector<FieldPath> hoistfields;
+    string_view label;            // Gust: as While::label.
     Block *body;
     vector<Break *> breaks;       // Filled by typecheck: the breaks giving it a value.
     LoopExpr(Line l, Block *_body) : Node(l, NKind), body(_body) {}
@@ -1321,6 +1324,7 @@ NODE(ForLoop)
     bool byref;                 // for &x in ...
     string_view var;
     string_view idxvar;         // Optional second binding; empty if absent.
+    string_view label;          // Gust: as While::label.
     // The integer types written for a range's or count's binder and for an
     // array's index binder (`for i: i32 in a..b`, `for x, i: u8 in arr`).
     TypeExpr *vartype = nullptr, *idxtype = nullptr;
@@ -1333,6 +1337,16 @@ NODE(ForLoop)
     ForLoop(Line l, bool _byref, string_view _var, string_view _idxvar, Node *_iter, Block *_body)
         : Node(l, NKind), byref(_byref), var(_var), idxvar(_idxvar), iter(_iter), body(_body) {}
 NODE_END
+
+// Gust: the label of a loop or `block` (`outer: for ...`), empty for any
+// other node and for one written without a label.
+inline string_view LabelOf(const Node *n) {
+    if (auto w = Is<While>(n)) return w->label;
+    if (auto l = Is<LoopExpr>(n)) return l->label;
+    if (auto f = Is<ForLoop>(n)) return f->label;
+    if (auto e = Is<EarlyBlock>(n)) return e->label;
+    return {};
+}
 
 enum ExpansionSource { ES_FIELDS, ES_TYPES, ES_CONSTANTS, ES_VARIANTS };
 
@@ -1366,12 +1380,14 @@ NODE(Break)
     BCE_WALK
     Node *val;
     TypeExpr *leavetype = nullptr;   // Gust: as Return::leavetype.
+    string_view label;               // Gust: `break :name`, else the innermost loop or block.
     Break(Line l, Node *_val) : Node(l, NKind), val(_val) {}
 NODE_END
 
 NODE(Continue)
     BCE_WALK
     TypeExpr *leavetype = nullptr;   // Gust: as Return::leavetype.
+    string_view label;               // Gust: `continue :name`, else the innermost loop.
     Continue(Line l) : Node(l, NKind) {}
 NODE_END
 

@@ -115,6 +115,7 @@ inline int Space(const Item &a, const Item &b) {
     if (b.tok == T_COLONCOLON) return a.tok == T_IDENT ? 0 : 1;
     if (rangeb) return OperandEnd(a) ? 0 : 1;
     if (rangea) return 0;
+    if (b.tok == T_COLON && (a.tok == T_BREAK || a.tok == T_CONTINUE)) return 1;   // Gust: `break :l`.
     if (b.tok == T_COLON) return 0;
     if (b.tok == T_LPAREN) return OperandEnd(a) || a.tok == T_FN ? 0 : 1;
     if (b.tok == T_LBRACKET) return OperandEnd(a) || a.tok == T_REUSABLE ? 0 : 1;

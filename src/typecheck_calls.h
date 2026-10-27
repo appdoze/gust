@@ -2284,6 +2284,7 @@ inline bool TypeCheck::BuiltInPlace(int fi, int k, const vector<TypeExpr *> &ret
         return rets.size() == 1 && at < target->rets.size() && TypeEq(rets[0], target->rets[at]);
     };
     auto exiting = false;
+    string_view exitlabel;   // Gust: the label of the construct a `break :l` exits.
     for (k--; k >= 0; k--) {
         auto parent = path[k].node, child = path[k + 1].node;
         // Out of a function value's body, or out of a default.
@@ -2292,13 +2293,19 @@ inline bool TypeCheck::BuiltInPlace(int fi, int k, const vector<TypeExpr *> &ret
             return !exiting && frames[fi].tailvalue && c && c->fvbody && c->fvbody->tail == child;
         }
         // A break's value lands where the loop or block it exits delivers
-        // its own; nothing between them consumes it.
+        // its own; nothing between them consumes it. A labeled break passes
+        // the constructs without its label.
         if (exiting) {
-            if (Is<LoopExpr>(parent) || Is<EarlyBlock>(parent)) exiting = false;
-            else if (Is<While>(parent) || Is<ForLoop>(parent)) return false;
+            auto mine = exitlabel.empty() || LabelOf(parent) == exitlabel;
+            if ((Is<LoopExpr>(parent) || Is<EarlyBlock>(parent)) && mine) exiting = false;
+            else if ((Is<While>(parent) || Is<ForLoop>(parent)) && mine) return false;
             continue;
         }
-        if (Is<Break>(parent)) { exiting = true; continue; }
+        if (auto br = Is<Break>(parent)) {
+            exiting = true;
+            exitlabel = br->label;
+            continue;
+        }
         if (auto b = Is<Block>(parent)) { if (b->tail == child) continue; return false; }
         if (auto ie = Is<IfExpr>(parent)) { if (child != ie->cond) continue; return false; }
         if (auto m = Is<MatchExpr>(parent)) { if (child != m->scrutinee) continue; return false; }

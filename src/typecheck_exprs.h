@@ -3188,17 +3188,34 @@ inline bool TypeCheck::MentionsName(Node *n, string_view name, set<SFunction *> 
 
 // Whether the code under n has a `continue` that leaves it: one that is not
 // inside a loop's body there, nor in a nested function or a function value,
-// whose loops are their own.
+// whose loops are their own. Gust: a `continue :label` leaves n unless a
+// loop inside n, around it, has that label.
 inline bool TypeCheck::EscapingContinue(Node *n) {
-    if (!n || Is<FnDecl>(n) || Is<FunVal>(n)) return false;
-    if (Is<Continue>(n)) return true;
-    Node *body = nullptr;
-    if (auto w = Is<While>(n)) body = w->body;
-    else if (auto l = Is<LoopExpr>(n)) body = l->body;
-    else if (auto fl = Is<ForLoop>(n)) body = fl->body;
-    auto hit = false;
-    n->Children([&](Node *ch) { hit = hit || (ch != body && EscapingContinue(ch)); });
-    return hit;
+    vector<string_view> labels;
+    function<bool(Node *, bool)> escapes = [&](Node *x, bool inloop) {
+        if (!x || Is<FnDecl>(x) || Is<FunVal>(x)) return false;
+        if (auto c = Is<Continue>(x))
+            return c->label.empty()
+                       ? !inloop
+                       : std::find(labels.begin(), labels.end(), c->label) == labels.end();
+        Node *body = nullptr;
+        if (auto w = Is<While>(x)) body = w->body;
+        else if (auto l = Is<LoopExpr>(x)) body = l->body;
+        else if (auto fl = Is<ForLoop>(x)) body = fl->body;
+        auto hit = false;
+        x->Children([&](Node *ch) {
+            if (hit || !ch) return;
+            if (ch != body) {
+                hit = escapes(ch, inloop);
+                return;
+            }
+            labels.push_back(LabelOf(x));
+            hit = escapes(ch, true);
+            labels.pop_back();
+        });
+        return hit;
+    };
+    return escapes(n, false);
 }
 
 // Whether the rest of the statement being checked (LaterOperands) may take a
@@ -3289,7 +3306,7 @@ inline bool TypeCheck::UsedAfter(VarDef *v) {
                 auto s = i < stmts.size() ? stmts[i] : bp.block->tail;
                 if (!s || EscapingContinue(s)) break;
                 auto to = Is<Return>(s) ? frames[frameidx].scopebase
-                          : Is<Break>(s) ? FindBreakScope(false)
+                          : Is<Break>(s) ? FindBreakScope(false, ((Break *)s)->label)
                                          : -1;
                 if (to < 0) continue;
                 cut = to;

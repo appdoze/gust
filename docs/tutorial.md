@@ -1584,9 +1584,10 @@ imposes it.
   ([section 11](#11-lifetimes-that-do-not-nest);
   [spec §9.4](goose_spec.md#94-type-safe-reuse-and-stale-references)).
 * **v1 omissions** you will notice: no move for resizables, one resizable per
-  struct, no labeled break, no namespace privacy
+  struct, no namespace privacy
   ([spec §12](goose_spec.md#12-builtins-the-standard-library-and-what-v1-leaves-out)),
-  no subprocesses or networking in the library yet ([`os`](stdlib.md#os)).
+  no subprocesses in the library yet ([`os`](stdlib.md#os)). Gust adds
+  labeled `break` and `continue` (spec §6.4) and TCP ([`net`](stdlib.md#net)).
 
 ---
 

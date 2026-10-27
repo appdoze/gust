@@ -602,6 +602,7 @@ struct CodeGen {
         vector<pair<string, string>> saves;   // (stack expr, base var) to restore.
         SFunction *ibsf = nullptr;            // SC_IB: which returns exit here.
         string brklbl, cntlbl;
+        string_view label;                    // Gust: the loop's or block's (LabelOf).
         bool usedbrk = false, usedcnt = false;
         Dst dst;                              // Break/IB value destination.
         // A stack dst: the constructions open there on entry, and where its
@@ -1234,7 +1235,12 @@ struct CodeGen {
     string DivisorValue(Node *n, string &ok);
     const set<const VarDef *> &RefdLocals();
     vector<string> HoistDivisors(Block *loopbody, Node *cond, const vector<const VarDef *> &binders);
-    void GenBreakPath(Node *val);
+    void GenBreakPath(Node *val, string_view label);
+    // Gust: the scope a break (or, `forcontinue`, a continue) exits: the
+    // innermost loop or block, or the one its label names.
+    int ExitScope(bool forcontinue, string_view label);
+    // Gust: each labeled loop's label by its body, which OpenLoop is handed.
+    unordered_map<const Block *, string_view> looplabels;
 
     // Loops run in blocks of iterations (ForLoop::stripk, ForLoop::sumred):
     // a loop over whole blocks, then the rest one iteration at a time, each

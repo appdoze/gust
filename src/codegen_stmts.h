@@ -67,6 +67,8 @@ inline CodeGen::OpenedLoop CodeGen::OpenLoop(Block *bodyb, Node *cond,
     lp.divisors = HoistDivisors(bodyb, cond, binders);
     PushSc(SC_LOOP);
     lp.si = (int)cscopes.size() - 1;
+    if (auto it = looplabels.find(bodyb); it != looplabels.end())
+        cscopes[lp.si].label = it->second;
     cscopes[lp.si].brklbl = Lbl();
     cscopes[lp.si].cntlbl = Lbl();
     EnterDst(lp.si, d);
@@ -414,12 +416,18 @@ inline vector<string> CodeGen::HoistDivisors(Block *loopbody, Node *cond,
     return added;
 }
 
-inline void CodeGen::GenBreakPath(Node *val) {
-    auto si = -1;
+inline int CodeGen::ExitScope(bool forcontinue, string_view label) {
     for (auto i = (int)cscopes.size() - 1; i >= 0; i--) {
-        if (cscopes[i].kind == SC_LOOP || cscopes[i].kind == SC_BLOCK) { si = i; break; }
-        if (cscopes[i].kind == SC_FN) break;
+        auto k = cscopes[i].kind;
+        if (k == SC_FN) break;
+        if (k != SC_LOOP && (forcontinue || k != SC_BLOCK)) continue;
+        if (label.empty() || cscopes[i].label == label) return i;
     }
+    return -1;
+}
+
+inline void CodeGen::GenBreakPath(Node *val, string_view label) {
+    auto si = ExitScope(false, label);
     assert(si >= 0);
     if (val) GenExitValue(val, si);
     EmitExitRestores(si);

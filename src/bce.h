@@ -3001,24 +3001,40 @@ struct BCE {
     // loops; inlined bodies are transparent, over-approximating is fine):
     // breaks, and with `iteration` the continues that cut an iteration short
     // as well. A `block { }` binds the breaks inside it but not the
-    // continues, which still go to the loop around it.
-    bool HasJumps(Node *n, bool breaks, bool continues) {
+    // continues, which still go to the loop around it. Gust: a jump with the
+    // construct's label binds it from inside nested loops and blocks too
+    // (`label`, LabelOf), and one with another label binds a construct
+    // further out, whose exit this one never reaches.
+    bool HasJumps(Node *n, bool breaks, bool continues, string_view label = {},
+                  bool nestedbreak = false, bool nestedcont = false) {
         if (!n) return false;
-        if ((breaks && Is<Break>(n)) || (continues && Is<Continue>(n))) return true;
-        if (Is<While>(n) || Is<LoopExpr>(n) || Is<ForLoop>(n)) return false;
-        if (Is<EarlyBlock>(n)) breaks = false;
+        if (auto b = Is<Break>(n))
+            return breaks && (b->label.empty() ? !nestedbreak : b->label == label);
+        if (auto c = Is<Continue>(n))
+            return continues && (c->label.empty() ? !nestedcont : c->label == label);
+        auto loop = Is<While>(n) || Is<LoopExpr>(n) || Is<ForLoop>(n);
+        if (loop) nestedbreak = nestedcont = true;
+        if (Is<EarlyBlock>(n)) nestedbreak = true;
+        if (label.empty()) {
+            if (nestedbreak) breaks = false;
+            if (nestedcont) continues = false;
+        }
         if (!breaks && !continues) return false;
         auto found = false;
-        RunChildren(n, [&](Node *ch) { found = found || HasJumps(ch, breaks, continues); });
+        RunChildren(n, [&](Node *ch) {
+            found = found || HasJumps(ch, breaks, continues, label, nestedbreak, nestedcont);
+        });
         return found;
     }
 
-    bool HasBreaks(Node *n) { return HasJumps(n, true, false); }
+    bool HasBreaks(Node *n, string_view label = {}) { return HasJumps(n, true, false, label); }
 
     // A break or continue makes a loop body's per-iteration push count
     // unreliable; a return does not (it leaves the loop for good, and the
     // facts are stated after it).
-    bool HasIterationJumps(Node *n) { return HasJumps(n, true, true); }
+    bool HasIterationJumps(Node *n, string_view label = {}) {
+        return HasJumps(n, true, true, label);
+    }
 
     // Collects the place ids `n` can invalidate into `out`.
     void SummarizeInto(Node *n, set<int> &out) {
@@ -4195,7 +4211,7 @@ inline bool EarlyBlock::BceWalk(BCE &b) {
         b.Walk(body);
         return true;
     }
-    if (!b.HasBreaks(body)) return b.Walk(body);
+    if (!b.HasBreaks(body, label)) return b.Walk(body);
     auto entry = b.flow;
     b.Walk(body);
     b.flow = std::move(entry);
@@ -4232,7 +4248,7 @@ inline bool While::BceWalk(BCE &b) {
         // A break in the body leaves after any part of it ran, which may have
         // moved what the condition's evaluation stated. The loop depth still
         // counts a redeclaration in the body as a kill, as at entry.
-        if (b.HasBreaks(body)) b.StripLoop(this, body);
+        if (b.HasBreaks(body, label)) b.StripLoop(this, body);
         else if (killfree) b.CondFacts(cond, false);
     }
     b.loopdepth--;
@@ -4305,7 +4321,7 @@ inline bool ForLoop::BceWalk(BCE &b) {
     vector<pair<int, int64_t>> pushpids;
     vector<BCE::Term> prelens;
     if ((iterkind == IK_COUNT || iterkind == IK_RANGE) && !body->tail &&
-        !b.HasIterationJumps(body)) {
+        !b.HasIterationJumps(body, label)) {
         // Each counted push's receiver, named before any statement is
         // summarized, since a summary only reports places that exist.
         vector<int> pushed;

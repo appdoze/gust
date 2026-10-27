@@ -230,15 +230,21 @@ inline Node *MatchExpr::Clone1(Ast &ast) const {
 }
 
 inline Node *EarlyBlock::Clone1(Ast &ast) const {
-    return ast.New<EarlyBlock>(line, (Block *)body->Clone(ast));
+    auto e = ast.New<EarlyBlock>(line, (Block *)body->Clone(ast));
+    e->label = label;
+    return e;
 }
 
 inline Node *While::Clone1(Ast &ast) const {
-    return ast.New<While>(line, cond->Clone(ast), (Block *)body->Clone(ast));
+    auto w = ast.New<While>(line, cond->Clone(ast), (Block *)body->Clone(ast));
+    w->label = label;
+    return w;
 }
 
 inline Node *LoopExpr::Clone1(Ast &ast) const {
-    return ast.New<LoopExpr>(line, (Block *)body->Clone(ast));
+    auto l = ast.New<LoopExpr>(line, (Block *)body->Clone(ast));
+    l->label = label;
+    return l;
 }
 
 inline Node *ForLoop::Clone1(Ast &ast) const {
@@ -246,6 +252,7 @@ inline Node *ForLoop::Clone1(Ast &ast) const {
                               (Block *)body->Clone(ast));
     f->vartype = ast.CloneExpansionType(vartype);
     f->idxtype = ast.CloneExpansionType(idxtype);
+    f->label = label;
     return f;
 }
 
@@ -258,10 +265,16 @@ inline Node *Return::Clone1(Ast &ast) const {
 }
 
 inline Node *Break::Clone1(Ast &ast) const {
-    return ast.New<Break>(line, CloneOrNull(ast, val));
+    auto b = ast.New<Break>(line, CloneOrNull(ast, val));
+    b->label = label;
+    return b;
 }
 
-inline Node *Continue::Clone1(Ast &ast) const { return ast.New<Continue>(line); }
+inline Node *Continue::Clone1(Ast &ast) const {
+    auto c = ast.New<Continue>(line);
+    c->label = label;
+    return c;
+}
 
 // InlineBlocks exist only after typecheck; the annotation-stripping Clone has
 // no meaning for them (the optimizer's copier in optimize.h preserves them).

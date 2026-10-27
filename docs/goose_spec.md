@@ -2175,12 +2175,20 @@ guard c; …                   // if c { … }
 match e { ... }              // §8
 return e? (from f)?          // §7.3, §7.9
 break e?                     // exits innermost loop/block, optionally with value
+break :name e?               // Gust: exits the loop/block labeled `name:`
 continue
+continue :name               // Gust: next iteration of the loop labeled `name:`
 ```
 
 `block { }` exists to promote early-out style anywhere, not just at function
-top level. `break` binds to the innermost `loop`/`while`/`for`/`block`;
-labels are not in v1. For definite assignment (§4.4) and narrowing (§3.8),
+top level. `break` binds to the innermost `loop`/`while`/`for`/`block`.
+Gust: a label names a loop or block (`outer: for …`, `name: block { … }`),
+and `break :name e?` or `continue :name` binds to the construct around it
+that has that label instead, through any loops and blocks between, within
+one function body (not across a function value's). A `continue` names a
+loop. Two constructs around one jump cannot have the same label, and a
+label goes on nothing but a loop or block. What holds after the named
+construct includes what holds at each such jump, as at its own breaks. For definite assignment (§4.4) and narrowing (§3.8),
 what holds after one of these is what holds at every way out of it: each
 `break`, and the end of a `block`'s body, a `while`'s condition found false
 or a `for`'s last iteration; a `loop` has only its breaks. All `break E` of one construct must agree on E's
@@ -4436,7 +4444,8 @@ operations for resizables; multiple resizables per struct; two-way growth
 arrays; inline compaction / copying GC for pools; mixed-type pools;
 alignment annotations and explicit vector types (`simd fn`, §7.12, only
 widens the instruction set a function is built for); dynamic stacks;
-labeled break; namespace privacy, re-exports and nesting (§11.1).
+namespace privacy, re-exports and nesting (§11.1). (Gust has labeled break
+and continue, §6.4.)
 
 ---
 
@@ -4628,7 +4637,8 @@ its resolution is described.
     remains open is alignment, and whether a function should be able to
     say which versions it wants (an AVX-512 version is not faster for
     every loop).
-13. **Labels for `break`** — if early-out patterns demand them.
+13. **Labels for `break`** — if early-out patterns demand them. (Gust:
+    `name:` on a loop or block, `break :name` and `continue :name`, §6.4.)
 15. **Wasm fallback** — index-based reference representation details
     (`docs/design/wasm.md` compares the options).
 16. **Relative-reference region tracking** — copies of values containing

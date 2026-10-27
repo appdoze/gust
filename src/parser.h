@@ -1254,16 +1254,46 @@ struct Parser {
             }
             case T_BREAK: {
                 lex.Next();
+                auto label = ParseJumpLabel();
                 auto sub = Sub(no_struct_lit);
                 auto val = lex.tok != T_SEMI && lex.tok != T_RCURLY ? ParseExpr() : nullptr;
-                return Finish(New<Break>(line, val));
+                auto b = New<Break>(line, val);
+                b->label = label;
+                return Finish(b);
             }
-            case T_CONTINUE:
+            case T_CONTINUE: {
                 lex.Next();
-                return Finish(New<Continue>(line));
+                auto c = New<Continue>(line);
+                c->label = ParseJumpLabel();
+                return Finish(c);
+            }
+            case T_IDENT: {
+                // Gust: a label on a loop or block (`outer: for ...`), which a
+                // `break :outer` or `continue :outer` inside it names.
+                auto after = lex.PeekTok() == T_COLON ? lex.PeekTok2() : T_EOF;
+                if (after == T_IF || after == T_MATCH) Error("a label names a loop or a block");
+                if (after != T_FOR && after != T_WHILE && after != T_LOOP && after != T_BLOCK)
+                    return ParseBinary(1);
+                auto label = ExpectIdent("label");
+                Expect(T_COLON, "label");
+                auto e = ParseExpr();
+                if (auto w = Is<While>(e)) w->label = label;
+                else if (auto l = Is<LoopExpr>(e)) l->label = label;
+                else if (auto f = Is<ForLoop>(e)) f->label = label;
+                else if (auto b = Is<EarlyBlock>(e)) b->label = label;
+                return e;
+            }
             default:
                 return ParseBinary(1);
         }
+    }
+
+    // Gust: the `:name` after `break` or `continue`, empty where there is none.
+    string_view ParseJumpLabel() {
+        if (lex.tok != T_COLON) return {};
+        lex.Next();
+        Role(R_GLUE_LEFT);   // The formatter writes `break :outer`.
+        return ExpectIdent("label");
     }
 
     // Scrutinee positions (if/while/for/match/guard headers) disallow struct

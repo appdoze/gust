@@ -634,6 +634,7 @@ inline void MatchExpr::CgAny(CodeGen &cg, const Dst &d) {
 inline void EarlyBlock::CgAny(CodeGen &cg, const Dst &d) {
     cg.PushSc(CodeGen::SC_BLOCK);
     auto si = (int)cg.cscopes.size() - 1;
+    cg.cscopes[si].label = label;
     cg.cscopes[si].brklbl = cg.Lbl();
     cg.L("{");
     cg.ind++;
@@ -650,6 +651,7 @@ inline void EarlyBlock::CgAny(CodeGen &cg, const Dst &d) {
 
 inline void LoopExpr::CgAny(CodeGen &cg, const Dst &d) {
     CodeGen::ViewScope vs(cg, hoistrefs, hoistfields);
+    if (!label.empty()) cg.looplabels[body] = label;
     cg.GenLoopBody({}, body, d);
 }
 
@@ -955,6 +957,7 @@ inline void FnDecl::CgStmt(CodeGen &) {}   // Nested declarations are separate s
 inline void While::CgStmt(CodeGen &cg) {
     Dst d;
     CodeGen::ViewScope vs(cg, hoistrefs, hoistfields);
+    if (!label.empty()) cg.looplabels[body] = label;
     if (countdown) {
         // `while v > 0 { v--; ... }` runs v's value at entry times: counted
         // up as j, the iteration's v is that value minus 1 minus j, which is
@@ -984,6 +987,7 @@ inline void While::CgStmt(CodeGen &cg) {
 inline void ForLoop::CgStmt(CodeGen &cg) {
     auto d = Dst {};
     CodeGen::ViewScope vs(cg, hoistrefs, hoistfields);
+    if (!label.empty()) cg.looplabels[body] = label;
     auto iv = cg.LocalName(vdef);
     auto ix = idxdef ? cg.LocalName(idxdef) : "";
     if (iterkind == IK_RANGE || iterkind == IK_COUNT) {
@@ -1243,13 +1247,9 @@ inline void Return::CgStmt(CodeGen &cg) {
     cg.GenFromReturn(this);
 }
 
-inline void Break::CgStmt(CodeGen &cg) { cg.GenBreakPath(val); }
+inline void Break::CgStmt(CodeGen &cg) { cg.GenBreakPath(val, label); }
 inline void Continue::CgStmt(CodeGen &cg) {
-    auto si = -1;
-    for (auto i = (int)cg.cscopes.size() - 1; i >= 0; i--) {
-        if (cg.cscopes[i].kind == CodeGen::SC_LOOP) { si = i; break; }
-        if (cg.cscopes[i].kind == CodeGen::SC_FN) break;
-    }
+    auto si = cg.ExitScope(true, label);
     assert(si >= 0);
     // Through the loop scope itself: the label is past the body's own
     // restores, and a local declared after this point has no base yet.

@@ -222,7 +222,10 @@ the plain function.
 ## Phase 7: Expressiveness (months 12–16)
 
 - From Goose's own open items: moves for resizable values, more than one resizable per
-  struct, labeled `break`.
+  struct, labeled `break`. **(Labeled `break` and `continue` done, additive syntax that
+  existing code never meets: `outer: for …` with `break :outer e?` and `continue :outer`,
+  spec §6.4, through the checker's flow, codegen's restores and the bounds-check pass;
+  `test/codegen/labeled_jumps.goose`.)**
 - **Compile-time plugin registration** with `const for` (routers, event handlers resolved at
   compile time), instead of closures-as-objects.
 - **Thread-per-core async I/O**: each worker owns its connections and event loop; then an

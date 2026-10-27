@@ -2594,6 +2594,36 @@ fn main() {
 dead 2 35
 ```
 
+### Labels on loops and blocks (Gust)
+
+A label names a loop or `block` (`outer: for …`), and `break :outer` or
+`continue :outer` inside it, however deep in nested loops and blocks,
+leaves or continues that one; `break :outer E` gives it a value, where it
+is a `loop` or `block`. The storage the jump leaves is released as at any
+break. Two constructs around a jump cannot share a label, a `continue`
+cannot name a block, and a label goes on nothing but a loop or block.
+
+```goose
+fn main() {
+    let grid: i64[6] = [3, 8, 1, 9, 4, 7];
+    var at = -1;
+    rows: for y in 2 {
+        for x in 3 {
+            if grid[y * 3 + x] == 9 { at = y * 3 + x; break :rows; }
+        }
+    }
+    let first = big: block {
+        for g in grid { if g > 7 { break :big g; } }
+        0
+    };
+    print(at, " ", first);
+}
+```
+
+```
+3 8
+```
+
 ### `guard`
 
 `guard c;` runs the rest of its block only where `c` holds, and `guard c

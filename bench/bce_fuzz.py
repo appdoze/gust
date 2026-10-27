@@ -10,7 +10,8 @@ loops a `continue` in a block may cut short, cursors moved before a break,
 if-values as indices, multiples and quotients of an index against those of a
 length, stride loops from a start above zero, masked probes, nonzero guards,
 whole-struct stores through element references, helpers resizing an array
-handed to them by reference, pushes through a `let` reference), each with random off-by-one
+handed to them by reference, pushes through a `let` reference, labeled jumps
+out of nested loops), each with random off-by-one
 mutations that make some of them unsafe. Every program runs through the JIT
 with the pass on and off; a check the pass wrongly elides turns an abort into
 a read past the end, so the two runs differ. Programs that differ are kept.
@@ -34,7 +35,7 @@ def shape(r, a, n):
     off = pick(0, 0, 0, 1, -1)
     off2 = pick(0, 0, 0, 1, -1, 2)
     k = r.randint(0, 4)
-    kind = r.randint(0, 24)
+    kind = r.randint(0, 26)
     if kind == 0:   # two indices towards each other
         return [f"var {i} = {max(0, off)};", f"var {j} = {a}.len - {1 - off2 if off2 <= 1 else 0};",
                 f"while {i} {pick('<', '<', '<=')} {j} {{",
@@ -140,6 +141,16 @@ def shape(r, a, n):
         return [f"var g{n}: i64[>..] = [];", f"let r{n} = g{n};", f"for x in {a} {{ r{n}.push(x); }}",
                 f"r{n}.push({k});" if off != -1 else "",
                 f"acc += g{n}[{a}.len{pick('', ' - 1', '', ' + 1')}];"]
+    if kind == 25:  # a counted push loop a labeled jump from a nested loop may cut short
+        jump = pick(f"continue :L{n}", f"break :L{n}", f"continue :M{n}", f"break :M{n}")
+        return [f"var q{n}: i64[>..] = [];", f"L{n}: for {i} in {a}.len {{",
+                f"    M{n}: for {j} in 2 {{ if {a}[{i}] > {k + 3} && {j} == 1 {{ {jump}; }} }}",
+                f"    q{n}.push({a}[{i}]);", "}",
+                f"if {a}.len > 0 {{ acc += q{n}[{pick(f'q{n}.len - 1', f'{a}.len - 1', f'{a}.len - 2')}]; }}"]
+    if kind == 26:  # a while left through a labeled break from a nested loop
+        return [f"var {i} = 0;", f"L{n}: while {i} < {a}.len {{",
+                f"    loop {{ if {a}[{i}] == {k} {{ break :L{n}; }} break; }}", f"    {i} += 1;", "}",
+                f"if {i} {pick('<', '<=', '<')} {a}.len {{ acc += {a}[{i}{' - 1' if off == -1 else ''}]; }}"]
     if kind == 21:  # whole-struct stores through element references
         return [f"var q{n}: Pt[>..] = [];", f"for {i} in {a}.len {{ q{n}.push(Pt {{ x: {a}[{i}], y: {i} }}); }}",
                 f"for &p{n}, {i} in q{n} {{",

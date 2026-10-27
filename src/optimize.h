@@ -870,6 +870,7 @@ inline Node *SelfRef::Cp1(Inliner &inl) const { return inl.ast.New<SelfRef>(line
 inline Node *Continue::Cp1(Inliner &inl) const {
     auto c = inl.ast.New<Continue>(line);
     c->leavetype = leavetype;
+    c->label = label;
     return c;
 }
 
@@ -1013,15 +1014,21 @@ inline Node *MatchExpr::Cp1(Inliner &inl) const {
 }
 
 inline Node *EarlyBlock::Cp1(Inliner &inl) const {
-    return inl.ast.New<EarlyBlock>(line, inl.CpBlock(body));
+    auto e = inl.ast.New<EarlyBlock>(line, inl.CpBlock(body));
+    e->label = label;
+    return e;
 }
 
 inline Node *While::Cp1(Inliner &inl) const {
-    return inl.ast.New<While>(line, inl.Cp(cond), inl.CpBlock(body));
+    auto w = inl.ast.New<While>(line, inl.Cp(cond), inl.CpBlock(body));
+    w->label = label;
+    return w;
 }
 
 inline Node *LoopExpr::Cp1(Inliner &inl) const {
-    return inl.ast.New<LoopExpr>(line, inl.CpBlock(body));
+    auto l = inl.ast.New<LoopExpr>(line, inl.CpBlock(body));
+    l->label = label;
+    return l;
 }
 
 inline Node *ForLoop::Cp1(Inliner &inl) const {
@@ -1031,6 +1038,7 @@ inline Node *ForLoop::Cp1(Inliner &inl) const {
     c->vdef = inl.Remap(vdef);
     c->idxdef = inl.Remap(idxdef);
     c->iterkind = iterkind;
+    c->label = label;
     return c;
 }
 
@@ -1048,6 +1056,7 @@ inline Node *Return::Cp1(Inliner &inl) const {
 inline Node *Break::Cp1(Inliner &inl) const {
     auto b = inl.ast.New<Break>(line, val ? inl.Cp(val) : nullptr);
     b->leavetype = leavetype;
+    b->label = label;
     return b;
 }
 

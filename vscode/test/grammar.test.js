@@ -75,6 +75,14 @@ test('export modifier and exported function declaration highlight', async () => 
     assert.ok(has(line, 'CUSTOM_FUNCTION_0', 'entity.name.function.goose'));
 });
 
+test('labels on loops and blocks, and the jumps that name them, highlight', async () => {
+    const [line] = await tokenize('outer: for i in n { if i == 2 { continue :outer; } break :outer; }');
+    const labels = line.filter(token => token.text === 'outer' && token.scopes.some(item => item.startsWith('entity.name.label')));
+    assert.equal(labels.length, 3);
+    assert.ok(has(line, 'continue', 'keyword.control'));
+    assert.ok(has(line, 'break', 'keyword.control'));
+});
+
 test('""" strings are raw, span lines, and code resumes after them', async () => {
     const lines = await tokenize('let s = """\n    fn fake() { \\n "quoted"\n    """; fn next() {}\n"""one "line" \\t"""; fn after() {}');
     assert.ok(lines[1].every(token => token.scopes.includes('string.quoted.triple.goose')));

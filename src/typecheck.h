@@ -74,23 +74,30 @@ enum ValidPos { VT_LOCAL, VT_GLOBAL, VT_PARAM, VT_RET, VT_FIELD, VT_ELEM, VT_POI
 // Whether a `break` in a loop's body gives the loop a value: one no construct
 // inside the body is the target of instead (FindBreakScope) -- a nested
 // loop, a `block` or a function value. A `for`'s iterated expression runs
-// before its loop does.
-inline bool BreaksWithValue(Node *body) {
+// before its loop does. Gust: a `break :label` with the loop's label is
+// its, however deep in nested loops and blocks; one with another label
+// leaves for a construct further out.
+inline bool BreaksWithValue(Node *body, string_view label = {}) {
     auto found = false;
-    function<void(Node *)> walk = [&](Node *n) {
-        if (found) return;
+    function<void(Node *, bool)> walk = [&](Node *n, bool nested) {
+        if (found || !n) return;
         if (auto b = Is<Break>(n); b && b->val) {
-            found = true;
+            found = b->label.empty() ? !nested : b->label == label;
             return;
         }
         if (auto f = Is<ForLoop>(n)) {
-            walk(f->iter);
+            walk(f->iter, nested);
+            if (!label.empty()) walk(f->body, true);
             return;
         }
-        if (Is<LoopExpr>(n) || Is<While>(n) || Is<EarlyBlock>(n) || Is<FunVal>(n)) return;
-        n->Children(walk);
+        if (Is<FunVal>(n)) return;
+        if (Is<LoopExpr>(n) || Is<While>(n) || Is<EarlyBlock>(n)) {
+            if (label.empty()) return;
+            nested = true;
+        }
+        n->Children([&](Node *ch) { walk(ch, nested); });
     };
-    walk(body);
+    walk(body, false);
     return found;
 }
 
@@ -2139,7 +2146,7 @@ struct TypeCheck {
     void CheckFor(ForLoop *x);
     int RealFrameIndex();
     Frame &CurRealFrame() { return frames[RealFrameIndex()]; }
-    int FindBreakScope(bool forcontinue);
+    int FindBreakScope(bool forcontinue, string_view label = {});
     void CheckBreak(Break *b);
     // A loop or block exits in the join of the states at its breaks
     // (NoteBreak) and at its own exit, where it has one (JoinBreakFlow).

@@ -68,7 +68,7 @@ inline bool TypeCheck::IsValuelessTail(const Node *n) {
             }
             return false;
         }
-        if (auto l = Is<LoopExpr>(x)) return !BreaksWithValue(l->body);
+        if (auto l = Is<LoopExpr>(x)) return !BreaksWithValue(l->body, l->label);
         if (auto b = Is<Block>(x)) return walk(b->tail);
         if (auto e = Is<EarlyBlock>(x)) return walk(e->body);
         return false;

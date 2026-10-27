@@ -79,6 +79,22 @@ git log upstream/master..main
 
 ## Compiler
 
+- Labeled `break` and `continue` (spec §6.4, Goose's open item 13): `name:`
+  on a loop or `block`, and `break :name e?` / `continue :name` from inside
+  it at any depth (`src/lexer.h`, `src/parser.h`, `src/ast.h`). The checker
+  binds a jump to the construct with its label, for its value, definite
+  assignment and narrowing, and rejects an unknown label, a label two
+  constructs around a jump share and a continue naming a block
+  (`src/typecheck_flow.h`, `src/typecheck.h`, `src/typecheck_calls.h`,
+  `src/typecheck_exprs.h`); codegen leaves through the named scope's
+  restores (`src/codegen_stmts.h`, `src/codegen_nodes.h`); the bounds-check
+  pass counts a labeled jump from a nested loop as one cutting its loop
+  short (`src/bce.h`); clones, the optimizer's copies, the dump and the
+  formatter keep labels (`src/clone.h`, `src/optimize.h`, `src/dump.h`,
+  `src/format.h`). `test/codegen/labeled_jumps.goose`,
+  `test/optimizer/bce_labeled_jumps.goose`, five rejection fixtures in
+  `test/errors_tc/` and one in `test/errors/` (new); `bench/bce_fuzz.py`
+  generates labeled jumps out of nested loops.
 - `src/typecheck.h`, `src/typecheck_calls.h`: a nested function passed as a
   function value into a generic whose type parameter has the same name as
   one of the nested function's enclosing generic (`S` in both) had its

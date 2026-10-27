@@ -12,6 +12,16 @@ namespace goose {
 // narrowing, merged at control-flow joins).
 
 inline void TypeCheck::PushScope(int kind, Node *node) {
+    // Gust: a label names one construct among those around it, where
+    // `break :l` would otherwise mean the innermost of two.
+    if (auto label = LabelOf(node); !label.empty() && (kind == SK_LOOP || kind == SK_BLOCK))
+        for (auto i = (int)scopes.size() - 1; i >= frames.back().scopebase; i--) {
+            if (scopes[i].kind == SK_FN) break;
+            if ((scopes[i].kind == SK_LOOP || scopes[i].kind == SK_BLOCK) &&
+                scopes[i].node != node && LabelOf(scopes[i].node) == label)
+                Error(node, cat("the label ", label,
+                                " is already that of a loop or block around this one"));
+        }
     Scope s;
     s.kind = kind;
     s.serial = ++scopeserial;
@@ -2020,19 +2030,30 @@ inline int TypeCheck::RealFrameIndex() {
     return 0;
 }
 
-inline int TypeCheck::FindBreakScope(bool forcontinue) {
+// The scope a break or continue exits: the innermost loop (or, for a break,
+// `block`) around it, or the one its label names (Gust), which for a
+// continue has to be a loop (-3 where it is a block). -2 where a const for
+// expansion lies between, -1 where there is none in this function.
+inline int TypeCheck::FindBreakScope(bool forcontinue, string_view label) {
     for (auto i = (int)scopes.size() - 1; i >= frames.back().scopebase; i--) {
-        if (scopes[i].kind == SK_LOOP) return i;
-        if (!forcontinue && scopes[i].kind == SK_BLOCK) return i;
-        if (scopes[i].kind == SK_FN) break;
-        if (scopes[i].kind == SK_EXPANSION) return -2;
+        auto k = scopes[i].kind;
+        if (k == SK_FN) break;
+        if (k == SK_EXPANSION) return -2;
+        if (k != SK_LOOP && k != SK_BLOCK) continue;
+        if (!label.empty()) {
+            if (LabelOf(scopes[i].node) != label) continue;
+            return forcontinue && k == SK_BLOCK ? -3 : i;
+        }
+        if (k == SK_LOOP || !forcontinue) return i;
     }
     return -1;
 }
 
 inline void TypeCheck::CheckBreak(Break *b) {
-    auto si = FindBreakScope(false);
+    auto si = FindBreakScope(false, b->label);
     if (si == -2) Error(b, "break cannot cross a const for expansion boundary");
+    if (si < 0 && !b->label.empty())
+        Error(b, cat("no loop or block around this break is labeled ", b->label));
     if (si < 0) Error(b, "break outside of a loop or block");
     if (b->val) {
         if (!Is<LoopExpr>(scopes[si].node) && !Is<EarlyBlock>(scopes[si].node))
@@ -2135,8 +2156,12 @@ inline void TypeCheck::JoinBreakFlow(const Scope &sc, bool ownexit) {
 // A continue is a back edge of its loop: what holds here joins what the
 // next iteration starts in (CheckLoopPasses).
 inline void TypeCheck::CheckContinue(Node *n) {
-    auto si = FindBreakScope(true);
+    auto c = Is<Continue>(n);
+    auto label = c ? c->label : string_view {};
+    auto si = FindBreakScope(true, label);
     if (si == -2) Error(n, "continue cannot cross a const for expansion boundary");
+    if (si == -3) Error(n, cat("continue :", label, " names a block, which has no next iteration"));
+    if (si < 0 && !label.empty()) Error(n, cat("no loop around this continue is labeled ", label));
     if (si < 0) Error(n, "continue outside of a loop");
     auto &sc = scopes[si];
     sc.backedge = sc.backedges ? JoinFlow(sc.backedge, SaveFlow()) : SaveFlow();
