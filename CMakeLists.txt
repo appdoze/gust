@@ -194,6 +194,23 @@ target_link_libraries(goose PRIVATE goose_mir)
 if(UNIX)
     target_link_libraries(goose PRIVATE ${CMAKE_DL_LIBS})
 endif()
+# The runtime compiled natively into the compiler (src/runtime_native.c),
+# which a --mir program links against by name: exported from the executable,
+# on Windows by its dllexport and on Linux by the dynamic list (macOS's
+# linker exports an executable's symbols as it is).
+add_library(goose_rt_native OBJECT src/runtime_native.c)
+set_target_properties(goose_rt_native PROPERTIES C_STANDARD 11 C_EXTENSIONS ON)
+if(MSVC)
+    target_compile_options(goose_rt_native PRIVATE /w /utf-8)
+    target_compile_definitions(goose_rt_native PRIVATE _CRT_SECURE_NO_WARNINGS)
+else()
+    target_compile_options(goose_rt_native PRIVATE -w)
+endif()
+target_link_libraries(goose PRIVATE goose_rt_native)
+if(UNIX AND NOT APPLE)
+    target_link_options(goose PRIVATE
+        "LINKER:--dynamic-list=${CMAKE_CURRENT_SOURCE_DIR}/cmake/runtime_exports.list")
+endif()
 
 # The blessed packages GOOSE_BUILTIN_LIBS names (src/blessed.txt; `all`, or
 # a list of their names), compiled into the compiler (cmake/package.cmake),

@@ -1838,7 +1838,9 @@ int Main(int argc, char **argv) {
                 throw CompileError { "JIT mode does not support threads yet (TinyCC cannot "
                                      "place thread-local storage in an in-memory run); "
                                      "compile with -o and a C compiler instead" };
-            program = assemble(false);
+            // Gust: a --mir run links against the compiler's own runtime
+            // (src/runtime_native.c), and so is written for a separate one.
+            program = assemble(usemir);
         }
         return 0;
     };
@@ -1943,7 +1945,7 @@ int Main(int argc, char **argv) {
             // and whatever it wrote is already on the same streams.
             fflush(msgs);
             if (usemir)
-                return RunMir(JitSource(program, filename), JitLibPath(DirOf(exe)), filename, progargs, symbols);
+                return RunMir(program, JitLibPath(DirOf(exe)), filename, progargs, symbols);
             return RunJit(program, JitLibPath(DirOf(exe)), filename, progargs, symbols);
         };
         auto code = 0;

@@ -70,7 +70,7 @@ single translation unit, included in the order the driver lists them.
 | BCE | `bce.h` (`BCE::RunAll`) | live specializations | `Index::nobc`, `SliceExpr::nobc`, `ForLoop::fixedlen` and `lenbound`, per-loop `hoistrefs` and `hoistfields` |
 | Codegen | `codegen*.h` (`CodeGen`) | live specializations, globals | one C file, with `src/runtime/` (or the part of it that a program's unit holds) around it |
 | JIT | `jit.h` | the C text | the program run in-process through libtcc, when no `-o` was given |
-| JIT, MIR (Gust) | `jit_mir.h` | the C text | the program run in-process through MIR's C front end and optimizing generator, with `gust run --mir` (Linux, macOS) |
+| JIT, MIR (Gust) | `jit_mir.h` | the C text | the program run in-process through MIR's C front end and optimizing generator, with `gust run --mir`, against the runtime compiled into the compiler (`runtime_native.c`) |
 
 The passes are virtual methods on `Node` (`ast.h`): `Dump`, `Clone1`,
 `Children`, `Check`, `Cp1`/`Opt`, `BceWalk`/`BceMark`, `CgX`/`CgAny`/`CgStmt`.

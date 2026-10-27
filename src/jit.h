@@ -31,15 +31,25 @@ inline string JitLibPath(const string &exedir) {
     return staged;
 }
 
-// The C an in-process run compiles: csrc after the define of the entry
-// source's directory. The in-process program's assets belong to its entry
-// source, not to the Goose executable. This define is JIT-only: emitted AOT
-// C keeps no build-machine resource path. Resolve now, without changing cwd.
-inline string JitSource(const string &csrc, const string &progname) {
+// The entry source's directory, UTF-8 with a final '/': an in-process
+// program's assets belong to its entry source, not to the Goose executable.
+// Resolve now, without changing cwd. Gust: gust run --mir hands it to the
+// compiler's own runtime as it is (jit_mir.h).
+inline string JitResourceDir(const string &progname) {
     std::error_code patherror;
     auto root = filesystem::absolute(filesystem::path(progname), patherror).parent_path();
     if (patherror) throw CompileError { "cannot locate the entry source directory" };
     auto bytes = root.generic_u8string();
+    string dir(bytes.begin(), bytes.end());
+    if (dir.empty() || dir.back() != '/') dir += '/';
+    return dir;
+}
+
+// The C an in-process run compiles: csrc after the define of the entry
+// source's directory. This define is JIT-only: emitted AOT C keeps no
+// build-machine resource path.
+inline string JitSource(const string &csrc, const string &progname) {
+    auto bytes = JitResourceDir(progname);
     string source = "#define GS_JIT_RESOURCE_DIR \"";
     // Fixed-width octal escapes are unambiguous even for quotes, control
     // characters, UTF-8 and a hex digit immediately after an escaped byte.
@@ -48,7 +58,6 @@ inline string JitSource(const string &csrc, const string &progname) {
         snprintf(escaped, sizeof escaped, "\\%03o", (unsigned)(uint8_t)ch);
         source += escaped;
     }
-    if (bytes.empty() || bytes.back() != u8'/') source += '/';
     source += "\"\n";
     source += csrc;
     return source;

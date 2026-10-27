@@ -174,9 +174,26 @@ git log upstream/master..main
   `src/process.cpp`); calls of sqrt and sqrtf become MIR's square root
   first. The runtime takes c2mir (`__MIRC__`) for a compiler without GCC's
   atomics, its SSE scan and epoll, as it takes TinyCC (`src/runtime/`).
-  Linux and macOS; Windows says it is not available yet.
   `test/mir_runs.py` (new) runs the fixtures with an expected output both
-  ways and requires the same output and outcome.
+  ways and requires the same output and outcome. Then the runtime compiled
+  into the compiler (`src/runtime_native.c`, new; `CMakeLists.txt`): the
+  runtime object `--emit-runtime` writes, built with GS_NATIVE_RUNTIME,
+  which exports what it defines (`GS_API`, `src/runtime/runtime.h`; the
+  dynamic list `cmake/runtime_exports.list` on Linux, `SystemSymbol`
+  searching the compiler's own exports on Windows), ends the process as
+  an in-process run does (`gs_end`) and takes the resource directory at
+  run time (`gs_native_resource_dir`, `src/runtime/runtime_os.h`). A
+  `--mir` run compiles the program's unit as a build with a separate
+  runtime writes it, and links `gs_rt_start_<version>` to that runtime's
+  start. Under c2mir the unit declares the C library functions it uses
+  rather than include the platform's headers (`runtime.h`), which c2mir
+  could not read on Windows or macOS, and folded infinities and NaNs are
+  `GS_INFINITY` and `GS_NAN` (`src/codegen_values.h`), clear of a
+  package header's math.h. Every function is generated before the run:
+  MIR's lazy thunk corrupted the first call on Windows. A run starts in
+  about 30 ms rather than 0.3 s, and `--mir` runs on Windows.
+  `test/runtime_text.py` (new) checks that `src/runtime_inline.h` is
+  `src/runtime/` as it is.
 - `GUST_TCC_SHARED` (new CMake option, `cmake/libtcc.cmake`,
   `CMakeLists.txt`, `scripts/package_release.py`): TinyCC built as a
   shared library beside the compiler (`gusttcc.dll`, `libgusttcc.so`,
@@ -427,7 +444,12 @@ git log upstream/master..main
   and its own alignment at the packing where it is defined; and the x86-64
   generator's upper bound on an instruction's size counting the REX prefix
   a register from r8 or xmm8 up takes (`get_max_insn_size`), which a float
-  comparison's ucomiss passed by a byte.
+  comparison's ucomiss passed by a byte. Then, for Windows: the x86-64
+  generator stores into each page of a frame or constant alloca larger
+  than a page, top down, before sp passes it, as MSVC's __chkstk does
+  (`target_make_prolog_epilog`), where the stack grows a guard page at a
+  time; and c2mir rejects a call of an undeclared function rather than
+  declare it `int f()`, which returned garbage for a double.
 - `third_party/mir` is built with `__WIN32` defined on Windows
   (`CMakeLists.txt`): its built-in headers test MinGW's macro, which MSVC
   and clang do not define, and c2mir's stdarg.h declared no `va_list`.

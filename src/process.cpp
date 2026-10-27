@@ -216,6 +216,8 @@ bool LoadSharedSymbols(const string &path, vector<pair<string, const void *>> &o
 
 void *SystemSymbol(const char *name) {
     #ifdef _WIN32
+        // The compiler's own exports first: its runtime's (runtime_native.c).
+        if (auto p = GetProcAddress(GetModuleHandleW(nullptr), name)) return (void *)p;
         static const char *const dlls[] = { "ucrtbase.dll", "msvcrt.dll", "kernel32.dll", "ws2_32.dll",
                                             "advapi32.dll", "user32.dll", "shell32.dll", "ntdll.dll" };
         for (auto d : dlls) {

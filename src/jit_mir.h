@@ -1,7 +1,10 @@
-// Gust: the MIR backend for in-process runs (`gust run --mir`). The same C a
-// TinyCC run compiles, the runtime included, is compiled instead by MIR's C
-// front end (c2mir) and its optimizing generator (third_party/mir, MIT), into
-// this process, and run there. Before generation, calls of sqrt and sqrtf
+// Gust: the MIR backend for in-process runs (`gust run --mir`). The
+// program's own C, as a build with a separate runtime has it, is compiled by
+// MIR's C front end (c2mir) and its optimizing generator (third_party/mir,
+// MIT) into this process, and run there against the runtime compiled into
+// the compiler (src/runtime_native.c), which MIR finds by name. So c2mir
+// reads no runtime and no system header but the C library's, and nothing
+// is compiled for the runtime as a run starts. Before generation, calls of sqrt and sqrtf
 // become MIR's square root, an instruction added to it, which the generator
 // keeps in registers rather than spilling every live one around a call into
 // the C library (c2mir's own copies of small structs are moves, another
@@ -20,6 +23,8 @@ extern "C" {
 #include "mir.h"
 #include "mir-gen.h"
 #include "c2mir/c2mir.h"
+// The resource directory of the compiler's own runtime (runtime_os.h).
+extern const char *gs_native_resource_dir;
 }
 
 namespace goose {
@@ -34,13 +39,17 @@ inline int MirGetc(void *data) {
 }
 
 // MIR_link's resolver takes no user data: the packages' native functions the
-// run hands it, then the C library's.
+// run hands it, then the runtime's and the C library's.
 inline const vector<pair<string, const void *>> *mir_symbols = nullptr;
 
 inline void *MirResolve(const char *name) {
     if (mir_symbols)
         for (auto &[n, addr] : *mir_symbols)
             if (n == name) return (void *)addr;
+    // The program's unit calls the runtime's start by the version of the
+    // runtime's text it was written with, the text this compiler's own
+    // runtime was built from.
+    if (!strncmp(name, "gs_rt_start_", 12)) name = "gs_rt_start";
     return SystemSymbol(name);
 }
 
@@ -128,9 +137,10 @@ inline void *MirCompile(MIR_context_t ctx, const char *source, const char *name,
     // append_constructed_results), and the compare suite runs no slower
     // at 1 (3.53 s either way in WSL).
     MIR_gen_set_optimize_level(ctx, 1);
-    // Each function generated as it is first called: the runtime's are many,
-    // and a run calls few.
-    MIR_link(ctx, MIR_set_lazy_gen_interface, MirResolve);
+    // Every function generated now, the program's own being all there is:
+    // generating each as it is first called saved 6 ms of a 26 ms run in
+    // WSL, and on Windows MIR's thunk for it corrupted the first call.
+    MIR_link(ctx, MIR_set_gen_interface, MirResolve);
     for (auto m = DLIST_HEAD(MIR_module_t, *MIR_get_module_list(ctx)); m && !mainp; m = DLIST_NEXT(MIR_module_t, m))
         for (auto it = DLIST_HEAD(MIR_item_t, m->items); it; it = DLIST_NEXT(MIR_item_t, it))
             if (it->item_type == MIR_func_item && strcmp(MIR_item_name(ctx, it), "main") == 0) {
@@ -145,23 +155,24 @@ inline void *MirCompile(MIR_context_t ctx, const char *source, const char *name,
 #pragma warning(pop)
 #endif
 
-// As RunJit (jit.h), through MIR: `source` is the C RunJit would compile,
-// its resource-directory define included.
+// As RunJit (jit.h), through MIR: `source` is the program's C written for a
+// separate runtime, which the compiler's own is.
 inline int RunMir(const string &source, const string &libpath, const string &progname,
                   const vector<string> &progargs, const vector<pair<string, const void *>> &symbols) {
-    (void)libpath;
-    #ifdef _WIN32
-        // The runtime's Windows half needs <windows.h>, which no header set
-        // here gives c2mir in a form it reads: the SDK's is MSVC's dialect,
-        // and TinyCC's winnt.h implements its intrinsics in inline assembly.
-        (void)source, (void)progname, (void)progargs, (void)symbols;
-        throw CompileError { "gust run --mir is not available on Windows yet: MIR's C front end cannot read "
-                             "the Windows headers the runtime needs; gust run (TinyCC) and gust build work" };
-    #else
     vector<string> incdirs;
-    #ifdef __APPLE__
+    #ifdef _WIN32
+        // The C library's headers as TinyCC has them, which c2mir reads
+        // where the SDK's MSVC dialect it does not.
+        incdirs.push_back(cat(libpath, "/include"));
+    #elif defined(__APPLE__)
+        (void)libpath;
         if (auto sdk = MacSdkPath(); !sdk.empty()) incdirs.push_back(cat(sdk, "/usr/include"));
+    #else
+        (void)libpath;
     #endif
+    static string resources;
+    resources = JitResourceDir(progname);
+    gs_native_resource_dir = resources.c_str();
     vector<const char *> incs;
     for (auto &d : incdirs) incs.push_back(d.c_str());
     c2mir_options ops;
@@ -203,7 +214,6 @@ inline int RunMir(const string &source, const string &libpath, const string &pro
     MIR_finish(ctx);
     mir_symbols = nullptr;
     return code;
-    #endif
 }
 
 }  // namespace goose

@@ -1173,6 +1173,32 @@ static void target_make_prolog_epilog (gen_ctx_t gen_ctx, bitmap_t used_hard_reg
 
   assert (curr_func_item->item_type == MIR_func_item);
   func = curr_func_item->u.func;
+#ifdef _WIN32
+  /* Gust: Windows grows a thread's stack a guard page at a time, and sp
+     moved more than a page past the guard page faults instead, so whatever
+     moves it by more is preceded by a store into each page it passes, from
+     the top down, as MSVC's __chkstk does; below sp nothing lives on
+     Windows, which has no red zone. Here an alloca whose size the
+     generator has made a constant by now, as c2mir's of a function's locals
+     is, with the arg area taken off after it (target_machinize); the frame
+     itself below. */
+  for (MIR_insn_t insn = DLIST_HEAD (MIR_insn_t, func->insns); insn != NULL;
+       insn = DLIST_NEXT (MIR_insn_t, insn)) {
+    if (insn->code != MIR_ALLOCA
+        || (insn->ops[1].mode != MIR_OP_INT && insn->ops[1].mode != MIR_OP_UINT))
+      continue;
+    size_t total = (size_t) ((insn->ops[1].u.u + 15) & -16) + call_arg_area_size;
+    if (total <= 4096) continue;
+    for (size_t probe = 4096;; probe += 4096) {
+      int64_t at = -(int64_t) (probe < total ? probe : total);
+      new_insn = MIR_new_insn (ctx, MIR_MOV,
+                               _MIR_new_var_mem_op (ctx, MIR_T_I64, at, SP_HARD_REG, MIR_NON_VAR, 1),
+                               _MIR_new_var_op (ctx, SP_HARD_REG));
+      gen_add_insn_before (gen_ctx, insn, new_insn);
+      if (probe >= total) break;
+    }
+  }
+#endif
   for (i = saved_hard_regs_size = 0; i <= R15_HARD_REG; i++)
     if (!target_call_used_hard_reg_p ((MIR_reg_t) i, MIR_T_UNDEF)
         && bitmap_bit_p (used_hard_regs, i))
@@ -1222,6 +1248,21 @@ static void target_make_prolog_epilog (gen_ctx_t gen_ctx, bitmap_t used_hard_reg
   if (!keep_fp_p) stack_slots_size = (stack_slots_size + 15) / 16 * 16;
   /* stack slots, and saved regs as multiple of 16 bytes: */
   block_size = (stack_slots_size + saved_hard_regs_size + 15) / 16 * 16;
+#ifdef _WIN32
+  /* Gust: the frame, as an alloca above. */
+  {
+    size_t frame = block_size + service_area_size + call_arg_area_size;
+    if (frame > 4096)
+      for (size_t probe = 4096;; probe += 4096) {
+        int64_t at = -(int64_t) (probe < frame ? probe : frame);
+        new_insn = MIR_new_insn (ctx, MIR_MOV,
+                                 _MIR_new_var_mem_op (ctx, MIR_T_I64, at, SP_HARD_REG, MIR_NON_VAR, 1),
+                                 sp_reg_op);
+        gen_add_insn_before (gen_ctx, anchor, new_insn);
+        if (probe >= frame) break;
+      }
+  }
+#endif
   new_insn
     = MIR_new_insn (ctx, MIR_SUB, sp_reg_op, sp_reg_op,
                     MIR_new_int_op (ctx, block_size + service_area_size + call_arg_area_size));

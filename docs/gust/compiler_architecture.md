@@ -108,9 +108,12 @@ and after, and keeps C as the one backend.
    MIR mode ran within 1.2-1.4x of its own compiled C++, against 2.1-2.4x
    for its TinyCC mode, measured), and MIT-licensed, which ends the LGPL
    relinking obligation TinyCC carries. **(Begun: `gust run --mir`, on
-   Linux and macOS, `src/jit_mir.h`; TinyCC stays the default. On the
-   compare suite in WSL it runs 2.3x off a native gcc build, as a geometric
-   mean, against TinyCC's 4.1x; n-body and raytrace stay furthest off, their
+   Windows, Linux and macOS, `src/jit_mir.h`; TinyCC stays the default. MIR
+   compiles the program's own C against the runtime compiled into the
+   compiler (`src/runtime_native.c`), which it finds by name among the
+   compiler's exports, so a run starts as fast as TinyCC's. On the compare
+   suite in WSL it runs 2.3x off a native gcc build, as a geometric mean,
+   against TinyCC's 4.1x; n-body and raytrace stay furthest off, their
    struct fields kept in memory by MIR where clang keeps them in registers.)**
 7. **Only then, and only if a measured case needs it: an LLVM IR backend**
    beside the C one, behind a flag, reading the same lowered form the C

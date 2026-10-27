@@ -263,19 +263,23 @@ the plain function.
 
 - **MIR JIT** for no-build runs (Lobster's MIR mode is 2.56x off the fastest build, against
   4.39x for Goose's TinyCC mode; MIR is MIT-licensed, ending the LGPL question).
-  **(Begun: `gust run --mir` on Linux and macOS, `src/jit_mir.h`, MIR vendored from
-  Lobster's copy into `third_party/mir`; TinyCC stays the default. On the compare suite
-  in WSL it runs 2.3x off a native gcc build as a geometric mean, against TinyCC's 4.1x,
-  and starts in 0.28 s against 0.03 s, c2mir compiling the runtime each run. What it took:
+  **(Begun: `gust run --mir` on Windows, Linux and macOS, `src/jit_mir.h`, MIR vendored
+  from Lobster's copy into `third_party/mir`; TinyCC stays the default. On the compare
+  suite in WSL it runs 2.3x off a native gcc build as a geometric mean, against TinyCC's
+  4.1x. The runtime is compiled into the compiler (`src/runtime_native.c`) and MIR
+  compiles only the program's own C against it, which it finds among the compiler's
+  exports: an empty program starts in 0.026 s, as under TinyCC, where c2mir compiling the
+  runtime each run took 0.28 s, and c2mir reads no platform header, which it could not on
+  Windows (MinGW's and MSVC's) or macOS (the SDK's stop at an unknown compiler). On
+  Windows MIR also had to probe a frame larger than a page, as the stack grows a guard
+  page at a time, and to generate every function before the run. What it took:
   a square-root instruction for MIR, c2mir copying small structs with moves and keeping
   `#pragma pack`, c2mir's float to unsigned 64-bit conversions made right from 2^63 up,
   MIR's level 1 rather than its level 2, which kept a pointer stale past a loop, and a
   correct size bound for one x86-64 pattern. `test/mir_runs.py` holds every fixture with
-  an expected output to TinyCC's result. Not yet: Windows, where c2mir cannot read the
-  headers the runtime's Windows half needs; a runtime compiled natively into the
-  compiler, which would answer Windows and the start time both; and keeping small
-  structs' fields in registers, which n-body (6.5x off) and raytrace (4.4x) need for
-  the 1.5x exit.)**
+  an expected output to TinyCC's result, on all three platforms. Not yet: keeping small
+  structs' fields in registers, which n-body (6.5x off) and raytrace (4.4x) need for the
+  1.5x exit.)**
 - **Python bindings generator**: turn a library into a pip-installable module, the route
   Rust grew through with PyO3. **(Done: `scripts/gust_python.py` builds a library's
   exports into a ctypes package with checked integers, structs, slices read from

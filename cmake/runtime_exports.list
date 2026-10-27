@@ -1,0 +1,5 @@
+/* The symbols of the compiler's own runtime (src/runtime_native.c) a
+   gust run --mir program finds by name (src/jit_mir.h). */
+{
+    gs_*;
+};

@@ -2,10 +2,10 @@
 TinyCC's (`gust run`). Each fixture of the categories below that has an
 expected output is run both ways, and must print the same and end the same
 way (an exit status of 0, or not) under MIR as under TinyCC: --mir changes
-how fast a run is, never what it does. Linux and macOS; on Windows --mir
-says it is not available, which is checked instead."""
+how fast a run is, never what it does. On every platform: MIR compiles the
+program's own C against the runtime compiled into the compiler
+(src/runtime_native.c)."""
 import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
@@ -15,12 +15,6 @@ CATEGORIES = ("codegen", "optimizer", "lifetimes", "stdlib", "storage", "typing"
 
 def check_mir_runs(exe, jobs=1):
     """The number of fixtures compared; raises RuntimeError on a difference."""
-    if sys.platform == "win32":
-        p = subprocess.run([str(exe), "run", "-q", "--mir", str(HERE / "codegen" / "labeled_jumps.goose")],
-                           capture_output=True, text=True, errors="replace", timeout=120)
-        if p.returncode == 0 or "not available on Windows" not in p.stderr:
-            raise RuntimeError(f"--mir on Windows: exit {p.returncode}\n{p.stdout}{p.stderr}")
-        return 0
     cases = [f for cat in CATEGORIES for f in sorted((HERE / cat).glob("*.goose"))
              if (HERE / "expected" / f"{f.stem}.out").exists()]
 

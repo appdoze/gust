@@ -65,10 +65,56 @@ R"GSRT(/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS
 
 #include <stdint.h>
 #include <stddef.h>
+#ifdef __MIRC__
+/* Gust: c2mir (gust run --mir, src/jit_mir.h) cannot read every platform's
+   headers of the C library: on Windows TinyCC's are MinGW's, written for
+   GCC, and the SDK's are MSVC's; macOS's stop at an #error for a compiler
+   they do not know. A --mir program's unit is the program's own, against
+   the runtime compiled into the compiler (src/runtime_native.c), and
+   declares what it uses of the library here: what the generated code and
+   this file call. A package's own C header may still include the real ones,
+   which declare the same. c2mir's stddef.h has no NULL on Windows. */
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+void *memcpy(void *dst, const void *src, size_t n);
+void *memmove(void *dst, const void *src, size_t n);
+void *memset(void *dst, int c, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
+size_t strlen(const char *s);
+void *malloc(size_t n);
+void *calloc(size_t count, size_t n);
+void *realloc(void *p, size_t n);
+void free(void *p);
+double sqrt(double x);
+float sqrtf(float x);
+double fmod(double x, double y);
+float fmodf(float x, float y);
+double trunc(double x);
+float truncf(float x);
+double fma(double x, double y, double z);
+float fmaf(float x, float y, float z);
+/* What runtime_ext.h's math forwards to where it cannot rename libm's. */
+double sin(double x); double cos(double x); double tan(double x);
+double asin(double x); double acos(double x); double atan(double x);
+double atan2(double y, double x); double exp(double x); double log(double x);
+double log2(double x); double log10(double x); double pow(double x, double y);
+float sinf(float x); float cosf(float x); float tanf(float x);
+float asinf(float x); float acosf(float x); float atanf(float x);
+float atan2f(float y, float x); float expf(float x); float logf(float x);
+float log2f(float x); float log10f(float x); float powf(float x, float y);
+/* What a folded infinity or NaN is written as (CodeGen::FltStr): math.h's,
+   or their constant expressions, which c2mir folds. */
+#define GS_INFINITY (1.0f / 0.0f)
+#define GS_NAN (0.0f / 0.0f)
+#else
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#define GS_INFINITY INFINITY
+#define GS_NAN NAN
+#endif
 
 /* Every float operation rounds on its own. A C compiler may otherwise
    contract a multiply and an add into one fused rounding wherever the target
@@ -144,7 +190,8 @@ R"GSRT(/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS
 /* §10.4 caps a stack reservation at 2^48 bytes, which is what lets the
    compiler treat every size, count and index as fitting in 48 bits: the
    guard region enforces it, so no growth path needs its own check. */
-#if GS_STACK_RESERVE > (1ull << 48)
+)GSRT"
+R"GSRT(#if GS_STACK_RESERVE > (1ull << 48)
 #error "GS_STACK_RESERVE exceeds the 2^48 limit (goose_spec.md 10.4)"
 #endif
 
@@ -175,8 +222,14 @@ R"GSRT(/* Modified for Gust (https://github.com/appdoze/gust); see MODIFICATIONS
 #define GS_TLS
 #endif
 
-/* The linkage of everything the runtime defines outside this file. */
-#ifdef GS_SEPARATE_RUNTIME
+/* The linkage of everything the runtime defines outside this file. Gust:
+   the runtime compiled into the compiler for gust run --mir
+   (src/runtime_native.c) exports it too, for MIR to find by name. */
+#if defined(GS_NATIVE_RUNTIME) && defined(_WIN32)
+#define GS_API extern __declspec(dllexport)
+#elif defined(GS_NATIVE_RUNTIME)
+#define GS_API extern __attribute__((visibility("default")))
+#elif defined(GS_SEPARATE_RUNTIME)
 #define GS_API extern
 #else
 #define GS_API static
@@ -206,8 +259,7 @@ enum {
     GS_E_POP,          /* pop on empty array */
     GS_E_THREADID,     /* thread_wait on an unknown thread id */
     GS_E_THREADSELF,   /* a worker cannot wait for itself */
-)GSRT"
-R"GSRT(    GS_E_TAG,          /* corrupt ADT tag (debug builds only) */
+    GS_E_TAG,          /* corrupt ADT tag (debug builds only) */
     GS_E_ENDIAN,       /* serialization on a big-endian host */
     GS_E_SLICELEN,     /* slice pool length negative or beyond any data stack */
     GS_E_POOLSLICE,    /* a slice handed to a slice pool is not one of its runs */
@@ -314,7 +366,8 @@ static inline void gs_cpuid(uint32_t leaf, uint32_t r[4]) {
 static inline int gs_simd_detect(void) {
     uint32_t r[4], b7, xcr0, xhi;
     gs_cpuid(0, r);
-    if (r[0] < 7) return 0;
+)GSRT"
+R"GSRT(    if (r[0] < 7) return 0;
     gs_cpuid(1, r);
     /* OSXSAVE, AVX, POPCNT, FMA. */
     if ((r[2] & (1u << 27 | 1u << 28 | 1u << 23 | 1u << 12)) !=
@@ -370,8 +423,7 @@ static inline int gs_simd_level(void) {
 
 /* The generated code's memcpy and memset of zeros. Most move or clear the
    1 to 32 bytes of a field, an element or a reference, a constant size the
-)GSRT"
-R"GSRT(   optimizing backends turn into a few moves. TinyCC calls the C library for
+   optimizing backends turn into a few moves. TinyCC calls the C library for
    every memcpy and memset, so under it a constant size of up to 32 bytes
    is written out as loads and stores, overlapping where the size is not a
    power of two (which needs the runs not to overlap, as memcpy's do not).
@@ -483,7 +535,8 @@ static GS_NOINLINE int gs_memeq_long(const uint8_t *p, const uint8_t *q, size_t 
 static int gs_memeq(const void *a, const void *b, size_t n) {
     const uint8_t *p = (const uint8_t *)a, *q = (const uint8_t *)b;
     if (n >= 8 && n <= 16)
-        return ((gs_ld64(p) ^ gs_ld64(q)) | (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
+)GSRT"
+R"GSRT(        return ((gs_ld64(p) ^ gs_ld64(q)) | (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
     if (n >= 4 && n < 8)
         return ((gs_ld32(p) ^ gs_ld32(q)) | (gs_ld32(p + n - 4) ^ gs_ld32(q + n - 4))) == 0;
     if (n < 4)
@@ -527,8 +580,7 @@ static int gs_memeq(const void *a, const void *b, size_t n) {
 #define GS_MODS(T, t, a, b, f, l) \
     ((T)(b) == 0 ? (gs_divfail((f), (l)), (T)0) \
      : (T)(((t) = (int64_t)(T)(a) % (int64_t)(T)(b)) < 0 \
-)GSRT"
-R"GSRT(               ? (t) + ((T)(b) < 0 ? -(int64_t)(T)(b) : (int64_t)(T)(b)) : (t)))
+               ? (t) + ((T)(b) < 0 ? -(int64_t)(T)(b) : (int64_t)(T)(b)) : (t)))
 
 #define gs_div_u8(a, b, f, l)  GS_DIVU(uint8_t, a, b, f, l)
 #define gs_div_u16(a, b, f, l) GS_DIVU(uint16_t, a, b, f, l)
@@ -647,7 +699,8 @@ static uint64_t gs_mul_u64(uint64_t a, uint64_t b) { return a * b; }
 static uint64_t gs_shl_u64(uint64_t a, int64_t n) { return a << (n & 63); }
 static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 
-#else  /* release: each operation is the expression the function returned */
+)GSRT"
+R"GSRT(#else  /* release: each operation is the expression the function returned */
 
 #define gs_add_i8(a, b, f, l)  ((int8_t)((int64_t)(a) + (int64_t)(b)))
 #define gs_sub_i8(a, b, f, l)  ((int8_t)((int64_t)(a) - (int64_t)(b)))
@@ -691,8 +744,7 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 #define gs_add_i64(a, b, f, l) ((int64_t)((uint64_t)(a) + (uint64_t)(b)))
 #define gs_sub_i64(a, b, f, l) ((int64_t)((uint64_t)(a) - (uint64_t)(b)))
 #define gs_mul_i64(a, b, f, l) ((int64_t)((uint64_t)(a) * (uint64_t)(b)))
-)GSRT"
-R"GSRT(#define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
+#define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
 #define gs_shl_i64(a, n) ((int64_t)((uint64_t)(a) << ((n) & 63)))
 #define gs_shr_i64(a, n) ((int64_t)((a) >> ((n) & 63)))
 
@@ -844,7 +896,8 @@ static int64_t gs_f2iwrap(double d) {
 
 static int64_t gs_rangechk(int64_t v, int64_t lo, int64_t hi, const char *type,
                            const char *file, int line) {
-    if (v < lo || v > hi) gs_asfail_i("out of range", v, type, file, line);
+)GSRT"
+R"GSRT(    if (v < lo || v > hi) gs_asfail_i("out of range", v, type, file, line);
     return v;
 }
 static uint64_t gs_rangechk_u(uint64_t v, uint64_t hi, const char *type, const char *file,
@@ -897,8 +950,7 @@ typedef struct {
 } gs_stack;
 
 /* The program defines what goose.h gives C compiled on its own (gs_stack
-)GSRT"
-R"GSRT(   here, gs_rhdr, gs_rref and gs_bld_append after the generated types), so
+   here, gs_rhdr, gs_rref and gs_bld_append after the generated types), so
    an --include header including it gets nothing more. */
 #define GOOSE_H 1
 
@@ -1012,7 +1064,8 @@ GS_API int64_t gs_thread_self(void);
 
 #ifndef GS_RUNTIME_OBJECT
 
-/* The current thread program's stack block: every stack the compiler
+)GSRT"
+R"GSRT(/* The current thread program's stack block: every stack the compiler
    counted for it, reserved as the program starts (gs_stack_block).
    gs_sp-relative indices resolve through it. */
 static GS_TLS gs_stack *gs_stks;
@@ -1070,8 +1123,7 @@ static void gs_thread_run(void (*entry)(uint8_t *), uint8_t *args) {
     gs_rt_stats();
 }
 
-)GSRT"
-R"GSRT(/* What the thread program holds once it has returned or aborted; the
+/* What the thread program holds once it has returned or aborted; the
    runtime releases the regions after this. */
 static void gs_thread_release(void) {
     free(gs_gl);
@@ -1232,7 +1284,8 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
     return gs_uleb_write(p, ((uint64_t)v << 1) ^ (uint64_t)(v >> 63));
 }
 
-/* ---------------------------------------------------------------------------
+)GSRT"
+R"GSRT(/* ---------------------------------------------------------------------------
    Verified loading (docs/design/serialization.md): what the generated
    gs_verify_<T> walkers are built from. The bytes are untrusted until the
    walk finishes, so every read here is bounded by the image end and reports
@@ -1285,8 +1338,7 @@ static int64_t gs_zig_check(const uint8_t *p, const uint8_t *end, int64_t *out) 
    only it can read back. */
 static int gs_is_le(void) {
     const uint16_t one = 1;
-)GSRT"
-R"GSRT(    return *(const uint8_t *)&one == 1;
+    return *(const uint8_t *)&one == 1;
 }
 
 /* ---------------------------------------------------------------------------
@@ -2008,7 +2060,7 @@ static GS_NORETURN void gs_park(void) {
 static GS_NORETURN void gs_end(int code) {
     if (!gs_end_first()) gs_park();
     fflush(NULL);
-    #if defined(__TINYC__) || defined(__MIRC__)
+    #if defined(__TINYC__) || defined(__MIRC__) || defined(GS_NATIVE_RUNTIME)
         if (gs_current_thread_id < 0) exit(code);
     #endif
     _Exit(code);
@@ -4560,8 +4612,18 @@ GS_API int64_t gs_os_arg_count(void) { return gs_argc; }
    form with its final separator, NUL-terminated in buf (GS_OS_PATH_MAX
    characters): its length, or 0 where it is not known. JIT supplies its
    entry source directory; AOT discovers the running executable. */
+#ifdef GS_NATIVE_RUNTIME
+/* Gust: the runtime compiled into the compiler (src/runtime_native.c) is
+   built before any program, so gust run --mir sets the entry source's
+   directory here before the program starts. */
+GS_API const char *gs_native_resource_dir = NULL;
+#define GS_JIT_RESOURCE_DIR gs_native_resource_dir
+#endif
 static int gs_os_resource_native(gs_os_char *buf) {
 #ifdef GS_JIT_RESOURCE_DIR
+    #ifdef GS_NATIVE_RUNTIME
+        if (!gs_native_resource_dir) return 0;
+    #endif
     sl_u8 dir = { (uint8_t *)GS_JIT_RESOURCE_DIR, (int64_t)strlen(GS_JIT_RESOURCE_DIR) };
     int n = gs_os_native(dir, buf);
     return n < 0 ? 0 : n;
@@ -4577,7 +4639,8 @@ static int gs_os_resource_native(gs_os_char *buf) {
     #ifdef __APPLE__
         uint32_t capacity = GS_OS_PATH_MAX;
         if (_NSGetExecutablePath(path, &capacity) != 0) return 0;
-        /* Resolve the loader's possible relative path and symlinks. */
+)GSRT"
+R"GSRT(        /* Resolve the loader's possible relative path and symlinks. */
         char *resolved = realpath(path, NULL);
         if (!resolved) return 0;
         n = strlen(resolved);
@@ -4586,8 +4649,7 @@ static int gs_os_resource_native(gs_os_char *buf) {
         free(resolved);
     #elif defined(__linux__)
         ssize_t count = readlink("/proc/self/exe", path, (size_t)GS_OS_PATH_MAX);
-)GSRT"
-R"GSRT(        if (count <= 0 || (size_t)count >= (size_t)GS_OS_PATH_MAX) return 0;
+        if (count <= 0 || (size_t)count >= (size_t)GS_OS_PATH_MAX) return 0;
         n = (size_t)count;
     #else
         return 0;
@@ -4791,7 +4853,8 @@ GS_API int64_t gs_os_time_ns(void) {
     uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     return (int64_t)(t - 116444736000000000ull) * 100;
 #else
-    struct timespec ts;
+)GSRT"
+R"GSRT(    struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
     return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 #endif
@@ -4805,8 +4868,7 @@ GS_API int64_t gs_os_clock_ns(void) {
     QueryPerformanceCounter(&c);
     return (int64_t)((double)c.QuadPart * (1000000000.0 / (double)f.QuadPart));
 #else
-)GSRT"
-R"GSRT(    struct timespec ts;
+    struct timespec ts;
     clock_gettime(CLOCK_MONOTONIC, &ts);
     return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 #endif

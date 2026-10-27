@@ -444,8 +444,18 @@ GS_API int64_t gs_os_arg_count(void) { return gs_argc; }
    form with its final separator, NUL-terminated in buf (GS_OS_PATH_MAX
    characters): its length, or 0 where it is not known. JIT supplies its
    entry source directory; AOT discovers the running executable. */
+#ifdef GS_NATIVE_RUNTIME
+/* Gust: the runtime compiled into the compiler (src/runtime_native.c) is
+   built before any program, so gust run --mir sets the entry source's
+   directory here before the program starts. */
+GS_API const char *gs_native_resource_dir = NULL;
+#define GS_JIT_RESOURCE_DIR gs_native_resource_dir
+#endif
 static int gs_os_resource_native(gs_os_char *buf) {
 #ifdef GS_JIT_RESOURCE_DIR
+    #ifdef GS_NATIVE_RUNTIME
+        if (!gs_native_resource_dir) return 0;
+    #endif
     sl_u8 dir = { (uint8_t *)GS_JIT_RESOURCE_DIR, (int64_t)strlen(GS_JIT_RESOURCE_DIR) };
     int n = gs_os_native(dir, buf);
     return n < 0 ? 0 : n;

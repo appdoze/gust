@@ -639,13 +639,14 @@ inline string CodeGen::IntStr(int64_t v) {
 }
 
 inline string CodeGen::FltStr(double v, bool f32) {
-    // A folded NaN or infinity has no literal spelling; math.h's macros.
-    if (v != v) return "NAN";
-    if (std::isinf(v)) return v > 0 ? "INFINITY" : "(-INFINITY)";
+    // A folded NaN or infinity has no literal spelling; math.h's macros, by
+    // the runtime's names for them (runtime.h).
+    if (v != v) return "GS_NAN";
+    if (std::isinf(v)) return v > 0 ? "GS_INFINITY" : "(-GS_INFINITY)";
     // An f32 constant from halfway between FLT_MAX and 2^128 up rounds to an
     // infinity (§6.3), which C compilers reject as a literal or warn about.
     if (f32 && std::fabs(v) >= std::ldexp(2.0 - std::ldexp(1.0, -24), 127))
-        return v > 0 ? "INFINITY" : "(-INFINITY)";
+        return v > 0 ? "GS_INFINITY" : "(-GS_INFINITY)";
     string s;
     CatOne(s, v);
     if (f32) s += "f";

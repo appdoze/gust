@@ -2475,18 +2475,29 @@ def main():
         r.show_task(cimport_libs)
 
     # Gust: in-process runs through MIR (gust run --mir) against TinyCC's, on
-    # the fixtures with an expected output; on Windows, that --mir says it is
-    # not there.
+    # the fixtures with an expected output.
     def mir_runs():
         from mir_runs import check_mir_runs
         try:
             n = check_mir_runs(exe, max(1, r.jobs // 2))
-            r.ok(f"mir runs: {n} fixtures through gust run --mir, each as TinyCC runs it" if n else
-                 "mir runs: gust run --mir says it is not available on Windows")
+            r.ok(f"mir runs: {n} fixtures through gust run --mir, each as TinyCC runs it")
         except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
             r.fail("mir runs", str(e))
     if jit and not extra:
         r.show_task(mir_runs)
+
+    # Gust: the runtime's text the compiler embeds (src/runtime_inline.h) is
+    # src/runtime/ as it is, which the runtime compiled into the compiler
+    # for --mir (src/runtime_native.c) is built from: a program's unit and
+    # that runtime have to agree.
+    def runtime_text():
+        from runtime_text import check_runtime_text
+        try:
+            n = check_runtime_text()
+            r.ok(f"embedded runtime: src/runtime_inline.h holds the {n} files of src/runtime/ as they are")
+        except (RuntimeError, OSError) as e:
+            r.fail("embedded runtime", str(e))
+    r.show_task(runtime_text)
 
     # Gust: a library's exports as a Python package. Its shared library is
     # loaded into Python itself, which the sanitizers' runtimes are not, so

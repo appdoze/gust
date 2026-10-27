@@ -687,7 +687,7 @@ static GS_NORETURN void gs_park(void) {
 static GS_NORETURN void gs_end(int code) {
     if (!gs_end_first()) gs_park();
     fflush(NULL);
-    #if defined(__TINYC__) || defined(__MIRC__)
+    #if defined(__TINYC__) || defined(__MIRC__) || defined(GS_NATIVE_RUNTIME)
         if (gs_current_thread_id < 0) exit(code);
     #endif
     _Exit(code);

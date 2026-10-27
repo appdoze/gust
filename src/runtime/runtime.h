@@ -52,10 +52,56 @@
 
 #include <stdint.h>
 #include <stddef.h>
+#ifdef __MIRC__
+/* Gust: c2mir (gust run --mir, src/jit_mir.h) cannot read every platform's
+   headers of the C library: on Windows TinyCC's are MinGW's, written for
+   GCC, and the SDK's are MSVC's; macOS's stop at an #error for a compiler
+   they do not know. A --mir program's unit is the program's own, against
+   the runtime compiled into the compiler (src/runtime_native.c), and
+   declares what it uses of the library here: what the generated code and
+   this file call. A package's own C header may still include the real ones,
+   which declare the same. c2mir's stddef.h has no NULL on Windows. */
+#ifndef NULL
+#define NULL ((void *)0)
+#endif
+void *memcpy(void *dst, const void *src, size_t n);
+void *memmove(void *dst, const void *src, size_t n);
+void *memset(void *dst, int c, size_t n);
+int memcmp(const void *a, const void *b, size_t n);
+size_t strlen(const char *s);
+void *malloc(size_t n);
+void *calloc(size_t count, size_t n);
+void *realloc(void *p, size_t n);
+void free(void *p);
+double sqrt(double x);
+float sqrtf(float x);
+double fmod(double x, double y);
+float fmodf(float x, float y);
+double trunc(double x);
+float truncf(float x);
+double fma(double x, double y, double z);
+float fmaf(float x, float y, float z);
+/* What runtime_ext.h's math forwards to where it cannot rename libm's. */
+double sin(double x); double cos(double x); double tan(double x);
+double asin(double x); double acos(double x); double atan(double x);
+double atan2(double y, double x); double exp(double x); double log(double x);
+double log2(double x); double log10(double x); double pow(double x, double y);
+float sinf(float x); float cosf(float x); float tanf(float x);
+float asinf(float x); float acosf(float x); float atanf(float x);
+float atan2f(float y, float x); float expf(float x); float logf(float x);
+float log2f(float x); float log10f(float x); float powf(float x, float y);
+/* What a folded infinity or NaN is written as (CodeGen::FltStr): math.h's,
+   or their constant expressions, which c2mir folds. */
+#define GS_INFINITY (1.0f / 0.0f)
+#define GS_NAN (0.0f / 0.0f)
+#else
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
+#define GS_INFINITY INFINITY
+#define GS_NAN NAN
+#endif
 
 /* Every float operation rounds on its own. A C compiler may otherwise
    contract a multiply and an add into one fused rounding wherever the target
@@ -162,8 +208,14 @@
 #define GS_TLS
 #endif
 
-/* The linkage of everything the runtime defines outside this file. */
-#ifdef GS_SEPARATE_RUNTIME
+/* The linkage of everything the runtime defines outside this file. Gust:
+   the runtime compiled into the compiler for gust run --mir
+   (src/runtime_native.c) exports it too, for MIR to find by name. */
+#if defined(GS_NATIVE_RUNTIME) && defined(_WIN32)
+#define GS_API extern __declspec(dllexport)
+#elif defined(GS_NATIVE_RUNTIME)
+#define GS_API extern __attribute__((visibility("default")))
+#elif defined(GS_SEPARATE_RUNTIME)
 #define GS_API extern
 #else
 #define GS_API static

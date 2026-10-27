@@ -4022,13 +4022,17 @@ on: those are compile errors at `c_callback`. Spec §7.11.
 
 `gust run --mir file.gust` runs a program in process as `gust run` does,
 with no build, but compiles its C with MIR's C front end and optimizing
-generator (`third_party/mir`) instead of TinyCC: a longer start (tenths of a
-second for the compiler's own runtime) and faster code, about 2.3x off a
-build rather than TinyCC's 4.1x on the compare suite. It runs on Linux and
-macOS; on Windows MIR's front end cannot yet read the system headers the
-runtime needs, and `--mir` says so. Calls of `sqrt` become an instruction
-MIR was given for it, and c2mir copies small structs with moves rather than
-calls of `memcpy`; both are changes to MIR that MODIFICATIONS.md lists.
+generator (`third_party/mir`) instead of TinyCC: faster code, about 2.3x off
+a build rather than TinyCC's 4.1x on the compare suite, and as quick a
+start. MIR compiles only the program's own C: the runtime is compiled into
+the compiler itself (`src/runtime_native.c`), and the program calls it there,
+so a run reads no runtime and no system header and an empty program starts
+in about 30 ms. It runs on Windows, Linux and macOS. Programs with threads
+are refused, as `gust run` refuses them; build those. Calls of `sqrt` become
+an instruction MIR was given for it, c2mir copies small structs with moves
+rather than calls of `memcpy`, and on Windows MIR's code touches a large
+frame a page at a time, as the stack there grows; these are changes to MIR
+that MODIFICATIONS.md lists.
 
 ### C header import (Gust)
 
