@@ -379,6 +379,29 @@ for Go with the same HTTP, whose throughput also fell (from 121k–136k to
 worker owning its connections, with no work stealing, would make the
 pool's tail more fragile than Go's did not show up here.
 
+**Against Rust on tokio** (27 October 2026, `bench.py --quick --only "mixed,
+64 connections" --kinds gust,goraw,rustraw`: one rep of 3 s on the same CPU
+split, with others' programs running, so indicative only;
+`examples/api/results/2026-10-27-tokio-quick.json`). `examples/api/rust/` is
+the same minimal HTTP/1.1, routes, limits and JSON as `go/rawserver`, a task
+per connection on tokio 1.54's multi-thread runtime with eight workers
+(`TOKIO_WORKER_THREADS=8`, as the Go servers get `GOMAXPROCS=8`), and it
+passes `test_api.py --go`.
+
+| server, mixed, 64 connections | req/s | p50 | p99 | p99.9 | peak RSS | server CPU |
+|---|---:|---:|---:|---:|---:|---:|
+| Gust, worker pool | 168k | 303 µs | 2.2 ms | 4.4 ms | 6.4 MB | 70% |
+| Go, same HTTP as Gust | 140k | 380 µs | 2.8 ms | 6.0 ms | 19.0 MB | 77% |
+| Rust, tokio, same HTTP | 88k | 692 µs | 1.6 ms | 2.0 ms | 7.3 MB | 51% |
+
+At 20,000 requests per second, fixed rate, all three keep up: p99 161 µs
+(Gust), 243 µs (Go), 240 µs (tokio). Tokio's server is not short of CPU
+here (51%): taking out the 100 ms read deadline it keeps per read, as Go's
+twin does, changed nothing (90k). A likely limit is its runtime's one I/O
+driver, which one worker polls at a time, on Windows here; a run on Linux
+is still to do. The tails are tokio's best of the three, and its
+throughput the lowest.
+
 ## 6. The networking module
 
 The example's sockets and its event loop moved into the standard library

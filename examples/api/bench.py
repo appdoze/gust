@@ -2,7 +2,8 @@
 same load generator, on the same machine, with the same CPUs. There are two
 Go servers: `go`, idiomatic net/http, and `goraw`, the same minimal HTTP/1.1
 as the Gust server's (go/rawserver), so that what the language costs and
-what net/http costs can be told apart.
+what net/http costs can be told apart. Gust: and `rustraw`, the same minimal
+HTTP/1.1 in Rust on tokio (rust/), built with cargo where `--kinds` names it.
 
     python examples/api/bench.py [--reps 3] [--seconds 10] [--quick] [--out results.json]
                                  [--kinds gust,go] [--before old_api.exe] [--only name]
@@ -27,7 +28,7 @@ Scenarios with `kinds` run only those servers: large responses, which
 only the current Gust server has (the others ignore the query), and slow
 readers, which every Gust pool serves.
 """
-import argparse, json, os, signal, socket, statistics, subprocess, sys, threading, time, urllib.request
+import argparse, json, os, shutil, signal, socket, statistics, subprocess, sys, threading, time, urllib.request
 import psutil
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,8 +38,14 @@ EXE = ".exe" if os.name == "nt" else ""
 SERVER_CPUS = list(range(0, 8))
 CLIENT_CPUS = list(range(8, 16))
 
-def build():
+def build(kinds=()):
     os.makedirs(OUT, exist_ok=True)
+    if "rustraw" in kinds:
+        # From cargo's offline cache where it holds tokio, else the registry.
+        cmd = ["cargo", "build", "--release", "--manifest-path", os.path.join(HERE, "rust", "Cargo.toml"),
+               "--target-dir", os.path.join(OUT, "rust")]
+        if subprocess.run(cmd + ["--offline"], capture_output=True).returncode != 0:
+            subprocess.run(cmd, check=True, capture_output=True)
     gust = os.path.join(ROOT, "build", "Release", "gust" + EXE)
     subprocess.run([gust, "build", "--cc", "clang", "-o", os.path.join(OUT, "api_gust" + EXE),
                     os.path.join(HERE, "api.gust")], check=True, capture_output=True)
@@ -56,7 +63,7 @@ class Server:
     def __init__(self, kind, extra=()):
         self.kind = kind
         exe = EXES[kind] if os.path.isabs(EXES[kind]) else os.path.join(OUT, EXES[kind] + EXE)
-        env = dict(os.environ, GOMAXPROCS="8")
+        env = dict(os.environ, GOMAXPROCS="8", TOKIO_WORKER_THREADS="8")
         flags = subprocess.CREATE_NEW_PROCESS_GROUP if os.name == "nt" else 0
         # A port picked free can be taken again before the server binds it:
         # after a run with thousands of connections, their closed client
@@ -85,7 +92,7 @@ class Server:
         return m
 
     def go_stats(self):
-        if self.kind.startswith("gust"):
+        if self.kind.startswith("gust") or self.kind.startswith("rust"):
             return None
         with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/debug/vars", timeout=5) as r:
             ms = json.load(r)["memstats"]
@@ -279,11 +286,12 @@ SCENARIOS = [
      "kinds": ["gust"]},
 ]
 
-KINDS = ["gust", "gustthreads", "go", "goraw"]
+KINDS = ["gust", "gustthreads", "go", "goraw"] + (["rustraw"] if shutil.which("cargo") else [])
 # The executable each server kind runs, and the arguments it gets after its
 # port: the Gust pool gets as many workers as the server has CPUs, as Go's
 # servers get GOMAXPROCS=8.
-EXES = {"gust": "api_gust", "gustthreads": "api_gust", "go": "server_go", "goraw": "rawserver_go"}
+EXES = {"gust": "api_gust", "gustthreads": "api_gust", "go": "server_go", "goraw": "rawserver_go",
+        "rustraw": os.path.join(OUT, "rust", "release", "rawserver_rust" + EXE)}
 SERVER_ARGS = {"gust": ["--workers", "8"], "gustthreads": ["--thread-per-connection"], "gustbefore": ["--workers", "8"]}
 
 KEYS = ["rps", "p50_us", "p90_us", "p95_us", "p99_us", "p999_us", "max_us", "due_p50_us", "due_p95_us",
@@ -306,8 +314,8 @@ def main():
     args = ap.parse_args()
     if args.quick:
         args.reps, args.seconds = 1, 3
-    build()
     kinds = args.kinds.split(",") if args.kinds else list(KINDS)
+    build(kinds)
     if args.before:
         EXES["gustbefore"] = os.path.abspath(args.before)
         if "gustbefore" not in kinds:

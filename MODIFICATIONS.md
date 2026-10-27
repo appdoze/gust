@@ -361,7 +361,10 @@ git log upstream/master..main
   its measurement scripts (`scale.py` for idle connections), and raw
   results; see
   `docs/gust/backend_api.md`. Its first version had its own sockets in C
-  (`net.c`, `net.h`, `net.gust`, `api.build`), now removed.
+  (`net.c`, `net.h`, `net.gust`, `api.build`), now removed. Then a Rust
+  twin on tokio (`rust/`, a cargo project with tokio alone: the same
+  minimal HTTP, routes and JSON as `go/rawserver`, passing `test_api.py
+  --go`), which `bench.py` builds and runs as `rustraw` where cargo is.
 - `examples/echo/` (new): a TCP echo server on `net::serve`, with no HTTP,
   and a `--check` mode that serves itself and checks the echoes.
 

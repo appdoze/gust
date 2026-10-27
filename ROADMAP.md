@@ -323,7 +323,13 @@ the plain function.
   their own.
 
 **Exit:** an HTTP server and a callback-heavy GUI program written idiomatically; HTTP
-throughput compared against a Rust (tokio) server in `compare/`.
+throughput compared against a Rust (tokio) server in `compare/`. **(The tokio comparison
+done, beside the Go twins rather than in `compare/`, where the load generator and the
+behaviour tests are: `examples/api/rust/`, the same minimal HTTP as `go/rawserver` on
+tokio's multi-thread runtime, passing `test_api.py`; in one short run on Windows, mixed
+load over 64 connections, Gust's pool served 168k req/s, Go with the same HTTP 140k and
+tokio 88k, with tokio's tails the lowest (`docs/gust/backend_api.md` §5). A Linux run,
+and the GUI program, remain.)**
 
 ## Phase 8: Hardening and 1.0 (months 16–24)
 

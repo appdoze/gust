@@ -1,0 +1,12 @@
+[package]
+name = "rawserver_rust"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "time", "sync", "signal"] }
+
+[profile.release]
+opt-level = 3
+debug = false

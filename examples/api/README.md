@@ -1,4 +1,4 @@
-# A JSON API in Gust, and its Go twins
+# A JSON API in Gust, and its Go and Rust twins
 
 A small HTTP/1.1 service, a product catalog and orders, written the way a
 backend in Gust is meant to look, beside the same service in Go twice: on
@@ -13,6 +13,7 @@ the language and the library can be compared apart.
 | `go/server` | the Go twin on `net/http` |
 | `go/rawserver` | the Go twin with the same minimal HTTP as `http.gust` |
 | `go/loadgen` | the load generator all of them are measured with |
+| `rust/` | Gust: the Rust twin of `go/rawserver`, on tokio (a cargo project): the same minimal HTTP, routes and JSON, which `bench.py` runs as `rustraw` where cargo is installed |
 | `test_api.py` | the behaviour tests, run against any of the servers |
 | `fuzz_http.py` | mutated requests against a server: every answer well formed, no worker aborted, still serving |
 | `bench.py`, `tables.py` | the benchmark and its tables |
