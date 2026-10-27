@@ -79,6 +79,9 @@ git log upstream/master..main
 
 ## Compiler
 
+- `src/packages.h`: a sidecar may say `edition = "2026";`, the one edition
+  so far (`docs/gust/stability.md`, new: what 1.0 will freeze, editions,
+  versions and deprecation).
 - `gust cimport header.h` (new, `src/cimport.h`, `src/main.cpp`): a C
   header as a package, parsed by the compiler's own TinyCC: an `extern fn`
   per function the header declares, a struct per struct its functions use,

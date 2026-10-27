@@ -144,7 +144,7 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     if (!pkg.hassidecar) return;
     const char *lists[] = { "c_sources", "c_include", "c_headers", "c_defines", "c_flags_cc",
                             "c_flags_msvc", "c_libs", "dylibs" };
-    vector<string> known = { "cmake_target", "cmake_options", "main_thread_only", "exclude" };
+    vector<string> known = { "cmake_target", "cmake_options", "main_thread_only", "exclude", "edition" };
     for (auto key : lists)
         for (auto suffix : { "", "_windows", "_linux", "_macos" }) known.push_back(cat(key, suffix));
     if (isprogram) known.push_back("output");
@@ -178,6 +178,11 @@ inline void LoadSidecar(Package &pkg, bool isprogram) {
     pkg.cmake_target = bf.Str("cmake_target");
     pkg.cmake_options = bf.Strings("cmake_options");
     pkg.main_thread_only = bf.Bool("main_thread_only");
+    // Gust: the edition the source is written for (docs/gust/stability.md),
+    // of which there is one so far.
+    if (auto ed = bf.Str("edition"); !ed.empty() && ed != "2026")
+        throw CompileError { cat(pkg.sidecar, ": edition \"", ed, "\" is not one this compiler knows: ",
+                                 "it knows \"2026\"") };
     for (auto &e : bf.Strings("exclude")) pkg.exclude.push_back(PackageDir(cat(pkg.root, e)));
     if (isprogram) pkg.output = bf.Str("output");
     // dylibs maps a name the source's extern blocks use to the spelling

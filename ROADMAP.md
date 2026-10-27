@@ -278,7 +278,9 @@ throughput compared against a Rust (tokio) server in `compare/`.
   two of them crashes, all fixed.)**
 - A soundness review of the memory model and the new parallel features, ideally with
   outside reviewers. "Safer than Rust" has to be earned by people trying to break it.
-- Freeze the spec; publish a stability and edition policy.
+- Freeze the spec; publish a stability and edition policy. **(The policy written:
+  `docs/gust/stability.md`, what 1.0 freezes and what not, editions opted into in the
+  sidecar, versions and deprecation. The freeze itself is the 1.0 tag's.)**
 - Release 1.0 with a published benchmark and safety report (`compare/`, rerun).
 
 **Exit:** no known soundness bugs; ahead of Rust on every benchmark in `compare/`; 1.0 tagged.
