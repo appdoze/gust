@@ -895,6 +895,7 @@ inline void CodeGen::EmitProgramInit() {
         EmitThreadThunk(sp, stacks);
         workerregions = std::max(workerregions, stacks + thunkregions[sp]);
     }
+    EmitParallelThunks(workerregions);
     Append(code, "static void gs_program_init(int argc, char **argv) {\n"
                  "    if (gs_program_initialized) return;\n"
                  "    gs_rt_init(argc, argv, ", mainstacks, ", ", mainstacks + globalregions,

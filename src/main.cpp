@@ -20,6 +20,7 @@
 #include "typecheck_flow.h"
 #include "typecheck_calls.h"
 #include "typecheck_builtins.h"
+#include "typecheck_parallel.h"
 #include "typecheck_nodes.h"
 #include "optimize.h"
 #include "optimize_basecase.h"
@@ -39,6 +40,7 @@
 #include "codegen_emit.h"
 #include "codegen_stacks.h"
 #include "codegen_nodes.h"
+#include "codegen_parallel.h"
 #include "runtime_inline.h"
 #include "process.h"
 #include "jit.h"
@@ -1770,6 +1772,7 @@ int Main(int argc, char **argv) {
         for (auto &rf : runtime_files)
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
         auto stackcfg = StackConfigOf(cdefines);
+        codegen_jit = jit;   // Gust: a JIT run has no parallel for workers.
         CodeGen cg(ast, runtime_ext_text, progincludes, norfcheck, library, stackcfg.maxstacks, debug);
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT

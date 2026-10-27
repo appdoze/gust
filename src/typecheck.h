@@ -2147,6 +2147,7 @@ struct TypeCheck {
     int RealFrameIndex();
     Frame &CurRealFrame() { return frames[RealFrameIndex()]; }
     int FindBreakScope(bool forcontinue, string_view label = {});
+    void CheckParallelFor(ForLoop *f);   // Gust (typecheck_parallel.h).
     void CheckBreak(Break *b);
     // A loop or block exits in the join of the states at its breaks
     // (NoteBreak) and at its own exit, where it has one (JoinBreakFlow).

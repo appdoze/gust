@@ -1325,6 +1325,9 @@ NODE(ForLoop)
     string_view var;
     string_view idxvar;         // Optional second binding; empty if absent.
     string_view label;          // Gust: as While::label.
+    // Gust: `parallel for` (§6.5): the nested function its body became,
+    // which the loop's body calls once per iteration and workers call too.
+    SFunction *parallel = nullptr;
     // The integer types written for a range's or count's binder and for an
     // array's index binder (`for i: i32 in a..b`, `for x, i: u8 in arr`).
     TypeExpr *vartype = nullptr, *idxtype = nullptr;
@@ -1494,6 +1497,7 @@ struct SFunction {
     // of its cached tops before the call (CodeGen::CollectSpecs, SyncReach).
     bool readsalltops = false;
     bool isnested = false;
+    bool parallelbody = false;  // Gust: a `parallel for`'s body (ForLoop::parallel).
     SFunction *outer = nullptr;     // The function a nested one is declared in.
     Block *body = nullptr;
     // The body lost a statement to a parse error, or holds an incomplete
@@ -2209,6 +2213,9 @@ struct FnSpec {
     // lexparent is where the value was written, its sf the named function
     // whose body that is.
     bool isfunval = false;
+    // Gust: the body of a `parallel for`, proved race-free
+    // (CheckParallelFor), which stays a function workers call.
+    bool parallelbody = false;
     vector<TypeExpr *> argtypes;   // Concrete parameter types (the key, with the below).
     // Aligned with argtypes/params; a parameter holding no roots has the
     // default entry. Every pass uses the parameter index directly.

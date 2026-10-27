@@ -2378,6 +2378,37 @@ construction rules. Returns retain their lexical targets; a `break` or
 `continue` cannot cross an expansion boundary. The full v1 rules and
 implementation limit are in [the `const for` design](design/const_for.md).
 
+#### Parallel for (Gust)
+
+`parallel for i in n { … }` and `parallel for i in a..b { … }` run their
+iterations at once, on as many threads as `hardware_threads()` gives, with
+the effect of running them in order: no iteration may observe or touch
+what another writes. The checker proves it of the body:
+
+* It writes only variables it declares, and the enclosing code's arrays at
+  its own index: `out[i]`, or a field of that element, where `out` is an
+  array variable the enclosing code declares (an owned array, not a
+  reference or a slice, which may be another name for what it reads).
+* Where it writes such an array it reads it only at `out[i]`, and its
+  length.
+* It writes no global and no other variable around the loop, resizes
+  nothing outside itself, writes through no reference or slice that may
+  point outside it, and hands the enclosing code's storage to a callee for
+  writing only as `out[i]`.
+* What it calls writes no global and no variable of the enclosing code,
+  and calls no `extern fn` outside the standard library.
+* It uses no threads or queues. `return` and a `break` out of the body are
+  errors; `continue` ends the iteration.
+
+Anything else the body reads, globals included, it reads in place, without
+a copy: nothing writes it while the loop runs. The loop counts (`in n`, `in
+a..b`) with one binder; an array is iterated as `parallel for i in a.len`,
+indexing it. Iterations are handed out in chunks, about eight per thread,
+which the threads take as they finish, so uneven ones even out; each
+thread's storage is on data stacks of its own. Where there are no threads to
+run them on (an in-process run, `gust run`), the iterations run in order on
+the calling thread.
+
 ---
 
 ## 7. Functions

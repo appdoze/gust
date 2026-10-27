@@ -611,6 +611,7 @@ inline Val LoopExpr::Check(TypeCheck &tc, TypeExpr *expected) {
 
 inline Val ForLoop::Check(TypeCheck &tc, TypeExpr *) {
     tc.CheckFor(this);
+    if (parallel) tc.CheckParallelFor(this);   // Gust (typecheck_parallel.h).
     return tc.VoidVal();
 }
 

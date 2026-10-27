@@ -79,6 +79,21 @@ git log upstream/master..main
 
 ## Compiler
 
+- `parallel for i in n { ... }` and `parallel for i in a..b { ... }` (spec
+  §6.5): the parser makes the body a nested function of the counter, which
+  the loop calls (`parallel` is a word only before `for`, `src/parser.h`);
+  `src/typecheck_parallel.h` (new) proves it race-free: it writes its own
+  locals and the enclosing code's owned arrays only at its own index, reads
+  those only there, writes no global or other variable around the loop, and
+  calls nothing that does nor any extern outside the standard library.
+  Codegen (`src/codegen_parallel.h`, new) fills a job with the free
+  variables' arguments, starts up to `hardware_threads() - 1` workers with
+  stacks of their own that share the caller's globals, and has every thread
+  take chunks of the range (`src/runtime/runtime.h`); a JIT run takes them
+  all on the calling thread, in order. The body is never inlined
+  (`src/optimize.h`). `test/codegen/parallel_for.goose` (new) prints the
+  same in a JIT run and in builds at -O0 and -O2; ten rejection fixtures in
+  `test/errors_tc/` and two in `test/errors/` (new).
 - `src/packages.h`: a sidecar may say `edition = "2026";`, the one edition
   so far (`docs/gust/stability.md`, new: what 1.0 will freeze, editions,
   versions and deprecation).

@@ -1041,6 +1041,90 @@ static int64_t gs_thread_spawn(void (*entry)(uint8_t *), const void *args, int64
 }
 #endif
 
+/* Gust: parallel for (§6.5). The compiler fills a job per loop run: the
+   range, the chunk a taker claims at a time, the calling thread's globals
+   instance and the thunk a worker runs, which opens stacks of its own and
+   calls the body's function on the iterations it takes, with the free
+   variables' arguments the job holds after this header. The calling thread
+   takes chunks too, so where no worker starts (a JIT run, a range of one
+   chunk) it runs them all, in order. */
+#define GS_PFOR_MAXW 63
+typedef struct gs_pfor_job {
+    int64_t lo, hi, chunk;
+    int64_t next;
+    void *gl;
+    void (*thunk)(uint8_t *);
+    int64_t nworkers;
+    int64_t workers[GS_PFOR_MAXW];
+} gs_pfor_job;
+
+/* About eight chunks per thread that may run, so that uneven iterations
+   even out, and at least one iteration. */
+static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
+    int64_t n = hi > lo ? hi - lo : 0;
+    int64_t t = gs_hardware_threads();
+    int64_t c = n / (t > 0 ? t * 8 : 8);
+    return c > 0 ? c : 1;
+}
+
+/* The next chunk's first iteration, or -1 once none is left. */
+static int64_t gs_pfor_take(gs_pfor_job *j) {
+#if GS_NEED_THREADS
+#if defined(_MSC_VER) && !defined(__clang__)
+    int64_t a = InterlockedExchangeAdd64((volatile LONG64 *)&j->next, j->chunk);
+#else
+    int64_t a = __atomic_fetch_add(&j->next, j->chunk, __ATOMIC_SEQ_CST);
+#endif
+#else
+    int64_t a = j->next;
+    j->next += j->chunk;
+#endif
+    return a < j->hi ? a : -1;
+}
+
+#if GS_NEED_THREADS
+)GSRT"
+R"GSRT(static void gs_pfor_run(void (*entry)(uint8_t *), uint8_t *args) {
+    entry(args);
+}
+
+/* A worker ends: its stacks go, and the globals instance it read was the
+   calling thread's, which stays. */
+static void gs_pfor_release(void) {
+    gs_gl = NULL;
+    free(gs_stks);
+    gs_stks = NULL;
+    gs_nstks = 0;
+}
+#endif
+
+/* Workers for the chunks beyond the calling thread's first: at most one
+   fewer than hardware_threads() reports. */
+static void gs_pfor_start(gs_pfor_job *j) {
+    j->nworkers = 0;
+#if GS_NEED_THREADS
+    int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
+    int64_t w = gs_hardware_threads() - 1;
+    if (w > chunks - 1) w = chunks - 1;
+    if (w > GS_PFOR_MAXW) w = GS_PFOR_MAXW;
+    for (int64_t i = 0; i < w; i++) {
+        gs_pfor_job *p = j;
+        j->workers[j->nworkers++] = gs_thread_start(gs_pfor_run, gs_pfor_release, j->thunk, &p, sizeof p, 0);
+    }
+#endif
+}
+
+/* The loop ends once every worker has: what they wrote is then this
+   thread's to read. */
+static void gs_pfor_finish(gs_pfor_job *j, const char *file, int line) {
+#if GS_NEED_THREADS
+    for (int64_t i = 0; i < j->nworkers; i++) gs_thread_wait(j->workers[i], NULL, NULL, file, line);
+#endif
+    (void)j;
+    (void)file;
+    (void)line;
+}
+
 #endif  /* GS_RUNTIME_OBJECT */
 
 /* ---------------------------------------------------------------------------
@@ -1067,8 +1151,7 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
 GS_API void gs_spans_free(uint8_t *base, int64_t *n, uint8_t **top, int64_t idx, int64_t cnt);
 
 /* ---------------------------------------------------------------------------
-)GSRT"
-R"GSRT(   varint (§3.6): ULEB128; struct/payload/offset values additionally zigzag. */
+   varint (§3.6): ULEB128; struct/payload/offset values additionally zigzag. */
 
 static int64_t gs_uleb_read(const uint8_t *p) {
     uint64_t v = 0;
@@ -1201,7 +1284,8 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
 
-/* Byte search behind std's find_any and find_pair (runtime_impl.h): the
+)GSRT"
+R"GSRT(/* Byte search behind std's find_any and find_pair (runtime_impl.h): the
    first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
    (i + d < n); -1 if there is none. A set is std's ByteSet. */
 GS_API int64_t gs_scan_any(const uint8_t *p, int64_t n, const void *set);

@@ -179,8 +179,16 @@ Write the spec first; these change the language.
 
 - **Safe `parallel for`**: workers read the enclosing scope without copying and each
   iteration writes only its own part of an output. The root analysis proves it race-free;
-  no `Send`/`Sync`, no lifetimes.
-- **Work-stealing runtime**, so loops balance themselves.
+  no `Send`/`Sync`, no lifetimes. **(Done, additive (`parallel` is a word only before
+  `for`): the body is a nested function the checker proves writes only its locals and
+  the enclosing code's owned arrays at its own index; workers with stacks of their own
+  read everything else in place; a JIT run runs the iterations in order. 2.4x on a
+  1,000,000-iteration loop of integer work in a first measurement on this machine, others'
+  programs running; `test/codegen/parallel_for.goose`.)**
+- **Work-stealing runtime**, so loops balance themselves. **(In the simpler form: threads
+  take chunks, about eight per thread, from one counter as they finish them, which
+  balances uneven iterations; no per-thread deques, and the workers are started per loop
+  rather than kept in a pool.)**
 - **Deterministic reductions**: the same floating-point result at any thread count.
 - **Freeze-then-share**: large read-only data built at run time, read by every worker in
   place. The API example (`docs/gust/backend_api.md`) needs it for any shared data not

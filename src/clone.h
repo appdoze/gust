@@ -253,6 +253,7 @@ inline Node *ForLoop::Clone1(Ast &ast) const {
     f->vartype = ast.CloneExpansionType(vartype);
     f->idxtype = ast.CloneExpansionType(idxtype);
     f->label = label;
+    f->parallel = parallel;
     return f;
 }
 

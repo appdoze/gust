@@ -526,7 +526,8 @@ struct Optimizer {
             RunChildren(n, [&](Node *ch) { rec(ch, d + Around(n, ch)); });
         };
         rec(sp->body, 0);
-        info.noinline = noin || multiret;
+        // Gust: a parallel for's body is a function workers call.
+        info.noinline = noin || multiret || sp->parallelbody;
         info.c_inlinable = multiret && !noin;
     }
 
@@ -1039,6 +1040,7 @@ inline Node *ForLoop::Cp1(Inliner &inl) const {
     c->idxdef = inl.Remap(idxdef);
     c->iterkind = iterkind;
     c->label = label;
+    c->parallel = parallel;
     return c;
 }
 

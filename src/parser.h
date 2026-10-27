@@ -1203,6 +1203,7 @@ struct Parser {
             }
             case T_BLOCK: {
                 lex.Next();
+                PforDepth depth(*this, true, false);
                 auto e = Finish(New<EarlyBlock>(line, ParseBlockExpr("block expression")));
                 if (stmt_level) stmt_ended = true;
                 return e;
@@ -1218,12 +1219,14 @@ struct Parser {
             case T_WHILE: {
                 lex.Next();
                 auto cond = ParseScrutinee();
+                PforDepth depth(*this, true, true);
                 auto e = Finish(New<While>(line, cond, ParseBlockExpr("while body")));
                 if (stmt_level) stmt_ended = true;
                 return e;
             }
             case T_LOOP: {
                 lex.Next();
+                PforDepth depth(*this, true, true);
                 auto e = Finish(New<LoopExpr>(line, ParseBlockExpr("loop body")));
                 if (stmt_level) stmt_ended = true;
                 return e;
@@ -1236,6 +1239,9 @@ struct Parser {
             case T_GUARD:
                 Error("guard is a statement: it guards the rest of the block it is in");
             case T_RETURN: {
+                if (pforfn && curfn == pforfn)
+                    Error("a parallel for's body cannot return: its iterations run apart, on other "
+                          "threads (continue ends one)");
                 lex.Next();
                 auto sub = Sub(no_struct_lit);
                 auto r = New<Return>(line);
@@ -1255,6 +1261,9 @@ struct Parser {
             case T_BREAK: {
                 lex.Next();
                 auto label = ParseJumpLabel();
+                if (pforfn && curfn == pforfn && label.empty() && !pforbreaks)
+                    Error("no break leaves a parallel for: its iterations run apart, on other "
+                          "threads (continue ends one)");
                 auto sub = Sub(no_struct_lit);
                 auto val = lex.tok != T_SEMI && lex.tok != T_RCURLY ? ParseExpr() : nullptr;
                 auto b = New<Break>(line, val);
@@ -1265,9 +1274,14 @@ struct Parser {
                 lex.Next();
                 auto c = New<Continue>(line);
                 c->label = ParseJumpLabel();
+                // Gust: the next iteration of a parallel for: its body's end.
+                if (pforfn && curfn == pforfn && c->label.empty() && !pforloops)
+                    return Finish(New<Return>(line));
                 return Finish(c);
             }
             case T_IDENT: {
+                // Gust: `parallel` is a word only ahead of `for` (§6.5).
+                if (lex.attr == "parallel" && lex.PeekTok() == T_FOR) return ParseParallelFor();
                 // Gust: a label on a loop or block (`outer: for ...`), which a
                 // `break :outer` or `continue :outer` inside it names.
                 auto after = lex.PeekTok() == T_COLON ? lex.PeekTok2() : T_EOF;
@@ -1314,7 +1328,9 @@ struct Parser {
         return Finish(New<IfExpr>(line, cond, thenb, elseb));
     }
 
-    Node *ParseFor() {
+    // Gust: `bodyfn`, a `parallel for`'s nested function, which its body
+    // is parsed as (ParseParallelFor).
+    Node *ParseFor(SFunction *bodyfn = nullptr) {
         auto line = CurLine();
         lex.Next();
         if (lex.tok == T_BITAND) Role(R_UNARY);
@@ -1342,10 +1358,106 @@ struct Parser {
             iter = ParseExpr();
             if (IsNext(T_DOTDOT)) iter = Finish(New<RangeExpr>(line, iter, ParseExpr()));
         }
-        auto f = New<ForLoop>(line, byref, var, idxvar, iter, ParseBlockExpr("for body"));
+        if (bodyfn && (byref || !idxvar.empty()))
+            Error("a parallel for counts, `parallel for i in n` or `in a..b`, with one binder: "
+                  "index an array with it");
+        Block *body;
+        {
+            struct Scope {
+                Parser &p;
+                SFunction *saved;
+                PforDepth depth;
+                Scope(Parser &_p, SFunction *fn)
+                    : p(_p), saved(_p.curfn), depth(_p, !fn, true) { if (fn) p.curfn = fn; }
+                ~Scope() { p.curfn = saved; }
+            } sc(*this, bodyfn);
+            body = ParseBlockExpr("for body");
+        }
+        auto f = New<ForLoop>(line, byref, var, idxvar, iter, body);
         f->vartype = vartype;
         f->idxtype = idxtype;
         return Finish(f);
+    }
+
+    // Gust: the loops (for a continue) and the loops and blocks (for a
+    // break) open inside the body of the `parallel for` being parsed, whose
+    // own jumps the body's function cannot take (ParseParallelFor).
+    SFunction *pforfn = nullptr;
+    int pforloops = 0, pforbreaks = 0;
+    struct PforDepth {
+        Parser &p;
+        bool on, loop;
+        PforDepth(Parser &_p, bool counts, bool isloop)
+            : p(_p), on(counts && _p.pforfn && _p.curfn == _p.pforfn), loop(isloop) {
+            if (!on) return;
+            p.pforbreaks++;
+            if (loop) p.pforloops++;
+        }
+        ~PforDepth() {
+            if (!on) return;
+            p.pforbreaks--;
+            if (loop) p.pforloops--;
+        }
+    };
+    int parallelfors = 0;
+
+    // Gust: `parallel for i in n { body }` (§6.5). The body becomes a nested
+    // function of the loop's counter, declared where the loop is, so that
+    // its free variables are the variables in scope there, and the loop's
+    // body calls it; the checker proves its iterations race-free
+    // (CheckParallelFor) and codegen runs them on workers too. A continue of
+    // the loop is a return from the function, and neither a return nor a
+    // break may leave the body.
+    Node *ParseParallelFor() {
+        auto line = CurLine();
+        lex.Next();   // `parallel`
+        auto sf = new SFunction();
+        ast.functions.push_back(sf);
+        sf->line = line;
+        sf->isnested = true;
+        sf->outer = curfn;
+        sf->parallelbody = true;
+        sf->name = ast.Intern(cat("parallel_for_", ++parallelfors));
+        ForLoop *f;
+        {
+            struct Saved {
+                Parser &p;
+                SFunction *fn;
+                int loops, breaks;
+                Saved(Parser &_p) : p(_p), fn(_p.pforfn), loops(_p.pforloops), breaks(_p.pforbreaks) {}
+                ~Saved() {
+                    p.pforfn = fn;
+                    p.pforloops = loops;
+                    p.pforbreaks = breaks;
+                }
+            } saved(*this);
+            pforfn = sf;
+            pforloops = pforbreaks = 0;
+            f = (ForLoop *)ParseFor(sf);
+        }
+        Param p;
+        p.name = f->var;
+        p.line = line;
+        p.type = f->vartype;
+        sf->params.push_back(p);
+        sf->body = f->body;
+        // The body's value is no result: its tail is a statement.
+        if (sf->body->tail) {
+            sf->body->stmts.push_back(sf->body->tail);
+            sf->body->tail = nullptr;
+        }
+        sf->end = PrevEnd();
+        auto call = New<Call>(line, New<Ident>(line, sf->name));
+        call->args.push_back(New<Ident>(line, f->var));
+        auto nb = New<Block>(line);
+        nb->stmts.push_back(call);
+        f->body = nb;
+        f->parallel = sf;
+        auto outer = New<Block>(line);
+        outer->stmts.push_back(New<FnDecl>(line, sf));
+        outer->stmts.push_back(f);
+        if (stmt_level) stmt_ended = true;
+        return outer;
     }
 
     Node *ParseMatch() {

@@ -1007,6 +1007,11 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
         auto hi = cg.GenX(r ? r->hi : iter);
         auto hiv = cg.T();
         cg.L(ict, " ", hiv, " = ", hi, ";");
+        // Gust: a parallel for (§6.5), whose chunks workers take too.
+        if (parallel) {
+            cg.GenParallelFor(this, lov, hiv, iv);
+            return;
+        }
         if (!ix.empty()) cg.L("int64_t ", ix, " = 0;");
         auto wide = ct->intstorage != vdef->type->intstorage;
         auto ctr = wide ? cg.T() : iv;

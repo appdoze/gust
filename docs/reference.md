@@ -2594,6 +2594,36 @@ fn main() {
 dead 2 35
 ```
 
+### Parallel for (Gust)
+
+`parallel for i in n { … }` runs its iterations at once, on every hardware
+thread, with the effect of running them in order, which the checker proves:
+the body writes its own locals and the enclosing code's arrays only at its
+own index (`out[i]`, or a field of it), reads such an array only there,
+writes no global or other variable around the loop, and calls nothing that
+does. Everything else it reads in place, without copying. `continue` ends
+an iteration; `return` and `break` out of the body are errors. In
+`gust run` the iterations run in order on one thread, with the same result.
+
+```goose
+import std;
+
+fn main() {
+    let n = 1000;
+    var squares: i64[>..] = [];
+    squares.push_n(0, n);
+    let offset = 7;
+    parallel for i in n { squares[i] = i * i + offset; }
+    var total = 0;
+    for s in squares { total += s; }
+    print(total);
+}
+```
+
+```
+332840500
+```
+
 ### Labels on loops and blocks (Gust)
 
 A label names a loop or `block` (`outer: for …`), and `break :outer` or

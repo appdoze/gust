@@ -54,6 +54,10 @@
 
 namespace goose {
 
+// Gust: whether the C is for an in-process run (main.cpp sets it before a
+// CodeGen runs), which has no threads.
+inline bool codegen_jit = false;
+
 // Where a value goes: nowhere (evaluated for effect), into the C lvalue `s`,
 // or constructed at the top of the data stack `s`. `t` is the wanted type
 // where the receiver knows it; `lenlv` is set for stack destinations of
@@ -172,6 +176,14 @@ struct CodeGen {
     string code;        // Function bodies, size/eq helpers, thunks, main.
     string exportprotos;
     bool usesthreads = false;
+    // Gust: a parallel for (§6.5), which runs on workers in a build and on
+    // the calling thread alone in a JIT run (codegen_jit), where TinyCC
+    // places no thread-local storage.
+    bool usesparallel = false;
+    struct PforThunk { FnSpec *sp; string job, thunk; size_t nfv; string ivct; };
+    vector<PforThunk> pforthunks;
+    void GenParallelFor(ForLoop *f, const string &lov, const string &hiv, const string &iv);
+    void EmitParallelThunks(int64_t &workerregions);
     bool library = false;
     // Measurement only, and unsound: emit the whole `return ... from`
     // machinery but none of the post-call discriminant checks, so a program
@@ -1527,13 +1539,15 @@ struct CodeGen {
         EmitProgramInit();
         EmitExports();
         if (!library) EmitMain();
-        if (usesthreads) predefs = "#define GS_NEED_THREADS 1\n";
+        auto threads = usesthreads || (usesparallel && !codegen_jit);
+        if (threads) predefs = "#define GS_NEED_THREADS 1\n";
         // The instance block: with workers each thread reaches its own
-        // through gs_gl; without them there is only main's.
+        // through gs_gl; without them there is only main's. A parallel
+        // for's workers reach the calling thread's.
         Append(data, "typedef struct {\n", gblock.empty() ? "    uint8_t gs_none;\n" : gblock,
                "} gs_globals_t;\nstatic gs_globals_t gs_globals_main;\n",
-               usesthreads ? "#define GS_GL ((gs_globals_t *)gs_gl)\n"
-                           : "#define GS_GL (&gs_globals_main)\n");
+               threads ? "#define GS_GL ((gs_globals_t *)gs_gl)\n"
+                       : "#define GS_GL (&gs_globals_main)\n");
         // Extern fns: the runtime's own C follows the types it is written
         // against, then user headers, then prototypes for whatever neither
         // declares.
