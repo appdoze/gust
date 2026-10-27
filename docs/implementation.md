@@ -5975,6 +5975,41 @@ the body, `v` holds the value the decrement would have left. After the
 loop, `v` holds `0`, or its value at entry when that was not positive. An
 up-counting induction variable is the form clang compiles best.
 
+**Lanes** (Gust, `codegen_lanes.h`, ROADMAP Phase 5): a loop over an
+array's elements by value whose iterations are independent runs four of
+them at once, one per lane of a vector of doubles (`gs_l4d`, runtime_ext.h's
+`GS_LANES`), in a block `#if defined(GS_LANES)` keeps from MSVC, TinyCC and
+MIR. The rest then runs one iteration at a time in the loop as it is. Each
+lane does exactly what its iteration does, operation by operation, with
+contraction off (§6.13's pragma), so every result is the scalar loop's to
+the bit. `LaneGen::Plan` decides, before anything is emitted. The body may
+hold locals of doubles and of structs of them, arithmetic, elementwise
+struct arithmetic, field reads, sqrt, loads at an index every lane shares,
+loads and stores at the loop's own index, and inner loops over a range or
+another array. A local takes a lane value where it derives from the
+element or a load at the index, by a fixpoint over the body's declarations
+and assignments, and is uniform otherwise. A uniform value is emitted by
+`GenX` as the scalar loop would emit it and spread across the lanes where
+it meets a lane value. Lane values are emitted by `LaneGen` itself: a
+struct's lane type holds a `gs_l4d` per leaf, a load at the index gathers
+four elements' leaves, and a store scatters them back. Nothing but the
+body's own locals and the arrays it stores to at the index is written.
+Those arrays are read nowhere else in the loop and are not the one it
+walks, and every other array it reads is distinct from them: owned by this
+function and reached by name, or of another element type. So the
+iterations are independent. An abort can come only from a uniform
+operation there, and comes in the lane the block's first iteration would
+have raised it in, before the block stores anything. An array loaded
+or stored at the index that is shorter than the walked one ends the block
+where it ends, so its abort comes one iteration at a time as well. Lanes are only used where
+each lane runs an inner loop (`innerloop`): straight-line arithmetic is the
+C compiler's own to vectorize. A function with a loop in lanes is emitted as
+a `simd fn` is (§6.13), but its versions keep math's `mul_add` as the
+baseline does: its AVX2 and AVX-512 versions run a lane vector in one
+instruction, the baseline in two SSE2 ones. Covered by
+`test/codegen/lanes.goose`, whose output TinyCC and MSVC give one iteration
+at a time and clang and gcc in lanes.
+
 ### 6.13 `simd` functions
 
 A `simd fn` (spec §7.12) is emitted by `EmitSimdVersions` from the finished

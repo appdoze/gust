@@ -4009,6 +4009,30 @@ static double gs_sqrt(double x) { return sqrt(x); }
 static float gs_sqrtf(float x) { return sqrtf(x); }
 #endif
 
+/* Gust: four doubles side by side, one per lane of a loop the compiler runs
+   four iterations at a time (src/codegen_lanes.h). Each lane's operations
+   are its iteration's, rounded as they are. Where the C compiler has no
+   vector types, GS_LANES stays undefined and the loops run one iteration at
+   a time; -DGS_NO_LANES asks for that anywhere. */
+#if (defined(__clang__) || defined(__GNUC__)) && !defined(__TINYC__) && !defined(__MIRC__) && \
+    !defined(GS_NO_LANES)
+#define GS_LANES 4
+typedef double gs_l4d __attribute__((vector_size(32)));
+static inline gs_l4d gs_l4d_splat(double x) { return (gs_l4d){ x, x, x, x }; }
+/* Macros: gcc notes a change of ABI at a function taking a vector, though
+   an inlined one passes nothing. */
+#ifdef GS_SQRT_NO_ERRNO
+#define gs_l4d_sqrt(v) __builtin_elementwise_sqrt(v)
+#else
+#define gs_l4d_sqrt(v)                                                                   \
+    __extension__({                                                                      \
+        gs_l4d gs_l4d_v_ = (v);                                                          \
+        (gs_l4d){ gs_sqrt(gs_l4d_v_[0]), gs_sqrt(gs_l4d_v_[1]), gs_sqrt(gs_l4d_v_[2]),   \
+                  gs_sqrt(gs_l4d_v_[3]) };                                               \
+    })
+#endif
+#endif
+
 /* math's mul_add (stdlib/math.goose): x * y + z, fused into one rounding
    where the code is built for FMA, as two roundings elsewhere
    (GS_MUL_ADD_MODE, runtime.h). A call names the macro, which picks the
@@ -4073,7 +4097,8 @@ GS_LIBM double gs_log2(double x) GS_LIBM1(log2)
 GS_LIBM double gs_log10(double x) GS_LIBM1(log10)
 GS_LIBM double gs_pow(double x, double y) GS_LIBM2(pow)
 GS_LIBM float gs_sinf(float x) GS_LIBM1(sinf)
-GS_LIBM float gs_cosf(float x) GS_LIBM1(cosf)
+)GSRT"
+R"GSRT(GS_LIBM float gs_cosf(float x) GS_LIBM1(cosf)
 GS_LIBM float gs_tanf(float x) GS_LIBM1(tanf)
 GS_LIBM float gs_asinf(float x) GS_LIBM1(asinf)
 GS_LIBM float gs_acosf(float x) GS_LIBM1(acosf)
@@ -4101,8 +4126,7 @@ static int64_t gs_find_pair(sl_u8 s, const void *a, int64_t d, const void *b) {
 static int64_t gs_popcount(uint64_t x) {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
     return __builtin_popcountll(x);
-)GSRT"
-R"GSRT(#elif defined(_MSC_VER) && defined(_M_X64) && defined(__AVX__)
+#elif defined(_MSC_VER) && defined(_M_X64) && defined(__AVX__)
     return (int64_t)__popcnt64(x);
 #else
     int64_t n = 0;

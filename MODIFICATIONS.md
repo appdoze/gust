@@ -363,6 +363,21 @@ git log upstream/master..main
   no other name takes. `test/storage/root_structs.goose`,
   `test/threads/root_globals.goose` (new) and 23 rejections
   `test/errors_tc/root_*` (new).
+- Lanes (ROADMAP Phase 5): `src/codegen_lanes.h` (new) runs a loop over an
+  array's elements four iterations at a time, one per lane of a vector of
+  doubles, where the iterations are independent: n-body's force loop. Each
+  lane computes what its iteration does, so every result is the scalar
+  loop's to the bit. The block of lanes is under `#if defined(GS_LANES)`
+  (`src/runtime/runtime_ext.h`: `gs_l4d`, a `vector_size` type, with its
+  splat and sqrt), which clang and gcc define and MSVC, TinyCC and MIR do
+  not. The rest of the loop runs as it is. The hook is the array loop of
+  `ForLoop::CgStmt` (`src/codegen_nodes.h`). A function with such a loop is
+  emitted as a `simd fn` is, with AVX2 and AVX-512 versions, but keeps
+  math's `mul_add` unfused (`EmitSimdVersions`' `fused`,
+  `src/codegen_emit.h`). The aggregate hoist leaves the lane types'
+  declarations in their block. `test/codegen/lanes.goose` and
+  `test/codegen/lanes_short.goose` (new): the same output, and the same
+  abort, one iteration at a time and in lanes.
 
 ## Safety checks
 

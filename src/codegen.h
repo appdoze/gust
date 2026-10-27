@@ -1288,6 +1288,10 @@ struct CodeGen {
     void GenBodyCopy(Block *bodyb, int si, size_t first = 0);
     void GenBlocked(ForLoop *f, int k, const string &more, const string &step,
                     const function<void()> &bind, const string &cond);
+    // Gust: a loop whose iterations run four at a time, one per lane of a
+    // vector (codegen_lanes.h), then the rest as the loop is.
+    bool LanesFor(ForLoop *f);
+    void GenLanes(ForLoop *f, const string &ctr, const ArrView &v);
 
     // ------------------------------------------------------------------
     // Exits delivering a value: where the receiver expects it (§7.3, §7.9).
@@ -1474,8 +1478,14 @@ struct CodeGen {
     // The instruction-set levels above the baseline a simd function has a
     // version for; runtime.h names them (GS_SIMD_TARGET1, ...).
     static constexpr int SIMD_LEVELS = 2;
+    // A simd function's versions fuse math's mul_add (`fused`); a function
+    // given them for its loops in lanes (lanesused) keeps every result.
     void EmitSimdVersions(FnSpec *sp, const string &name, const string &params,
-                          const string &fnbody);
+                          const string &fnbody, bool fused = true);
+    // Gust: the function being emitted runs a loop in lanes
+    // (codegen_lanes.h), which its versions for AVX2 and AVX-512 run in
+    // single instructions: the baseline's are SSE2's, two per lane vector.
+    bool lanesused = false;
 
     // ------------------------------------------------------------------
     // Globals (§11.1): C globals plus dedicated data stacks for nonfixed

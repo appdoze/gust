@@ -40,6 +40,7 @@
 #include "codegen_render.h"
 #include "codegen_emit.h"
 #include "codegen_stacks.h"
+#include "codegen_lanes.h"
 #include "codegen_nodes.h"
 #include "codegen_parallel.h"
 #include "runtime_inline.h"

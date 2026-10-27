@@ -1190,6 +1190,16 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
                           cat(gi, " < (", v.len, ")"));
             return;
         }
+        // Gust: independent iterations four at a time, one per lane, then
+        // the rest as the loop is (codegen_lanes.h).
+        if ((lenbound < 0 || lenbound >= 2 * LaneGen::K) && !held && cg.LanesFor(this)) {
+            cg.L("int64_t ", gi, " = 0;");
+            cg.GenLanes(this, gi, v);
+            cg.GenLoopBody([&]() { bind(); }, body, d,
+                           cat("for (; ", gi, " < (", v.len, "); ", gi, "++) {"), nullptr, 0,
+                           { vdef, idxdef });
+            return;
+        }
     }
     setbound();
     // A body that calls a recursive function keeps what the loop needs in

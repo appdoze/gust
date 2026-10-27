@@ -323,6 +323,7 @@ inline bool CodeGen::RefTopsOk(FnSpec *sp, bool farreturn) {
 }
 
 inline void CodeGen::ResetFnState() {
+    lanesused = false;
     toporder.clear();
     lenslots.clear();
     growth.clear();
@@ -454,8 +455,10 @@ inline string CodeGen::HoistAggregateDecls(string &b) {
         string type(line.substr(ts, i - ts));
         bool hoist = false;
         string name, init;
+        // Gust: a lane value's type (codegen_lanes.h) is declared in the
+        // block of lanes, which a compiler without vector types never sees.
         if (!type.empty() && !isdigit((unsigned char)type[0]) && !keep.count(type) &&
-            i < line.size() && line[i] == ' ') {
+            type.compare(0, 5, "gs_l4") != 0 && i < line.size() && line[i] == ' ') {
             i++;
             auto ns = i;
             while (i < line.size() && isid(line[i])) i++;
@@ -512,7 +515,7 @@ inline string CodeGen::HoistAggregateDecls(string &b) {
 // C compiler from fusing a multiply and an add into one rounding in any of
 // them, which the wider instruction sets would otherwise let it do.
 inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const string &params,
-                                      const string &fnbody) {
+                                      const string &fnbody, bool fused) {
     // The parameter list is `type name` declarations whose types are
     // typedef names or pointers to them; the names forward the call.
     string args;
@@ -533,12 +536,16 @@ inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const stri
     // it whatever the target's mode (runtime.h).
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
         versions[lv] = Unique(cat(name, "_simd", lv));
-        Append(code, "#if GS_SIMD >= ", lv,
-               "\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
-               " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody,
-               "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n#endif\n");
+        if (fused)
+            Append(code, "#if GS_SIMD >= ", lv,
+                   "\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
+                   " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody,
+                   "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n#endif\n");
+        else
+            Append(code, "#if GS_SIMD >= ", lv, "\nGS_SIMD_TARGET", lv, " static ", ret, " ",
+                   versions[lv], "(", params, ") {\n", fnbody, "}\n#endif\n");
     }
-    Append(code, "static ", ret, " ", name, "(", params, ") {\n",
+    Append(code, "static ", fused ? "" : FnAttrs(sp), ret, " ", name, "(", params, ") {\n",
            "#if GS_SIMD >= 1\n    switch (gs_simd_level()) {\n");
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
         if (lv > 1) Append(code, "#if GS_SIMD >= ", lv, "\n");
@@ -644,6 +651,7 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     fnbody += bodyout;
     auto name = er ? ernames[sp] : curinfo->cname;
     if (sp->sf->issimd) EmitSimdVersions(sp, name, params, fnbody);
+    else if (lanesused) EmitSimdVersions(sp, name, params, fnbody, false);
     else Append(code, "static ", FnAttrs(sp), SigRet(sp), " ", name, "(", params, ") {\n", fnbody,
                 "}\n\n");
     curspec = nullptr;

@@ -266,6 +266,21 @@ as they are), and a lane code generator that splits struct values (`V3`) into a 
 field, broadcasts what every lane reads, and if-converts branches; that generator is the
 phase.
 
+**Status (27 October): built, exit met.** `src/codegen_lanes.h` runs a loop over an array's
+elements four iterations at a time, one per lane of a `vector_size(32)` vector of doubles,
+where its iterations are independent. The proof is the codegen's own: the body writes only
+its own locals and the arrays it stores to at the loop's index, which nothing else in the
+loop reads, and every other array it reads is distinct from them. Struct values become a
+vector per field, what every lane reads is computed once and spread across the lanes, and
+the rest of the loop runs one iteration at a time. A function holding such a loop gets the
+`simd fn` versions for AVX2 and AVX-512, chosen at run time, with `mul_add` unfused.
+Branches are not if-converted yet: a body with an `if` runs one iteration at a time. On
+the unmodified `compare/gust/main.goose`, built by clang 22 at -O2, n-body runs in 0.098 to
+0.107 s against rustc -O3 with fat LTO's 0.215 to 0.258 s, 2.1x to 2.5x run for run, with
+the same checksum. That is 0.13 s with SSE2's lanes alone and 0.22 s one iteration at a
+time. `test/codegen/lanes.goose` gives the same output to the last digit under TinyCC,
+MSVC, MIR, clang and gcc, and `test/codegen/lanes_short.goose` the same abort.
+
 **Exit:** unmodified `compare/gust/main.goose` nbody at least 2x faster than Rust with an
 identical checksum (the hand prototype reached 2.1x); `simd fn` copies never slower than
 the plain function.
