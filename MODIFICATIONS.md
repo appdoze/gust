@@ -496,6 +496,8 @@ git log upstream/master..main
   built.
 - `scripts/toolchain.py`, `scripts/check_doc_examples.py`: find a `gust`
   binary under `build/`, and a `goose` one from before the rename.
+  `check_doc_examples.py` compiles and runs every example `--offline`, so a
+  document's import of a git package (a placeholder's) fetches nothing.
 - `scripts/package_release.py`, `test/lsp_sweep.py`,
   `test/toolchain_selection.py`, `.github/workflows/ci.yml`,
   `.github/workflows/release.yml`: the binary is `gust`, and releases are

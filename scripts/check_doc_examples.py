@@ -26,7 +26,8 @@ and a summary line last; -v adds a line for every block that passed, the
 diagnostic each expected error produced, and the output of a program the
 document shows no output for. The examples are written under --out-dir
 (default build/doc_examples). test/run_tests.py runs this over the
-language reference.
+language reference. Gust: every compile is --offline, so an example that
+imports a git package (a placeholder repository, say) fetches nothing.
 """
 import argparse
 import concurrent.futures
@@ -93,7 +94,7 @@ class Checker:
         path = os.path.join(self.out_dir, name + ".goose")
         with open(path, "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
-        p = subprocess.run([self.goose, "check", path], capture_output=True, text=True,
+        p = subprocess.run([self.goose, "check", "--offline", path], capture_output=True, text=True,
                            encoding="utf-8", errors="replace")
         msg = "\n".join(l for l in (p.stdout + p.stderr).split("\n")
                         if not l.startswith(("parsed ok", "typechecked ok", "bce:")))
@@ -138,7 +139,7 @@ class Checker:
             lines.append("FAIL line %d (%s): the compiler warns: %s" % (start, label, " | ".join(warn[:2])))
             return lines, 1
         if self.run and label in ("as-is", "std") and has_main and marker != "check-only":
-            p = subprocess.run([self.goose, path], capture_output=True, text=True, encoding="utf-8",
+            p = subprocess.run([self.goose, "--offline", path], capture_output=True, text=True, encoding="utf-8",
                                errors="replace", timeout=300)
             if p.returncode != 0:
                 tail = p.stderr.strip().split("\n")[-1] if p.stderr.strip() else p.stdout.strip()[-200:]
