@@ -201,5 +201,68 @@
     "debug": {
       "outcome": "compile_error"
     }
+  },
+  "p11_parallel_sum_race": {
+    "note": "A race on one total through parallel for: a compile error.",
+    "release": {
+      "outcome": "compile_error",
+      "contains": [
+        "writes total, which another iteration may also reach"
+      ]
+    },
+    "checked": {
+      "outcome": "compile_error",
+      "contains": [
+        "writes total, which another iteration may also reach"
+      ]
+    },
+    "debug": {
+      "outcome": "compile_error",
+      "contains": [
+        "writes total, which another iteration may also reach"
+      ]
+    }
+  },
+  "p12_parallel_neighbour_write": {
+    "note": "A race on the next element through parallel for: a compile error.",
+    "release": {
+      "outcome": "compile_error",
+      "contains": [
+        "writes out, which another iteration may also reach"
+      ]
+    },
+    "checked": {
+      "outcome": "compile_error",
+      "contains": [
+        "writes out, which another iteration may also reach"
+      ]
+    },
+    "debug": {
+      "outcome": "compile_error",
+      "contains": [
+        "writes out, which another iteration may also reach"
+      ]
+    }
+  },
+  "p13_parallel_callee_global": {
+    "note": "A race on a global hidden in a callee of a parallel for: a compile error.",
+    "release": {
+      "outcome": "compile_error",
+      "contains": [
+        "calls scaled, which writes a global"
+      ]
+    },
+    "checked": {
+      "outcome": "compile_error",
+      "contains": [
+        "calls scaled, which writes a global"
+      ]
+    },
+    "debug": {
+      "outcome": "compile_error",
+      "contains": [
+        "calls scaled, which writes a global"
+      ]
+    }
   }
 }

@@ -1,0 +1,79 @@
+{
+  "machine": "11th Gen Intel(R) Core(TM) i7-11700F @ 2.50GHz, 32 GB RAM; Windows-11-10.0.26200-SP0",
+  "threads": 16,
+  "runs": 4,
+  "repeats": 3,
+  "generated": "2026-10-27 02:55",
+  "configs": [
+    {
+      "name": "gust/clang",
+      "lang": "gust",
+      "note": "gust build --cc clang",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.16190419998019934,
+        "nbody_par": 0.04107719997409731,
+        "raytrace": 0.08602109993807971,
+        "raytrace_par": 0.011792500037699938
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "nbody_par": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "raytrace_par": 293236.6121816068
+      },
+      "build_seconds": 0.7163356000091881,
+      "speedup": {
+        "nbody_par": 3.941461445334487,
+        "raytrace_par": 7.294560073188489
+      }
+    },
+    {
+      "name": "gust/msvc",
+      "lang": "gust",
+      "note": "gust build --cc msvc",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.1858683000318706,
+        "nbody_par": 0.05000320007093251,
+        "raytrace": 0.1091217000503093,
+        "raytrace_par": 0.015740899951197207
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "nbody_par": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "raytrace_par": 293236.6121816068
+      },
+      "build_seconds": 1.1889965999871492,
+      "speedup": {
+        "nbody_par": 3.717128099165761,
+        "raytrace_par": 6.9323672972084305
+      }
+    },
+    {
+      "name": "rust/rayon",
+      "lang": "rust",
+      "note": "cargo build --release (opt-level 3), rayon",
+      "status": "ok",
+      "seconds": {
+        "nbody": 0.1665683,
+        "nbody_par": 0.0706325,
+        "raytrace": 0.0973456,
+        "raytrace_par": 0.0125984
+      },
+      "checksums": {
+        "nbody": -363.2975526244576,
+        "nbody_par": -363.2975526244576,
+        "raytrace": 293236.6121816068,
+        "raytrace_par": 293236.6121816068
+      },
+      "build_seconds": 0.17462539998814464,
+      "speedup": {
+        "nbody_par": 2.3582387711039536,
+        "raytrace_par": 7.726822453644908
+      }
+    }
+  ],
+  "checksum_problems": []
+}

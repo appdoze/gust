@@ -190,11 +190,12 @@ Write the spec first; these change the language.
   `for`): the body is a nested function the checker proves writes only its locals and
   the enclosing code's owned arrays at its own index; workers with stacks of their own
   read everything else in place; a JIT run runs the iterations in order. On a pool of
-  workers the runtime keeps, which spin briefly between jobs before they sleep: 3.2x on a
-  1,000,000-iteration loop of integer work, 1.3x on an n-body step of 256 bodies run 1,000
-  times, on this machine with others' programs running; ThreadSanitizer reports nothing on
-  either; `test/codegen/parallel_for.goose`. Against Rust + rayon not yet measured: rayon
-  is a crate to download.)**
+  workers the runtime keeps, which spin briefly between jobs before they sleep and see a
+  job's start and report its end without a lock: against Rust + rayon in
+  `compare/run_parallel.py` (16 hardware threads, others' programs running), nbody 0.041 s
+  against rayon's 0.071 s (3.9x Gust's sequential run) and raytrace 0.0118 s against
+  0.0126 s (7.3x), every checksum the sequential one bit for bit in both languages;
+  ThreadSanitizer reports nothing on either or on `test/codegen/parallel_for.goose`.)**
 - **Work-stealing runtime**, so loops balance themselves. **(In the simpler form: threads
   take chunks, about eight per thread, from one counter as they finish them, which
   balances uneven iterations; no per-thread deques. A parallel for inside another runs on
@@ -215,10 +216,15 @@ Write the spec first; these change the language.
 - **Zero-copy tree transfer**: structures linked by relative references cross a queue as one
   block, or by handing over the memory region (Goose's open item 9).
 - Add multithreaded versions of raytrace and nbody to `compare/`, with Rust + rayon
-  equivalents, and new safety probes that try to race through `parallel for`.
+  equivalents, and new safety probes that try to race through `parallel for`. **(Done:
+  `compare/gust/parallel.goose` and `compare/rust_parallel/` (cargo, rayon), run by
+  `compare/run_parallel.py`, which CI runs; probes 11 to 13 race through a shared total,
+  the next element and a callee's global, each a compile error in Gust and, written with
+  scoped threads, in Rust. The tracer's spheres, walked by reference and only read, made
+  the checker follow a `for &x` loop's element rather than count the loop as a write.)**
 
 **Exit:** parallel raytrace and nbody at least as fast as Rust + rayon; every race probe is a
-compile error.
+compile error. **(Met on this machine, with the numbers above.)**
 
 ## Phase 5: Vectorization (months 8–10)
 

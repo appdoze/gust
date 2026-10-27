@@ -97,7 +97,17 @@ git log upstream/master..main
   which a fixpoint over the calls finds. The body is never inlined
   (`src/optimize.h`). `test/codegen/parallel_for.goose` (new) prints the
   same in a JIT run and in builds at -O0 and -O2; ten rejection fixtures in
-  `test/errors_tc/` and two in `test/errors/` (new).
+  `test/errors_tc/` and two in `test/errors/` (new). Then: a callee's
+  `for &x` loop over a parameter writes it only where the element is
+  written through or handed on to a callee that writes it (a tracer reading
+  its spheres by reference), and a write through a reference that may point
+  anywhere writes every parameter it could; two fixtures more. The pool's
+  workers see a job by its epoch and report it done by an atomic count,
+  with a pause in their spin, the mutex taken only by a sleeper and a job's
+  last worker. `compare/gust/parallel.goose`, `compare/rust_parallel/`
+  (Rust with rayon) and `compare/run_parallel.py` (new) measure nbody and
+  raytrace against rayon, which CI checks; `compare/safety/` probes 11 to 13
+  (new) race through `parallel for`, each a compile error.
 - `src/packages.h`: a sidecar may say `edition = "2026";`, the one edition
   so far (`docs/gust/stability.md`, new: what 1.0 will freeze, editions,
   versions and deprecation).
