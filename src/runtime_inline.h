@@ -424,6 +424,37 @@ static inline int gs_simd_level(void) {
 #endif
 #define GS_MUL_ADD_MODE GS_MUL_ADD_BASE
 
+/* Gust: Windows commits a data stack's pages as they are first touched,
+   from the fault handler (runtime_impl.h, gs_fault_filter), and on hosted
+   CI under load the exception that reaches it has come with its thread's
+   AVX state recorded as all zero although the C library's memcpy was in the
+   middle of its vector loop: resumed, the copy stored 16 zero bytes of
+   every 32 from the page on (test/stress/net_starved.goose, where the
+   context record said so; the live registers were zero by then too, so the
+   handler cannot put them back). So a copy, move or fill the library may
+   do with 32-byte registers first writes one byte of each page it reaches,
+   a store with no vector state live, which takes any commit there; the
+   byte keeps its value, and the copy then writes it as it would. Copies of
+   a constant size the compiler writes out itself use 16-byte registers
+   (32-byte ones only inside a simd function's AVX versions), and a fill of
+   zeros loses only zeros, so neither needs it. */
+#ifdef _WIN32
+static void gs_first_touch(void *d, size_t n) {
+    for (uintptr_t a = (uintptr_t)d, p = a; p < a + n; p = (p | 4095) + 1) {
+        volatile uint8_t *q = (volatile uint8_t *)p;
+        *q = *q;
+    }
+}
+#if defined(__clang__) || defined(__GNUC__)
+#define GS_TOUCHED(d, n) \
+    (!__builtin_constant_p(n) && (size_t)(n) >= 32 ? gs_first_touch((d), (size_t)(n)) : (void)0)
+#else
+#define GS_TOUCHED(d, n) ((size_t)(n) >= 32 ? gs_first_touch((d), (size_t)(n)) : (void)0)
+#endif
+#else
+#define GS_TOUCHED(d, n) ((void)0)
+#endif
+
 /* The generated code's memcpy and memset of zeros. Most move or clear the
    1 to 32 bytes of a field, an element or a reference, a constant size the
    optimizing backends turn into a few moves. TinyCC calls the C library for
@@ -461,7 +492,7 @@ static inline int gs_simd_level(void) {
                                   GS_AT(uint64_t, d, (n) - 16) = 0, GS_AT(uint64_t, d, (n) - 8) = 0) \
      : (void)memset((d), 0, (n)))
 #else
-#define GS_MEMCPY(d, s, n) memcpy((d), (s), (n))
+#define GS_MEMCPY(d, s, n) (GS_TOUCHED(d, n), (void)memcpy((d), (s), (n)))
 #define GS_MEMZERO(d, n) memset((d), 0, (n))
 #endif
 
@@ -492,7 +523,8 @@ static void gs_memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     if (n <= 16) {
-        if (n >= 8) {
+)GSRT"
+R"GSRT(        if (n >= 8) {
             uint64_t a = gs_ld64(s), b = gs_ld64(s + n - 8);
             GS_MEMCPY(d, &a, 8);
             GS_MEMCPY(d + n - 8, &b, 8);
@@ -513,12 +545,21 @@ static void gs_memcpy(void *dst, const void *src, size_t n) {
         GS_MEMCPY(d + n - 16, s + n - 16, 16);
         return;
     }
+    GS_TOUCHED(d, n);
     memcpy(dst, src, n);
 }
 
 static void gs_memmove(void *dst, const void *src, size_t n) {
-    if (n) memmove(dst, src, n);
+    if (!n) return;
+    GS_TOUCHED(dst, n);
+    memmove(dst, src, n);
 }
+
+/* Gust: the generated code's other moves and fills, touched as GS_MEMCPY's
+   copies are (a move's runs may overlap, which a byte keeping its value
+   does not disturb). */
+#define GS_MEMMOVE(d, s, n) (GS_TOUCHED(d, n), (void)memmove((d), (s), (n)))
+#define GS_MEMSET(d, c, n) (GS_TOUCHED(d, n), (void)memset((d), (c), (n)))
 
 /* Whether n bytes at a and b are equal: two overlapping loads per side up
    to 16 bytes, where keys and names mostly are, then 16 bytes a step with
@@ -532,8 +573,7 @@ static GS_NOINLINE int gs_memeq_long(const uint8_t *p, const uint8_t *q, size_t 
         if ((gs_ld64(p + i) ^ gs_ld64(q + i)) | (gs_ld64(p + i + 8) ^ gs_ld64(q + i + 8)))
             return 0;
     return ((gs_ld64(p + n - 16) ^ gs_ld64(q + n - 16)) |
-)GSRT"
-R"GSRT(            (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
+            (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
 }
 
 /* Gust: inline for c2mir, which then marks its calls to be inlined (MIR's
@@ -654,7 +694,8 @@ static T gs_mul_##SFX(T a, T b, const char *file, int line) { \
     return (T)r; } \
 static T gs_neg_##SFX(T a, const char *file, int line) { \
     int64_t r = -(int64_t)a; \
-    if (r < MIN || r > MAX) gs_ovf_neg(a, #SFX, file, line); \
+)GSRT"
+R"GSRT(    if (r < MIN || r > MAX) gs_ovf_neg(a, #SFX, file, line); \
     return (T)r; } \
 static T gs_shl_##SFX(T a, int64_t n) { \
     return (T)((uint64_t)a << (n & (BITS - 1))); } \
@@ -699,8 +740,7 @@ static int64_t gs_mul_i64(int64_t a, int64_t b, const char *file, int line) {
 }
 static int64_t gs_neg_i64(int64_t a, const char *file, int line) {
     if (a == INT64_MIN) gs_ovf_neg(a, "i64", file, line);
-)GSRT"
-R"GSRT(    return (int64_t)(0u - (uint64_t)a);
+    return (int64_t)(0u - (uint64_t)a);
 }
 static int64_t gs_shl_i64(int64_t a, int64_t n) {
     return (int64_t)((uint64_t)a << (n & 63));
@@ -841,7 +881,8 @@ static uint64_t gs_divu_q(uint64_t x, uint64_t magic, uint8_t more) {
     uint64_t q;
     if (!magic) return x >> more;
     q = gs_mulhi_u64(magic, x);
-    if (more & GS_DIVU_ADD) return (((x - q) >> 1) + q) >> (more & GS_DIVU_SHIFT);
+)GSRT"
+R"GSRT(    if (more & GS_DIVU_ADD) return (((x - q) >> 1) + q) >> (more & GS_DIVU_SHIFT);
     return q >> more;
 #else
     (void)magic;
@@ -895,8 +936,7 @@ static GS_NOINLINE int64_t gs_f2iwrap_slow(double d) {
     return (int64_t)(uint64_t)d;
 }
 static int64_t gs_f2iwrap(double d) {
-)GSRT"
-R"GSRT(    if (d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
+    if (d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
     return gs_f2iwrap_slow(d);
 }
 
@@ -1017,7 +1057,8 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
                                void (*release)(void), void (*entry)(uint8_t *),
                                const void *args, int64_t argsize, int contained);
 /* Whether the worker returned rather than aborted, once it has ended. Where
-   `msg` is not NULL, the first such wait for a worker that aborted takes its
+)GSRT"
+R"GSRT(   `msg` is not NULL, the first such wait for a worker that aborted takes its
    message: `msg` and `len` are set to it, which the caller frees with
    gs_free_msg, or to NULL and no bytes. */
 GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
@@ -1061,8 +1102,7 @@ typedef struct gs_qnode {
 } gs_qnode;
 
 typedef struct gs_qstate *gs_queue;
-)GSRT"
-R"GSRT(#define GS_QUEUE_INIT NULL
+#define GS_QUEUE_INIT NULL
 
 GS_API void gs_qinit(gs_queue *q);
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
@@ -1226,7 +1266,8 @@ static void gs_pfor_finish(gs_pfor_job *j, const char *file, int line) {
 /* Where a run of cnt elements goes in a pool of len elements, taken off the
    freelist: for alloc_slice, and for a slice realloc_slice moves. */
 GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t len,
-                              int64_t cnt);
+)GSRT"
+R"GSRT(                              int64_t cnt);
 /* realloc_slice growing the non-empty slice [idx, idx + ol), which does not
    end the array, to cnt elements: where it starts now. The caller copies
    the elements where that moved. */
@@ -1275,8 +1316,7 @@ static GS_NOINLINE int64_t gs_uleb_size_slow(const uint8_t *p) {
 }
 
 #define GS_ULEB_READ(p) ((*(p) & 0x80) ? gs_uleb_read_slow(p) : (int64_t)*(p))
-)GSRT"
-R"GSRT(#define GS_ULEB_SIZE(p) ((*(p) & 0x80) ? gs_uleb_size_slow(p) : (int64_t)1)
+#define GS_ULEB_SIZE(p) ((*(p) & 0x80) ? gs_uleb_size_slow(p) : (int64_t)1)
 
 static int64_t gs_uleb_write(uint8_t *p, uint64_t v) {
     uint8_t *q = p;
@@ -3970,6 +4010,7 @@ typedef struct { int64_t *data; int64_t len; } sl_i64;   /* Gust: for net's wait
    the header's count grows. */
 static void gs_bld_append(gs_rref b, const void *p, int64_t n) {
     if (n <= 0) return;
+    GS_TOUCHED(b.stk->top, n);   /* runtime.h: a vector copy faults nowhere */
     memcpy(b.stk->top, p, (size_t)n);
     b.stk->top += n;
     b.hdr->len += n;
@@ -4095,9 +4136,9 @@ static float gs_mul_addf(float x, float y, float z) {
    domain or range error, so a C compiler takes each call for a write to
    memory: a loop around one loads again after it whatever it had hoisted
    out or kept in registers. Goose has no errno, so where the compiler has
-   asm labels and the const attribute each is libm's own function declared
 )GSRT"
-R"GSRT(   under a name of its own as depending on its arguments alone; elsewhere
+R"GSRT(   asm labels and the const attribute each is libm's own function declared
+   under a name of its own as depending on its arguments alone; elsewhere
    the name forwards to libm. */
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
 #define GS_LIBM_SYM2(p, f) #p #f

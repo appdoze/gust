@@ -23,6 +23,7 @@ typedef struct { int64_t *data; int64_t len; } sl_i64;   /* Gust: for net's wait
    the header's count grows. */
 static void gs_bld_append(gs_rref b, const void *p, int64_t n) {
     if (n <= 0) return;
+    GS_TOUCHED(b.stk->top, n);   /* runtime.h: a vector copy faults nowhere */
     memcpy(b.stk->top, p, (size_t)n);
     b.stk->top += n;
     b.hdr->len += n;

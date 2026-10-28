@@ -1,0 +1,76 @@
+# Gust: a stress of net_serve.goose's starved worker on Windows, where its
+# reply once arrived at full length with zeros in it (test/stress): a data
+# stack's commit fault inside the C library's vector memcpy, whose AVX state
+# came back zero (runtime.h, GS_TOUCHED). Many copies at once, for the load
+# the suite's runs had, with the whole net_serve.goose alongside. Runs on
+# the stress/ branches only: push one to rerun it.
+name: Stress
+
+on:
+  push:
+    branches: ['stress/**']
+  workflow_dispatch:
+
+jobs:
+  net:
+    name: windows-latest / ${{ matrix.cc }}
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [msvc, clang]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target goose
+
+      - name: Build the programs
+        run: |
+          build/Release/gust.exe build -q -O2 --cc ${{ matrix.cc }} -o starved.exe test/stress/net_starved.goose
+          build/Release/gust.exe build -q -O2 --cc ${{ matrix.cc }} -o net_serve.exe test/threads/net_serve.goose
+
+      # Six copies of the stress, 40 rounds each, and two loops of the whole
+      # test, all at once; each failure's output is kept.
+      - name: Stress
+        run: |
+          mkdir -p out
+          for c in 1 2 3 4 5 6; do
+            ( ./starved.exe 40 > out/starved-$c.txt 2>&1; echo "exit $?" >> out/starved-$c.txt ) &
+          done
+          for c in 1 2; do
+            (
+              for i in $(seq 1 12); do
+                ./net_serve.exe > out/ns-$c-$i.txt 2>&1
+                if diff -q <(tr -d '\r' < out/ns-$c-$i.txt) test/expected/net_serve.out > /dev/null; then
+                  rm out/ns-$c-$i.txt
+                else
+                  echo "net_serve run $c-$i differs"
+                fi
+              done
+            ) &
+          done
+          wait
+          bad=0
+          for f in out/starved-*.txt; do
+            if ! grep -q '^exit 0' "$f"; then
+              bad=1
+              echo "== $f"
+              grep -v 'intact true, on the wire true' "$f"
+            fi
+          done
+          for f in out/ns-*.txt; do
+            [ -e "$f" ] || continue
+            bad=1
+            echo "== $f"
+            diff <(tr -d '\r' < "$f") test/expected/net_serve.out || true
+          done
+          echo "stress rounds run: $(cat out/starved-*.txt | grep -c '^round ')"
+          exit $bad
