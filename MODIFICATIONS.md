@@ -390,6 +390,12 @@ git log upstream/master..main
   `test/codegen/lanes.goose`, `test/codegen/lanes_short.goose` and
   `test/codegen/lanes_if.goose` (new): the same output, and the same
   abort, one iteration at a time and in lanes.
+- Base-case inlining's match form (`SetupMatch`, `src/optimize_basecase.h`):
+  a recursive function whose body is one `match` over an enum's variants,
+  some arms recursing and some not, has the arms that do not recurse copied
+  to each self-call, with a wildcard arm making the call for the rest, so a
+  child that is a leaf costs no frame. `compare/`'s interp runs a fifth
+  faster under clang. `test/optimizer/basecase_match.goose` (new).
 
 ## Safety checks
 

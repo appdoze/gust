@@ -4224,7 +4224,15 @@ compare literals and parameters the body never assigns (`GuardOK`): such a
 test gives the same answer at both points and cannot abort. `s1`, `s3` and
 `e` may not return, jump out, call into the cycle or call a function that
 may `return ... from` this one, whose copy would leave the caller's frame.
-Neither form applies to mutual recursion, or to a self-call whose array
+Gust adds the match form (`SetupMatch`), the shape of a tree's evaluator:
+a body that is one `match s { ... }` over an enum's variants, with no
+wildcard, `s` a pure read and some arms recursing. The arms that do not
+recurse are the base case, under the same size rule; a self-call becomes
+`{ let p = a; ...; match s[p] { leaf arms[p], _ => f(p...) } }`, so a child
+that is a leaf costs no frame (compare/'s interp, a fifth faster under
+clang). The leaf arms may write and call as `e` may, and run exactly when
+the callee's would.
+None of the forms applies to mutual recursion, or to a self-call whose array
 result is passed where a slice is expected: the array has to outlive the
 `if`, and each arm would build it in a scope of its own.
 
@@ -6698,8 +6706,10 @@ an array of them, syncs every cached stack.
 * At `-O1` and above, a `recursive fn` has its base case inlined at every
   self-call, in either call syntax, when its body starts with the base case
   `if c { return e; }`, or has every self-call inside one `if c { ... }`
-  that compares parameters it never assigns. This halves the calls of a
-  complete tree walk. Mutual recursion disables it, and a self-call whose
+  that compares parameters it never assigns, or (Gust) when its body is one
+  `match` over an enum whose arms that do not recurse are then copied to
+  each self-call. This halves the calls of a complete tree walk. Mutual
+  recursion disables it, and a self-call whose
   array result is taken whole by a slice destination stays a call.
 * A self-recursive integer function whose tail returns fold with one
   associative operator becomes a loop; in `1 + f(l) + f(r)` only the calls

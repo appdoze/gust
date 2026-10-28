@@ -34,6 +34,15 @@
 // literals: the call site evaluates it before s1 runs, where the callee
 // evaluates it after, so it has to give the same answer then and be unable
 // to abort. s1, s3 and e may not return, jump out or call into the cycle.
+//
+// Gust: the match form, a body that is one `match` on the parameters over
+// an enum's variants, as a tree's evaluator is. Its leaf arms, those that do
+// not recurse, are the base case: a self-call becomes
+//
+//     { let p1 = a1; ...; match s[p := t] { leaf arms[p := t], _ => f(t...) } }
+//
+// so that a child that is a leaf costs no frame (interp in compare/, a fifth
+// faster). s is a pure read, evaluated again by the callee as c is.
 #pragma once
 
 namespace goose {
@@ -53,6 +62,9 @@ struct BaseCaseInliner {
     // is these statements followed by baseexpr.
     bool guarded = false;
     vector<Node *> basestmts;
+    // The match form: the scrutinee and the leaf arms, to which a self-call
+    // adds a wildcard arm of its own.
+    MatchExpr *basematch = nullptr;
 
     BaseCaseInliner(Optimizer &_o) : o(_o), ast(_o.ast) {}
 
@@ -137,13 +149,67 @@ struct BaseCaseInliner {
         basecond = baseexpr = nullptr;
         basenot = guarded = false;
         basestmts.clear();
+        basematch = nullptr;
         if (!o.caninline || !sp->sf->isrec || !sp->body) return;
         // Binding a non-fixed parameter to a temporary would give a cycle
         // member a non-fixed local in scope at the self-call, which §7.8
         // forbids — and copy the value at every level besides, where
         // passing it costs nothing.
         for (auto pv : sp->params) if (!FixedType(pv->type)) return;
-        if (!SetupLeading(sp)) SetupGuarded(sp);
+        if (!SetupLeading(sp) && !SetupMatch(sp)) SetupGuarded(sp);
+    }
+
+    // The match form: the body is `match s { ... }`, as its value or as
+    // `return match s { ... };`, over an enum's variants with no wildcard,
+    // some arms recursing and some not.
+    bool SetupMatch(FnSpec *sp) {
+        auto body = sp->body;
+        Node *only = body->stmts.empty() ? body->tail : body->stmts.size() == 1 && !body->tail ? body->stmts[0]
+                                                                                              : nullptr;
+        if (auto r = only ? Is<Return>(only) : nullptr) {
+            if (r->target != sp->sf || !r->from.empty() || r->vals.size() != 1 || sp->rets.size() != 1)
+                return false;
+            only = r->vals[0];
+        } else if (only != body->tail || sp->rets.size() != 1) {
+            return false;
+        }
+        auto m = only ? Is<MatchExpr>(only) : nullptr;
+        if (!m) return false;
+        set<VarDef *> bound;
+        if (!BaseOK(m->scrutinee, bound, true)) return false;
+        vector<const MatchArm *> leaves;
+        auto recursing = 0;
+        auto sz = CountNodes(m->scrutinee);
+        for (auto &arm : m->arms) {
+            if (arm.pat.kind == P_WILDCARD || arm.variants.empty() || !arm.ranges.empty()) return false;
+            if (SelfCalls(arm.body, sp)) {
+                recursing++;
+                continue;
+            }
+            set<VarDef *> armbound = bound;
+            if (arm.binder) armbound.insert(arm.binder);
+            if (!BaseOK(arm.body, armbound, false)) return false;
+            sz += CountNodes(arm.body);
+            leaves.push_back(&arm);
+        }
+        if (leaves.empty() || !recursing || !SizeOK(sp, sz)) return false;
+        Inliner inl { o, ast, sp, sp, {}, {} };
+        for (auto pv : sp->params) inl.vmap[pv] = pv;   // Parameters stay themselves.
+        basematch = ast.New<MatchExpr>(m->line, inl.Cp(m->scrutinee));
+        for (auto arm : leaves) basematch->arms.push_back(CpArm(inl, *arm));
+        basematch->exprtype = m->exprtype;
+        basespec = sp;
+        return true;
+    }
+
+    // An enum arm copied as MatchExpr::Cp1 copies it.
+    static MatchArm CpArm(Inliner &inl, const MatchArm &arm) {
+        MatchArm a;
+        a.pat = arm.pat;
+        a.variants = arm.variants;
+        a.binder = inl.Remap(arm.binder);
+        a.body = inl.Cp(arm.body);
+        return a;
     }
 
     // The inliner's size rule, against what the rewrite duplicates: sz
@@ -289,6 +355,29 @@ struct BaseCaseInliner {
             c->SetArgNode(i, id);
         }
         auto vt = c->exprtype ? c->exprtype : ast.voidtype;
+        if (basematch) {
+            // The leaf arms against the bindings, then the call for the rest.
+            auto m = (MatchExpr *)inl.Cp(basematch);
+            auto around = decls.empty() ? 1 : 2;
+            o.depth += around;
+            m->scrutinee = o.Opt(m->scrutinee);
+            o.branchdepth++;
+            for (auto &arm : m->arms) arm.body = o.OptIn(m, arm.body);
+            o.branchdepth--;
+            o.depth -= around;
+            MatchArm rest;
+            rest.pat.kind = P_WILDCARD;
+            rest.body = c;
+            m->arms.push_back(rest);
+            m->exprtype = vt;
+            o.basecases++;
+            if (decls.empty()) return m;
+            auto blk = ast.New<Block>(c->line);
+            blk->stmts = std::move(decls);
+            blk->tail = m;
+            blk->exprtype = vt;
+            return blk;
+        }
         auto cond = o.Opt(inl.Cp(basecond));
         auto arm = [&](Node *v) {
             auto b = ast.New<Block>(c->line);
