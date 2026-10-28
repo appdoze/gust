@@ -26,9 +26,25 @@
 // or a binding of either (`let q = p;`, `let q .= p;`). Through one, a
 // field is read, a function taking `R&` called (also as `x.f(...)`), and
 // that is all: a root value is never copied, assigned whole, returned,
-// stored in a field or an element, or handed to a builtin, and its type
-// appears nowhere else (CheckTypes). A worker uses a root global as it uses
-// any global, through a copy of each field it reaches.
+// stored in an element, or handed to a builtin, and its type appears
+// nowhere else (CheckTypes). A worker uses a root global as it uses any
+// global, through a copy of each field it reaches.
+//
+// An ordinary struct may hold one by reference, as a parameter does: a
+// field `st: R&` gains a reference field for each field of R stored apart,
+// `st.field`, right after it, which its literal fills and `.=` rebinds.
+//
+//     struct Ctx { st: ParserState& }      // struct Ctx { st: ParserState&,
+//                                          //     st.tokens: Token[>..]&, st.work: i64[>..<]& }
+//     let c = Ctx { st: parser };          // let c = Ctx { st: parser,
+//                                          //     st.tokens: parser.tokens, st.work: parser.work };
+//     c.st.tokens.push(t);                 // c.st.tokens.push(t);    (the field `st.tokens`)
+//
+// Such a holder is an ordinary struct of references, copied, returned and
+// stored as any is, the checker's store rule (§9.2) applying to each field.
+// Which struct a field path reaches is known here only where the source
+// writes the type, so `c.st` is a root value only for a name `c` declared
+// Ctx, Ctx& or const Ctx&, or that a Ctx literal constructs (Known).
 #pragma once
 #include "builtins.h"
 
@@ -56,10 +72,44 @@ struct RootLowering {
         bool cq = false;           // Reached through `const R&`.
     };
     deque<Binding> bindings;
-    // Innermost last; a null binding is a name that shadows one with no
-    // root value.
-    vector<unordered_map<string_view, Binding *>> scopes;
+
+    // An ordinary struct with a field holding a root struct by reference.
+    struct Holder {
+        SStruct *st;
+        vector<Field> src;          // As declared.
+        struct Held {
+            string_view name;
+            Root *root;
+            TypeExpr *type;         // R&, or const R&.
+        };
+        vector<Held> held;
+        const Held *Find(string_view f) const {
+            for (auto &h : held) if (h.name == f) return &h;
+            return nullptr;
+        }
+    };
+    unordered_map<SStruct *, Holder> holders;
+
+    // A name whose type the source writes as a holder's. A `const Ctx&`
+    // makes what its fields refer to no more const than any reference
+    // field's pointee (§9.5).
+    struct Known {
+        Holder *h;
+        vector<TypeExpr *> args;    // The holder's type arguments.
+        unordered_map<string_view, Binding *> bound;   // Each held field's (HeldBinding).
+    };
+    deque<Known> knowns;
+
+    // What a name stands for in the scope at hand: a root value, a holder
+    // known by its type, or (neither) a name that shadows both.
+    struct Named {
+        Binding *root = nullptr;
+        Known *known = nullptr;
+    };
+    // Innermost last.
+    vector<unordered_map<string_view, Named>> scopes;
     unordered_map<VarDecl *, Binding *> globalroots;
+    unordered_map<VarDecl *, Known *> globalknown;
     // The nested functions a scope declares, for calls of them.
     vector<unordered_map<string_view, vector<SFunction *>>> fnscopes;
     // The parameters every function was declared with, before its root
@@ -210,27 +260,108 @@ struct RootLowering {
         return &bindings.back();
     }
 
-    Binding *Lookup(const Ident *id) {
+    // What a name stands for, and whether a local declares it.
+    Named LookupName(const Ident *id, bool *local = nullptr) {
+        if (local) *local = false;
         if (!SplitName(id->name, id->ns).qualified)
             for (auto it = scopes.rbegin(); it != scopes.rend(); ++it)
-                if (auto f = it->find(id->name); f != it->end()) return f->second;
-        if (auto g = ast.LookupGlobal(id->name, id->ns))
-            if (auto f = globalroots.find(g); f != globalroots.end()) return f->second;
-        return nullptr;
+                if (auto f = it->find(id->name); f != it->end()) {
+                    if (local) *local = true;
+                    return f->second;
+                }
+        Named n;
+        if (auto g = ast.LookupGlobal(id->name, id->ns)) {
+            if (auto f = globalroots.find(g); f != globalroots.end()) n.root = f->second;
+            if (auto f = globalknown.find(g); f != globalknown.end()) n.known = f->second;
+        }
+        return n;
+    }
+    Binding *Lookup(const Ident *id) { return LookupName(id).root; }
+
+    // A root value as the source names it: a name bound to one (`x`), or
+    // a holder's field through a name whose type is the holder's (`c.st`).
+    struct Path {
+        Binding *b = nullptr;
+        Ident *id = nullptr;        // The name, or the holder's.
+        string_view field;          // The holder's field, for `c.st`.
+        const Dot *dot = nullptr;   //   and where it is written.
+        explicit operator bool() const { return b; }
+    };
+    string Text(const Path &p) { return p.field.empty() ? string(p.id->name) : cat(p.id->name, ".", p.field); }
+
+    // The root value a node names, where it is one or `&` of one.
+    Path PathOf(Node *n) {
+        if (auto u = Is<Unary>(n); u && u->op == T_BITAND) n = u->child;
+        if (auto id = Is<Ident>(n)) return { Lookup(id), id };
+        auto d = Is<Dot>(n);
+        auto id = d ? Is<Ident>(d->obj) : nullptr;
+        auto k = id ? LookupName(id).known : nullptr;
+        auto h = k ? k->h->Find(d->name) : nullptr;
+        if (!h) return {};
+        return { HeldBinding(*k, *h), id, d->name, d };
     }
 
-    // The root value a node names, where it is a name bound to one or `&`
-    // of one, and the name.
-    Binding *RootOf(Node *n, Ident **name = nullptr) {
-        if (auto u = Is<Unary>(n); u && u->op == T_BITAND) n = u->child;
-        auto id = Is<Ident>(n);
-        if (!id) return nullptr;
-        if (name) *name = id;
-        return Lookup(id);
+    // The root value a held field of a known holder is.
+    Binding *HeldBinding(Known &k, const Holder::Held &h) {
+        auto &b = k.bound[h.name];
+        if (b) return b;
+        auto &gs = k.h->st->generics;
+        vector<TypeExpr *> args;
+        for (auto a : h.type->ref->sub->struc->args) args.push_back(Subst(a, gs, k.args));
+        b = NewBinding(h.root, args, h.type->cq || h.type->ref->sub->cq);
+        return b;
+    }
+
+    // The path again, as a node of its own.
+    Node *Whole(const Path &p) {
+        auto id = ast.New<Ident>(p.id->line, p.id->name, p.id->ns);
+        id->end = p.id->end;
+        if (!p.dot) return id;
+        auto d = ast.New<Dot>(p.dot->line, id, p.field, p.dot->ns);
+        d->end = p.dot->end;
+        return d;
+    }
+
+    // The field f of the root value a path names: the variable or
+    // parameter `x.f`, or the holder's field `c.st.f`.
+    Node *Comp(const Path &p, string_view f) {
+        if (!p.dot) {
+            auto id = ast.New<Ident>(p.id->line, CompName(p.id->name, f), p.id->ns);
+            id->end = p.id->end;
+            return id;
+        }
+        auto id = ast.New<Ident>(p.id->line, p.id->name, p.id->ns);
+        id->end = p.id->end;
+        auto d = ast.New<Dot>(p.dot->line, id, CompName(p.field, f), p.dot->ns);
+        d->end = p.dot->end;
+        return d;
     }
 
     void Bind(string_view name, Binding *b) {
-        if (!scopes.empty()) scopes.back()[name] = b;
+        if (!scopes.empty()) scopes.back()[name] = { b, nullptr };
+    }
+    void BindKnown(string_view name, Known *k) {
+        if (!scopes.empty()) scopes.back()[name] = { nullptr, k };
+    }
+
+    // A holder of type t as the source writes it: Ctx, Ctx& or const Ctx&.
+    Known *KnownType(const TypeExpr *t) {
+        if (!t) return nullptr;
+        if (IsPlainRef(t)) t = t->ref->sub;
+        if (t->kind != TY_STRUCT) return nullptr;
+        auto it = holders.find(t->struc->st);
+        if (it == holders.end()) return nullptr;
+        knowns.push_back({ &it->second, t->struc->args, {} });
+        return &knowns.back();
+    }
+
+    // The holder a declaration's one name is known to be: its type's, or
+    // the one its literal constructs.
+    Known *KnownOf(VarDecl *vd) {
+        if (vd->names.size() != 1) return nullptr;
+        if (vd->type) return KnownType(vd->type);
+        auto lit = vd->inits.size() == 1 ? Is<StructLit>(vd->inits[0]) : nullptr;
+        return lit ? KnownType(lit->type) : nullptr;
     }
 
     // ------------------------------------------------------------------
@@ -257,6 +388,8 @@ struct RootLowering {
             st->rootfields = r.comps;
         }
         if (roots.empty()) return;
+        for (auto st : ast.structs)
+            if (!st->isroot) Hold(st);
         for (auto sf : ast.functions) ExpandParams(sf);
         // The globals, in their initialization order: an owner becomes its
         // fields' globals, then itself.
@@ -271,8 +404,10 @@ struct RootLowering {
                 globalroots[g] = b;
             } else {
                 for (auto &i : g->inits) i = Expr(i);
-                if (g->names.size() == 1 && g->inits.size() == 1 && RootOf(g->inits[0]))
+                if (g->names.size() == 1 && g->inits.size() == 1 && PathOf(g->inits[0]))
                     Error(g, "a global cannot be bound to a root struct value: name the owner itself");
+                else if (auto k = KnownOf(g))
+                    globalknown[g] = k;
             }
             globals.push_back(g);
         }
@@ -329,6 +464,41 @@ struct RootLowering {
             }
         }
         sf->params = ps;
+    }
+
+    // An ordinary struct's field `st: R&` gains a field for each of R's
+    // stored apart, `st.field: F&`, right after it, as a parameter does.
+    void Hold(SStruct *st) {
+        auto any = false;
+        for (auto &f : st->fields) any = any || (!f.ispad && RootRef(f.type));
+        if (!any) return;
+        auto &h = holders[st];
+        h.st = st;
+        h.src = st->fields;
+        vector<Field> fs;
+        for (auto &f : st->fields) {
+            fs.push_back(f);
+            auto r = f.ispad ? nullptr : RootRef(f.type);
+            if (!r) continue;
+            allowed.insert(f.type);
+            allowed.insert(f.type->ref->sub);
+            if (f.defaultval)
+                Error(f.line, cat("field ", f.name, " of ", st->name, " holds a reference to a ", r->st->name,
+                                  ", a root struct, which has no default"));
+            h.held.push_back({ f.name, r, f.type });
+            auto cq = f.type->cq || f.type->ref->sub->cq;
+            Binding b { r, f.type->ref->sub->struc->args, cq };
+            for (auto &c : r->comps) {
+                Field g;
+                g.name = CompName(f.name, c.name);
+                g.line = f.line;
+                g.type = RefTo(CompType(b, c), cq, f.line);
+                g.isconst = f.isconst;
+                g.rootcomp = true;
+                fs.push_back(g);
+            }
+        }
+        st->fields = fs;
     }
 
     const vector<Param> &SourceParams(SFunction *sf) {
@@ -474,6 +644,8 @@ struct RootLowering {
         for (auto &p : src) {
             if (auto r = RootRef(p.type))
                 Bind(p.name, NewBinding(r, p.type->ref->sub->struc->args, p.type->cq || p.type->ref->sub->cq));
+            else if (auto k = KnownType(p.type))
+                BindKnown(p.name, k);
             else
                 Bind(p.name, nullptr);
         }
@@ -496,26 +668,23 @@ struct RootLowering {
                 continue;
             }
             if (auto a = Is<Assign>(s); a && a->op == T_DOTASSIGN) {
-                Ident *to = nullptr, *from = nullptr;
-                auto lb = RootOf(a->lval, &to);
-                if (lb) {
-                    auto rb = RootOf(a->rhs, &from);
-                    if (!rb || rb->root != lb->root) {
-                        Error(a, cat(to->name, " is bound to a ", lb->root->st->name,
+                // A binding's rebind, or a holder's field's (`c.st .= q`):
+                // every field rebound with it.
+                if (auto to = PathOf(a->lval)) {
+                    auto from = PathOf(a->rhs);
+                    if (!from || from.b->root != to.b->root) {
+                        Error(a, cat(Text(to), " is bound to a ", to.b->root->st->name,
                                      ", a root struct: rebind it to another"));
                         continue;
                     }
-                    if (rb->cq && !lb->cq)
-                        Error(a, cat(from->name, " is a const ", rb->root->st->name, ", which ", to->name,
+                    if (from.b->cq && !to.b->cq)
+                        Error(a, cat(Text(from), " is a const ", from.b->root->st->name, ", which ", Text(to),
                                      " would write"));
-                    a->rhs = ast.New<Ident>(from->line, from->name, from->ns);
-                    a->lval = ast.New<Ident>(to->line, to->name, to->ns);
+                    a->rhs = Whole(from);
+                    a->lval = Whole(to);
                     out.push_back(a);
-                    for (auto &c : lb->root->comps) {
-                        auto ca = ast.New<Assign>(a->line, T_DOTASSIGN,
-                                                  ast.New<Ident>(to->line, CompName(to->name, c.name), to->ns),
-                                                  ast.New<Ident>(from->line, CompName(from->name, c.name),
-                                                                 from->ns));
+                    for (auto &c : to.b->root->comps) {
+                        auto ca = ast.New<Assign>(a->line, T_DOTASSIGN, Comp(to, c.name), Comp(from, c.name));
                         ca->end = a->end;
                         out.push_back(ca);
                     }
@@ -546,44 +715,49 @@ struct RootLowering {
             Bind(vd->names[0], b);
             return out;
         }
-        Ident *from = nullptr;
-        auto rb = vd->inits.size() == 1 ? RootOf(vd->inits[0], &from) : nullptr;
-        if (rb) {
+        auto from = vd->inits.size() == 1 ? PathOf(vd->inits[0]) : Path {};
+        if (from) {
+            auto rb = from.b;
             auto st = rb->root->st;
             if (vd->names.size() != 1) {
                 Error(vd, cat("a root struct (", st->name, ") is bound one name at a time"));
                 return { vd };
             }
             if (vd->type && RootRef(vd->type) != rb->root) {
-                Error(vd, cat(from->name, " is a ", st->name, ", a root struct: ", vd->names[0],
-                              " can only be bound to it by reference, ", vd->names[0], " .= ", from->name));
+                Error(vd, cat(Text(from), " is a ", st->name, ", a root struct: ", vd->names[0],
+                              " can only be bound to it by reference, ", vd->names[0], " .= ", Text(from)));
                 return { vd };
             }
             if (vd->type) allowed.insert(vd->type), allowed.insert(vd->type->ref->sub);
             auto cq = rb->cq || (vd->type && (vd->type->cq || vd->type->ref->sub->cq)) || vd->isconst;
+            // The type arguments the binding's type writes, else those of
+            // what it binds.
+            auto typed = vd->type && !vd->type->ref->sub->struc->args.empty();
+            auto nb = NewBinding(rb->root, typed ? vd->type->ref->sub->struc->args : rb->args, cq);
             // A binding by reference, as of any non-fixed value (§3.8): the
             // struct of the other fields is fixed, so `.=` says so.
             vd->byref = true;
-            vd->inits[0] = ast.New<Ident>(from->line, from->name, from->ns);
+            vd->inits[0] = Whole(from);
             vector<Node *> out { vd };
             for (auto &c : rb->root->comps) {
                 auto d = ast.New<VarDecl>(vd->line, vd->isvar);
                 d->byref = true;
                 d->names.push_back(CompName(vd->names[0], c.name));
-                if (vd->type) d->type = RefTo(CompType(*rb, c), cq, vd->type->line);
-                d->inits.push_back(ast.New<Ident>(from->line, CompName(from->name, c.name), from->ns));
+                if (vd->type) d->type = RefTo(CompType(*nb, c), cq, vd->type->line);
+                d->inits.push_back(Comp(from, c.name));
                 d->end = vd->end;
                 out.push_back(d);
             }
-            Bind(vd->names[0], NewBinding(rb->root, rb->args, cq));
+            Bind(vd->names[0], nb);
             return out;
         }
         if (vd->inits.size() == 1 && Is<IfExpr>(vd->inits[0])) {
-            vector<pair<Binding *, Ident *>> ch;
+            vector<Path> ch;
             if (Choices(vd->inits[0], ch, false)) return Select(vd, ch);
         }
         for (auto &i : vd->inits) i = Expr(i);
         for (auto n : vd->names) Bind(n, nullptr);
+        if (auto k = KnownOf(vd)) BindKnown(vd->names[0], k);
         return { vd };
     }
 
@@ -598,7 +772,7 @@ struct RootLowering {
     // The root values an `if` (with `else if`s) chooses among, in the order
     // of its branches, every branch giving one; with `number`, each is
     // replaced by its place in that order.
-    bool Choices(Node *&v, vector<pair<Binding *, Ident *>> &out, bool number) {
+    bool Choices(Node *&v, vector<Path> &out, bool number) {
         if (!v) return false;
         if (auto x = Is<IfExpr>(v)) {
             Node *thenb = x->thenb;
@@ -606,10 +780,9 @@ struct RootLowering {
                       Choices(BranchValue(x->elseb), out, number);
             return ok;
         }
-        Ident *id = nullptr;
-        auto b = RootOf(v, &id);
-        if (!b) return false;
-        out.push_back({ b, id });
+        auto p = PathOf(v);
+        if (!p) return false;
+        out.push_back(p);
         if (number) v = ast.New<IntLit>(v->line, (int64_t)out.size() - 1);
         return true;
     }
@@ -618,17 +791,18 @@ struct RootLowering {
     // taken, numbered once (q#sel), so its conditions and statements run
     // once and in order, then the owner's struct and each field bound to
     // the one that branch gives, as typed references take a branch's value.
-    vector<Node *> Select(VarDecl *vd, vector<pair<Binding *, Ident *>> &ch) {
-        auto r = ch[0].first->root;
+    vector<Node *> Select(VarDecl *vd, vector<Path> &ch) {
+        auto first = ch[0].b;
+        auto r = first->root;
         auto st = r->st;
         auto cq = vd->isconst;
-        for (auto &[b, id] : ch) {
-            if (b->root != r || b->args.size() != ch[0].first->args.size()) {
+        for (auto &p : ch) {
+            if (p.b->root != r || p.b->args.size() != first->args.size()) {
                 Error(vd, cat("an if binding ", vd->names.empty() ? string_view() : vd->names[0],
                               " chooses among values of different root structs"));
                 return { vd };
             }
-            cq = cq || b->cq;
+            cq = cq || p.b->cq;
         }
         if (vd->names.size() != 1 || (vd->type && RootRef(vd->type) != r)) {
             Error(vd, cat("a root struct (", st->name, ") chosen by an if is bound one name at a time, by reference"));
@@ -642,7 +816,7 @@ struct RootLowering {
         auto line = vd->line;
         auto name = vd->names[0];
         auto sel = ast.Intern(cat(name, "#sel"));
-        vector<pair<Binding *, Ident *>> numbered;
+        vector<Path> numbered;
         Choices(vd->inits[0], numbered, true);
         auto s = ast.New<VarDecl>(line, false);
         s->ns = vd->ns;
@@ -652,12 +826,12 @@ struct RootLowering {
         vector<Node *> out { s };
         Bind(sel, nullptr);
         // if sel == 0 { leaf(0) } else if sel == 1 { leaf(1) } ... else { leaf(n - 1) }
-        auto chain = [&](const function<Node *(Ident *)> &leaf) {
-            Node *e = leaf(ch.back().second);
+        auto chain = [&](const function<Node *(const Path &)> &leaf) {
+            Node *e = leaf(ch.back());
             for (auto i = (int)ch.size() - 2; i >= 0; i--) {
                 auto c = ast.New<Binary>(line, T_EQ, ast.New<Ident>(line, sel, vd->ns), ast.New<IntLit>(line, (int64_t)i));
                 auto thenb = ast.New<Block>(line);
-                thenb->tail = leaf(ch[i].second);
+                thenb->tail = leaf(ch[i]);
                 auto elseb = ast.New<Block>(line);
                 elseb->tail = e;
                 e = ast.New<IfExpr>(line, c, thenb, elseb);
@@ -667,25 +841,23 @@ struct RootLowering {
         auto rt = ast.NewType(TY_STRUCT, line);
         rt->struc = ast.NewDetail<TypeStruct>();
         rt->struc->st = st;
-        rt->struc->args = ch[0].first->args;
+        rt->struc->args = first->args;
         vd->type = RefTo(rt, cq, line);
         allowed.insert(vd->type);
         allowed.insert(rt);
         vd->byref = false;
-        vd->inits[0] = chain([&](Ident *id) { return ast.New<Ident>(id->line, id->name, id->ns); });
+        vd->inits[0] = chain([&](const Path &p) { return Whole(p); });
         out.push_back(vd);
-        Binding b { r, ch[0].first->args, cq };
+        Binding b { r, first->args, cq };
         for (auto &c : r->comps) {
             auto d = ast.New<VarDecl>(line, vd->isvar);
             d->names.push_back(CompName(name, c.name));
             d->type = RefTo(CompType(b, c), cq, line);
-            d->inits.push_back(chain([&](Ident *id) {
-                return ast.New<Ident>(id->line, CompName(id->name, c.name), id->ns);
-            }));
+            d->inits.push_back(chain([&](const Path &p) { return Comp(p, c.name); }));
             d->end = vd->end;
             out.push_back(d);
         }
-        Bind(name, NewBinding(r, ch[0].first->args, cq));
+        Bind(name, NewBinding(r, first->args, cq));
         return out;
     }
 
@@ -695,20 +867,24 @@ struct RootLowering {
         switch (n->nkind) {
             case NK_Ident: {
                 auto id = static_cast<Ident *>(n);
-                if (auto b = Lookup(id)) ValueUse(id, b);
+                if (auto p = PathOf(id)) ValueUse(id, p);
                 return n;
             }
             case NK_Dot: {
                 auto d = static_cast<Dot *>(n);
-                Ident *id = nullptr;
-                if (auto b = RootOf(d->obj, &id)) {
-                    if (b->root->IsComp(d->name)) {
-                        auto c = ast.New<Ident>(d->line, CompName(id->name, d->name), id->ns);
+                if (auto p = PathOf(d->obj)) {
+                    if (p.b->root->IsComp(d->name)) {
+                        auto c = Comp(p, d->name);
                         c->end = d->end;
                         return c;
                     }
                     // A field of the struct the owner is, which the checker
                     // reads as any other.
+                    return n;
+                }
+                // A holder's field, itself a root value.
+                if (auto p = PathOf(d)) {
+                    ValueUse(d, p);
                     return n;
                 }
                 d->obj = Expr(d->obj);
@@ -717,10 +893,9 @@ struct RootLowering {
             case NK_Call: return CallExpr(static_cast<Call *>(n));
             case NK_Unary: {
                 auto u = static_cast<Unary *>(n);
-                Ident *id = nullptr;
                 if (u->op == T_BITAND)
-                    if (auto b = RootOf(u->child, &id)) {
-                        ValueUse(id, b);
+                    if (auto p = PathOf(u->child)) {
+                        ValueUse(u, p);
                         return n;
                     }
                 u->child = Expr(u->child);
@@ -764,11 +939,7 @@ struct RootLowering {
                 x->capexpr = Expr(x->capexpr);
                 return n;
             }
-            case NK_StructLit: {
-                auto x = static_cast<StructLit *>(n);
-                for (auto &fi : x->inits) fi.val = Expr(fi.val);
-                return n;
-            }
+            case NK_StructLit: return Lit(static_cast<StructLit *>(n));
             case NK_Block: Stmts(static_cast<Block *>(n)); return n;
             case NK_IfExpr: {
                 auto x = static_cast<IfExpr *>(n);
@@ -835,9 +1006,8 @@ struct RootLowering {
             case NK_Return: {
                 auto x = static_cast<Return *>(n);
                 for (auto &v : x->vals) {
-                    Ident *id = nullptr;
-                    if (auto b = RootOf(v, &id))
-                        Error(v, cat(id->name, " is a ", b->root->st->name,
+                    if (auto p = PathOf(v))
+                        Error(v, cat(Text(p), " is a ", p.b->root->st->name,
                                      ", a root struct, which a function does not return"));
                     else
                         v = Expr(v);
@@ -856,7 +1026,10 @@ struct RootLowering {
                 for (auto &p : x->params) {
                     if (RootType(p.type) || RootRef(p.type))
                         Error(p.line, "a function value takes no root struct: name a function taking R&");
-                    Bind(p.name, nullptr);
+                    if (auto k = KnownType(p.type))
+                        BindKnown(p.name, k);
+                    else
+                        Bind(p.name, nullptr);
                 }
                 Stmts(x->body);
                 scopes.pop_back();
@@ -870,11 +1043,19 @@ struct RootLowering {
             }
             case NK_Assign: {
                 auto x = static_cast<Assign *>(n);
-                Ident *id = nullptr;
-                if (auto b = RootOf(x->lval, &id)) {
-                    Error(x, cat(id->name, " is a ", b->root->st->name,
-                                 ", a root struct, which is not assigned whole: assign its fields"));
-                    if (!RootOf(x->rhs)) x->rhs = Expr(x->rhs);
+                if (auto p = PathOf(x->lval)) {
+                    auto st = p.b->root->st->name;
+                    auto from = PathOf(x->rhs);
+                    if (!p.dot)
+                        Error(x, cat(Text(p), " is a ", st, ", a root struct, which is not assigned whole: assign its "
+                                     "fields"));
+                    else if (from)
+                        Error(x, cat(Text(p), " refers to a ", st, ", a root struct, which is not assigned whole: "
+                                     "rebind it, ", Text(p), " .= ", Text(from)));
+                    else
+                        Error(x, cat(Text(p), " refers to a ", st, ", a root struct, which is not assigned whole: "
+                                     "rebind it to another with .="));
+                    if (!from) x->rhs = Expr(x->rhs);
                     return n;
                 }
                 x->lval = Expr(x->lval);
@@ -892,26 +1073,75 @@ struct RootLowering {
     }
 
     // A root value where only a value would do.
-    void ValueUse(const Ident *id, const Binding *b) {
-        auto st = b->root->st->name;
-        Error(id, cat(id->name, " is a ", st, ", a root struct: name one of its fields, or pass it to a ",
+    void ValueUse(const Node *at, const Path &p) {
+        auto st = p.b->root->st->name;
+        Error(at, cat(Text(p), " is a ", st, ", a root struct: name one of its fields, or pass it to a ",
                       st, "& parameter; it is not a value to copy, compare or print"));
     }
 
     // The functions a call's name reaches, nested ones first.
-    vector<SFunction *> Candidates(const Ident *id) {
-        if (!SplitName(id->name, id->ns).qualified)
+    vector<SFunction *> Candidates(string_view name, string_view ns) {
+        if (!SplitName(name, ns).qualified)
             for (auto it = fnscopes.rbegin(); it != fnscopes.rend(); ++it)
-                if (auto f = it->find(id->name); f != it->end()) return f->second;
-        return ast.LookupFunctions(id->name, id->ns);
+                if (auto f = it->find(name); f != it->end()) return f->second;
+        return ast.LookupFunctions(name, ns);
+    }
+
+    // The root struct each function a call's name reaches takes at
+    // argument i, where all take the same one there: what is passed there
+    // is then a root value, or the call is an error. And a parameter's
+    // name, for the message.
+    Root *TakesRoot(string_view name, string_view ns, size_t i, string_view *param = nullptr) {
+        Root *r = nullptr;
+        for (auto sf : Candidates(name, ns)) {
+            auto &ps = SourceParams(sf);
+            auto pr = i < ps.size() ? RootRef(ps[i].type) : nullptr;
+            if (!pr || (r && pr != r)) return nullptr;
+            r = pr;
+            if (param) *param = ps[i].name;
+        }
+        return r;
+    }
+
+    // The holder some field of the name f holding r is a field of.
+    SStruct *HolderOf(string_view f, const Root *r) {
+        for (auto &[st, h] : holders)
+            if (auto held = h.Find(f); held && held->root == r) return st;
+        return nullptr;
+    }
+
+    // A value no name of a root value is, passed where fn takes the root
+    // struct r: `e.st` of an expression e whose type is not written, or
+    // any other.
+    void NotRoot(Node *a, const Root *r, string_view fn, string_view param) {
+        auto rn = r->st->name;
+        auto d = Is<Dot>(a);
+        if (auto st = d ? HolderOf(d->name, r) : nullptr) {
+            auto hn = st->name;
+            Error(a, cat(hn, ".", d->name, " holds a ", rn, ", a root struct, which ", fn,
+                         " takes only from a name declared ", hn, ", ", hn, "& or const ", hn, "&, or one a ", hn,
+                         " literal constructs: bind the ", hn, " to such a name first"));
+            return;
+        }
+        Error(a, cat("parameter ", param, " of ", fn, " takes a ", rn, ", a root struct, which is passed by name: "
+                     "the owner, a ", rn, "& parameter or a binding of one, or such a field of a name whose type "
+                     "is written"));
+    }
+
+    // Whether a call's name is a variable's, whose function value the
+    // checker calls before any function of the name.
+    bool IsVariable(const Ident *id) {
+        auto local = false;
+        LookupName(id, &local);
+        return local || ast.LookupGlobal(id->name, id->ns);
     }
 
     Node *CallExpr(Call *c) {
         // `x.f(...)` of a root value: `f(x, ...)`, which takes the fields
         // after x. A field of the owner's struct called is no method.
         if (auto d = Is<Dot>(c->callee)) {
-            Ident *recv = nullptr;
-            if (auto b = RootOf(d->obj, &recv)) {
+            if (auto recv = PathOf(d->obj)) {
+                auto b = recv.b;
                 if (b->root->IsComp(d->name)) {
                     c->callee = Expr(d);
                 } else if (none_of(b->root->st->fields.begin(), b->root->st->fields.end(),
@@ -932,31 +1162,42 @@ struct RootLowering {
                     c->args.insert(c->args.begin(), d->obj);
                 }
             } else {
+                // `e.st.f(...)` of a holder's field through an expression,
+                // which f takes as a root value. Only a receiver that is
+                // such a field: another's type may have a method f in its
+                // own namespace, which the call reaches first.
+                string_view param;
+                auto od = Is<Dot>(d->obj);
+                auto r = od ? TakesRoot(d->name, d->ns, 0, &param) : nullptr;
+                if (r && HolderOf(od->name, r)) NotRoot(d->obj, r, d->name, param);
                 d->obj = Expr(d->obj);
             }
         } else if (!Is<Ident>(c->callee)) {
             c->callee = Expr(c->callee);
         }
         auto callee = Is<Ident>(c->callee);
+        auto named = callee && !IsVariable(callee);
         vector<Node *> args;
         for (size_t i = 0; i < c->args.size(); i++) {
             auto a = c->args[i];
-            Ident *id = nullptr;
-            auto b = RootOf(a, &id);
-            if (!b) {
+            auto p = PathOf(a);
+            if (!p) {
+                string_view param;
+                if (auto r = named ? TakesRoot(callee->name, callee->ns, i, &param) : nullptr)
+                    NotRoot(a, r, callee->name, param);
                 args.push_back(Expr(a));
                 continue;
             }
-            auto st = b->root->st;
+            auto st = p.b->root->st;
             if (!callee) {
-                Error(a, cat(id->name, " is a ", st->name, ", a root struct, which a function value does not take"));
+                Error(a, cat(Text(p), " is a ", st->name, ", a root struct, which a function value does not take"));
                 args.push_back(a);
                 continue;
             }
-            auto cands = Candidates(callee);
+            auto cands = Candidates(callee->name, callee->ns);
             if (cands.empty()) {
                 if (LookupBuiltin(GlobalLeaf(callee->name)))
-                    Error(a, cat(id->name, " is a ", st->name, ", a root struct, which ", callee->name,
+                    Error(a, cat(Text(p), " is a ", st->name, ", a root struct, which ", callee->name,
                                  " does not take: pass it one of its fields"));
                 args.push_back(a);   // An unknown function, which the checker reports.
                 continue;
@@ -964,35 +1205,89 @@ struct RootLowering {
             auto fits = false;
             for (auto sf : cands) {
                 auto &ps = SourceParams(sf);
-                fits = fits || (i < ps.size() && RootRef(ps[i].type) == b->root);
+                fits = fits || (i < ps.size() && RootRef(ps[i].type) == p.b->root);
             }
             if (!fits) {
-                Error(a, cat(id->name, " is a ", st->name, ", a root struct: ", callee->name,
+                Error(a, cat(Text(p), " is a ", st->name, ", a root struct: ", callee->name,
                              " takes it only by a parameter declared ", st->name, "& (or const ", st->name,
                              "&)"));
                 args.push_back(a);
                 continue;
             }
-            auto ctl = ast.New<Ident>(id->line, id->name, id->ns);
-            ctl->end = id->end;
-            args.push_back(ctl);
-            for (auto &f : b->root->comps) {
-                auto ci = ast.New<Ident>(id->line, CompName(id->name, f.name), id->ns);
-                ci->end = id->end;
-                args.push_back(ci);
-            }
+            args.push_back(Whole(p));
+            for (auto &f : p.b->root->comps) args.push_back(Comp(p, f.name));
         }
         c->args = args;
         if (c->trailing) Expr(c->trailing);
         return c;
     }
 
+    // A holder's literal gives each field holding a root struct a root
+    // value, and so each field that one carries: `Ctx { st: p }` is
+    // `Ctx { st: p, st.f: p.f, ... }`. Its initializers are then named,
+    // as the fields gained come between those written.
+    Node *Lit(StructLit *x) {
+        auto it = x->type && x->type->kind == TY_STRUCT ? holders.find(x->type->struc->st) : holders.end();
+        if (it == holders.end()) {
+            for (auto &fi : x->inits) fi.val = Expr(fi.val);
+            return x;
+        }
+        auto &h = it->second;
+        auto hn = h.st->name;
+        if (!x->inits.empty() && x->inits[0].name.empty()) {
+            size_t pos = 0;
+            for (auto &fi : x->inits) {
+                while (pos < h.src.size() && h.src[pos].ispad) pos++;
+                if (pos >= h.src.size()) {
+                    Error(fi.val, cat("too many initializers for ", hn));
+                    return x;
+                }
+                fi.name = h.src[pos++].name;
+            }
+        }
+        vector<FieldInit> out;
+        for (auto &fi : x->inits) {
+            auto held = h.Find(fi.name);
+            if (!held) {
+                fi.val = Expr(fi.val);
+                out.push_back(fi);
+                continue;
+            }
+            auto rn = held->root->st->name;
+            auto p = PathOf(fi.val);
+            if (!p || p.b->root != held->root) {
+                Error(fi.val, cat("field ", fi.name, " of ", hn, " holds a reference to a ", rn, ", a root struct, "
+                                  "which it is given by name: the owner, a ", rn, "& parameter or a binding of one, "
+                                  "or such a field of a name whose type is written"));
+                out.push_back(fi);
+                continue;
+            }
+            if (p.b->cq && !held->type->cq && !held->type->ref->sub->cq)
+                Error(fi.val, cat(Text(p), " is a const ", rn, ", which field ", fi.name, " of ", hn, " would write"));
+            fi.val = Whole(p);
+            out.push_back(fi);
+            for (auto &c : held->root->comps) {
+                FieldInit ci;
+                ci.name = CompName(fi.name, c.name);
+                ci.val = Comp(p, c.name);
+                out.push_back(ci);
+            }
+        }
+        for (auto &held : h.held)
+            if (none_of(out.begin(), out.end(), [&](const FieldInit &fi) { return fi.name == held.name; }))
+                Error(x, cat("field ", held.name, " of ", hn, " is not given: it holds a reference to a ",
+                             held.root->st->name, ", a root struct, which has no default"));
+        x->inits = out;
+        return x;
+    }
+
     // ------------------------------------------------------------------
     // Where a root struct's type may be written: an owner's (its literal's
-    // and declared type) and a reference parameter's or binding's, `R&`.
-    // Anywhere else -- a field, an element, a result, a type argument, a
-    // cast, an optional -- is an error, through aliases too: an alias's
-    // own type is checked where it is used.
+    // and declared type), a reference parameter's or binding's, `R&`, and
+    // an ordinary struct's reference field's (Hold). Anywhere else -- a
+    // root struct's field, an element, a result, a type argument, a cast,
+    // an optional -- is an error, through aliases too: an alias's own type
+    // is checked where it is used.
     void CheckTypes() {
         unordered_set<const TypeExpr *> child;
         auto kids = [&](const TypeExpr *t, auto &&f) {
@@ -1053,8 +1348,8 @@ struct RootLowering {
             auto at = w == where.end() ? string("here") : cat("as the type of ", w->second);
             Error(t->line, cat(st->name, " is a root struct, which cannot be written ", at,
                                ": a root struct is the type of a variable its literal constructs (var x = ",
-                               st->name, " { .. }) or of a reference parameter (p: ", st->name, "&), and of "
-                               "nothing else"));
+                               st->name, " { .. }), of a reference parameter (p: ", st->name, "&) or of an "
+                               "ordinary struct's reference field (st: ", st->name, "&), and of nothing else"));
         }
     }
 };

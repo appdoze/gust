@@ -653,12 +653,27 @@ inline void TypeCheck::ResolveMemberLValue(LVal &lv, Dot *d) {
         if (step(inst->st->fields, inst->ftypes, FieldsInFrame(d))) return;
         if (inst->st->broken) throw Abandoned {};
         // Gust: a root struct's resizable field, stored apart (roots.h),
-        // is reached through the owner's name or a parameter's alone.
-        for (auto &f : inst->st->rootfields)
-            if (f.name == d->name)
-                Error(d, cat("field ", d->name, " of root struct ", inst->st->name,
-                             " is stored apart from the struct: name it through the owner or a ",
-                             inst->st->name, "& parameter (x.", d->name, ")"));
+        // is reached through the owner's name or a parameter's alone, or
+        // through a struct's field holding one, of a name whose type is
+        // written.
+        for (auto &f : inst->st->rootfields) {
+            if (f.name != d->name) continue;
+            if (auto od = Is<Dot>(d->obj))
+                for (auto h : ast.structs) {
+                    if (h->isroot) continue;
+                    for (auto &hf : h->fields)
+                        if (hf.name == od->name && hf.type && IsPlainRef(hf.type) &&
+                            hf.type->ref->sub->kind == TY_STRUCT && hf.type->ref->sub->struc->st == inst->st)
+                            Error(d, cat("field ", d->name, " of root struct ", inst->st->name,
+                                         " is stored apart from the struct: through ", h->name, ".", od->name,
+                                         ", reach it from a name declared ", h->name, ", ", h->name, "& or const ",
+                                         h->name, "&, or one a ", h->name, " literal constructs (let c: ", h->name,
+                                         " = ...; c.", od->name, ".", d->name, ")"));
+                }
+            Error(d, cat("field ", d->name, " of root struct ", inst->st->name,
+                         " is stored apart from the struct: name it through the owner or a ",
+                         inst->st->name, "& parameter (x.", d->name, ")"));
+        }
         Error(d, cat("struct ", inst->st->name, " has no field ", d->name));
     }
     if (t->kind == TY_VARIANT) {

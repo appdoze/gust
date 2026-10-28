@@ -86,6 +86,10 @@ fn add(lx: Lexer&, s: const u8[:]) {
 
 struct LCtx { lx: Lexer&, n: i64 = 0 }
 
+// Through an alias: the type it names.
+type LexRef = Lexer&;
+struct ACtx { lx: LexRef }
+
 recursive fn fill(lx: Lexer&, n: i64) {
     if n == 0 { return; }
     lx.add("w");
@@ -98,6 +102,8 @@ recursive fn fill_in(c: LCtx, n: i64) {
     c.lx.add("v");
     fill_in(c, n - 1);
 }
+
+fn apply<F>(c: LCtx) -> i64 { return F(c); }
 
 // Returned: the result carries the field's references, rooted in lx's.
 fn wrap(lx: Lexer&, n: i64) -> LCtx { return LCtx { lx: lx, n: n }; }
@@ -123,7 +129,7 @@ fn main() {
     let p = Pools<i64> { pool: pool };
     churn(p, 1, 2);
     var names = slot_pool<u8[..8]> { .. };
-    let q = Pools { pool: names, label: "names" };
+    let q = Pools<u8[..8]> { pool: names, label: "names" };
     churn(q, "one", "two");
     print(pool.items, " ", p.pool.free_slots.len, " ", q.pool.items, " ", q.label);
 
@@ -168,9 +174,10 @@ fn main() {
     s.add("-");
     print(other.text, " ", s.line, " ", r.lx.spans.len);
 
-    // A nested function reaches the holder as it reaches any local.
+    // A nested function reaches the holder as it reaches any local, and a
+    // function value's parameter declared LCtx is a name of known type.
     fn total() -> i64 { return lc.lx.text.len + r.lx.text.len; }
-    print(total());
+    print(total(), " ", apply(lc) { h: LCtx => h.lx.text.len + h.n });
 
     global_ctx.lx.add("g");
     add(global_ctx.lx, "h");
@@ -187,4 +194,8 @@ fn main() {
         w.line += i;
     }
     print(la.text, " ", la.line, " ", lb.text, " ", lb.line, " ", order);
+
+    let ac = ACtx { lx: la };
+    ac.lx.add("!");
+    print(la.text, " ", ac.lx.spans.len);
 }

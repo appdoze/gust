@@ -237,7 +237,7 @@ struct Analysis {
         };
         auto fields = [&](const vector<Field> &fs) {
             for (auto &f : fs) {
-                if (f.ispad) continue;
+                if (f.ispad || f.rootcomp) continue;
                 auto o = decl(Occurrence::FIELD);
                 o.field = &f;
                 o.isvar = !f.isconst;

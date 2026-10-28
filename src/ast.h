@@ -404,6 +404,9 @@ struct Field {
     bool isconst = false;       // "let" field: const after construction.
     bool ispad = false;         // pad n / bare pad (padsize -1 = align next field).
     int64_t padsize = -1;
+    // Gust: a reference to a field of a root struct, beside the field
+    // holding the root struct's reference (roots.h), which no source declares.
+    bool rootcomp = false;
 };
 
 struct FieldInit {

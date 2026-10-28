@@ -868,7 +868,7 @@ inline bool DocumentSymbols(Workspace &ws, const Json &params, JsonOut &j) {
             WriteDocumentSymbol(j, f, st->name, SK_STRUCT, ExtentOf(f, d),
                                 PlaceOfName(an, st->line.fileidx, st->name, st->line), [&] {
                 for (auto &fld : st->fields) {
-                    if (fld.ispad) continue;
+                    if (fld.ispad || fld.rootcomp) continue;
                     auto p = PlaceOfLine(an, fld.line, fld.name.size());
                     WriteDocumentSymbol(j, f, fld.name, SK_FIELD, { p.start, p.start + p.len }, p);
                 }
@@ -1873,7 +1873,7 @@ inline void MemberCompletions(const Located &loc, size_t dotpos, Completions &ou
     }
     auto fields = [&](const vector<Field> &fs) {
         for (auto &fld : fs)
-            if (!fld.ispad)
+            if (!fld.ispad && !fld.rootcomp)
                 out.Add(fld.name, CK_FIELD, 0,
                         cat(fld.isconst ? "let " : "", fld.name, ": ", TypeText(fld.type)), fld.doc);
     };
