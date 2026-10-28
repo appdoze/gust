@@ -383,8 +383,12 @@ git log upstream/master..main
   emitted as a `simd fn` is, with AVX2 and AVX-512 versions, but keeps
   math's `mul_add` unfused (`EmitSimdVersions`' `fused`,
   `src/codegen_emit.h`). The aggregate hoist leaves the lane types'
-  declarations in their block. `test/codegen/lanes.goose` and
-  `test/codegen/lanes_short.goose` (new): the same output, and the same
+  declarations in their block. Branches are if-converted: an `if` whose
+  condition differs by lane runs both branches, each assignment into the
+  lanes its branch is taken in, under a mask (`gs_l4m`), and nothing in
+  such a branch may abort or store into an array.
+  `test/codegen/lanes.goose`, `test/codegen/lanes_short.goose` and
+  `test/codegen/lanes_if.goose` (new): the same output, and the same
   abort, one iteration at a time and in lanes.
 
 ## Safety checks

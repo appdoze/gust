@@ -5985,8 +5985,16 @@ contraction off (§6.13's pragma), so every result is the scalar loop's to
 the bit. `LaneGen::Plan` decides, before anything is emitted. The body may
 hold locals of doubles and of structs of them, arithmetic, elementwise
 struct arithmetic, field reads, sqrt, loads at an index every lane shares,
-loads and stores at the loop's own index, and inner loops over a range or
-another array. A local takes a lane value where it derives from the
+loads and stores at the loop's own index, inner loops over a range or
+another array, and `if`s. An `if` whose condition every lane shares stays
+an `if`. One whose condition differs by lane, a comparison of doubles
+joined by `&&`, `||` and `!`, runs both branches in every lane: each
+assignment stores into the lanes its branch is taken in, under a mask of
+the conditions around it (`gs_l4m`, blended bit by bit), and an `if` with
+a value takes each lane's from its branch. Those branches store into no
+array and run no loop, and nothing in them may abort: no checked index, no
+integer arithmetic (a checked build checks it), no conversion but to a
+float. A local assigned under such a condition holds a lane value. A local takes a lane value where it derives from the
 element or a load at the index, by a fixpoint over the body's declarations
 and assignments, and is uniform otherwise. A uniform value is emitted by
 `GenX` as the scalar loop would emit it and spread across the lanes where

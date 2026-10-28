@@ -274,7 +274,8 @@ loop reads, and every other array it reads is distinct from them. Struct values 
 vector per field, what every lane reads is computed once and spread across the lanes, and
 the rest of the loop runs one iteration at a time. A function holding such a loop gets the
 `simd fn` versions for AVX2 and AVX-512, chosen at run time, with `mul_add` unfused.
-Branches are not if-converted yet: a body with an `if` runs one iteration at a time. On
+Branches are if-converted: an `if` whose condition differs by lane runs both branches,
+each lane keeping its own branch's values (`test/codegen/lanes_if.goose`). On
 the unmodified `compare/gust/main.goose`, built by clang 22 at -O2, n-body runs in 0.098 to
 0.107 s against rustc -O3 with fat LTO's 0.215 to 0.258 s, 2.1x to 2.5x run for run, with
 the same checksum. That is 0.13 s with SSE2's lanes alone and 0.22 s one iteration at a

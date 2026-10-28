@@ -37,6 +37,15 @@
 // independent, and an abort, which only a uniform operation can raise
 // there, comes in the lane the loop's first iteration of the block would
 // have raised it in, before any of the block's stores.
+//
+// An `if` whose condition every lane shares is an `if` as it is. One whose
+// condition differs by lane (comparisons of doubles, joined by &&, || and
+// !) runs both branches in every lane, each assignment storing into the
+// lanes its branch is taken in (a mask, gs_l4m, blended bit by bit), and an
+// `if` with a value takes each lane's from its own branch. So both branches
+// run where one iteration at a time runs one: they may store into no array
+// and run no loop, and nothing in them may abort (no checked index, no
+// integer arithmetic, no conversion but to a float).
 #pragma once
 
 namespace goose {
@@ -136,29 +145,49 @@ struct LaneGen {
                     if (Lane(fi.val)) return true;
                 return false;
             }
+            case NK_IfExpr: {
+                auto x = static_cast<IfExpr *>(n);
+                return Lane(x->cond) || Lane(x->thenb->tail) || Lane(BranchTail(x->elseb));
+            }
+            case NK_Block: return Lane(static_cast<goose::Block *>(n)->tail);
             default: return false;
         }
     }
 
+    // A branch's value: its block's tail, or the `else if` it is.
+    static Node *BranchTail(Node *b) {
+        if (auto bl = Is<goose::Block>(b)) return bl->tail;
+        return b;
+    }
+
     // Marks the locals a lane value reaches, through declarations and
-    // assignments, until none is left to mark.
+    // assignments, until none is left to mark. A local assigned under a
+    // condition that differs by lane holds a lane value too: each lane
+    // keeps its own branch's.
     void Classify() {
         if (elem) lanev.insert(elem);
         for (auto changed = true; changed;) {
             changed = false;
-            function<void(Node *)> walk = [&](Node *n) {
+            function<void(Node *, bool)> walk = [&](Node *n, bool under) {
                 if (!n) return;
+                if (auto x = Is<IfExpr>(n)) {
+                    walk(x->cond, under);
+                    auto m = under || Lane(x->cond);
+                    walk(x->thenb, m);
+                    walk(x->elseb, m);
+                    return;
+                }
                 if (auto vd = Is<VarDecl>(n)) {
                     for (size_t i = 0; i < vd->defs.size() && i < vd->inits.size(); i++)
                         if (!lanev.count(vd->defs[i]) && Lane(vd->inits[i]))
                             changed = lanev.insert(vd->defs[i]).second || changed;
                 } else if (auto a = Is<Assign>(n)) {
-                    if (auto v = RootLocal(a->lval); v && !lanev.count(v) && Lane(a->rhs))
+                    if (auto v = RootLocal(a->lval); v && !lanev.count(v) && (under || Lane(a->rhs)))
                         changed = lanev.insert(v).second || changed;
                 }
-                n->Children(walk);
+                n->Children([&](Node *c) { walk(c, under); });
             };
-            walk(f->body);
+            walk(f->body, false);
         }
     }
 
@@ -172,6 +201,54 @@ struct LaneGen {
 
     // A fixed value a lane-local temporary can hold, for a uniform local.
     bool Plain(TypeExpr *t) { return t && t->kind != TY_REF && cg.IsFix(t) && !cg.IsLargeFixed(t); }
+
+    // Inside a branch of a condition that differs by lane (and in such a
+    // condition), where every lane runs both branches: what is there runs
+    // where one iteration at a time would not have run it, so it may not
+    // abort -- no checked index, no integer arithmetic, which a checked
+    // build checks, no conversion but to a float -- nor store anything.
+    int masked = 0;
+
+    static bool Compare(TType op) {
+        return op == T_LT || op == T_GT || op == T_LTEQ || op == T_GTEQ || op == T_EQ || op == T_NEQ;
+    }
+
+    // A condition every lane takes its own way: comparisons of doubles,
+    // joined by &&, || and !, with uniform conditions among them.
+    bool Cond(Node *c) {
+        if (!Lane(c)) return Value(c);
+        if (auto u = Is<Unary>(c); u && u->op == T_NOT) return Cond(u->child);
+        auto b = Is<Binary>(c);
+        if (!b) return false;
+        if (b->op == T_ANDAND || b->op == T_OROR) return Cond(b->left) && Cond(b->right);
+        if (!Compare(b->op)) return false;
+        for (auto o : { b->left, b->right }) {
+            auto ot = cg.OperandT(o->exprtype);
+            if (!ot || ot->kind != TY_FLT || ot->fltstorage != FS_F64) return false;
+        }
+        lanefloat = true;
+        return Value(b->left) && Value(b->right);
+    }
+
+    // A branch of an `if`, a block or an `else if`, whose value is wanted
+    // or not.
+    bool Branch(Node *b, bool value) {
+        if (!b) return !value;
+        if (auto x = Is<IfExpr>(b)) return value ? Value(x) : Stmt(x);
+        // The optimizer leaves a branch of one expression bare.
+        auto bl = Is<goose::Block>(b);
+        if (!bl) return value ? Value(b) : Stmt(b);
+        if (!value) return Body(bl, true);
+        return bl->tail && Body(bl, false) && Value(bl->tail);
+    }
+
+    bool IfParts(IfExpr *x, bool value) {
+        if (!Lane(x->cond)) return Value(x->cond) && Branch(x->thenb, value) && Branch(x->elseb, value);
+        masked++;
+        auto ok = Cond(x->cond) && Branch(x->thenb, value) && Branch(x->elseb, value);
+        masked--;
+        return ok;
+    }
 
     bool Value(Node *n) {
         if (!n) return false;
@@ -195,6 +272,7 @@ struct LaneGen {
             }
             case NK_Binary: {
                 auto b = static_cast<Binary *>(n);
+                if (masked && cg.OperandT(b->left->exprtype)->kind == TY_INT && !Compare(b->op)) return false;
                 if (lane) {
                     if (b->op != T_PLUS && b->op != T_MINUS && b->op != T_MUL && b->op != T_DIV) return false;
                     lanefloat = true;
@@ -215,6 +293,7 @@ struct LaneGen {
             }
             case NK_AsCast: {
                 auto c = static_cast<AsCast *>(n);
+                if (masked && (!c->exprtype || c->exprtype->kind != TY_FLT)) return false;
                 if (lane && !(c->child->exprtype && c->child->exprtype->kind == TY_FLT &&
                               c->child->exprtype->fltstorage == FS_F64))
                     return false;
@@ -234,7 +313,7 @@ struct LaneGen {
                     if (!atidx[v]++ && !stored.count(v)) indexed.push_back(v);
                     return true;
                 }
-                if (Lane(x->idx)) return false;
+                if (Lane(x->idx) || (masked && !x->nobc)) return false;
                 elsewhere[v]++;
                 return Value(x->idx);
             }
@@ -254,6 +333,7 @@ struct LaneGen {
                     if (!Value(fi.val)) return false;
                 return true;
             }
+            case NK_IfExpr: return IfParts(static_cast<IfExpr *>(n), true);
             default: return false;
         }
     }
@@ -278,6 +358,7 @@ struct LaneGen {
                 auto compound = a->op == T_PLUSEQ || a->op == T_MINUSEQ || a->op == T_MULEQ || a->op == T_DIVEQ;
                 if (a->op != T_ASSIGN && !compound) return false;
                 if (auto x = Is<Index>(a->lval); x && IsVar(x->idx, idx)) {
+                    if (masked) return false;
                     auto v = ArrayVar(x);
                     // Not compound, and not a variable a nested function
                     // writes too; what else may reach it is Plan's to rule out.
@@ -297,7 +378,7 @@ struct LaneGen {
             }
             case NK_ForLoop: {
                 auto fl = static_cast<ForLoop *>(s);
-                if (fl->parallel || !fl->label.empty() || fl->byref) return false;
+                if (masked || fl->parallel || !fl->label.empty() || fl->byref) return false;
                 if (fl->vdef && (lanev.count(fl->vdef) || !Plain(fl->vdef->type))) return false;
                 if (fl->idxdef && lanev.count(fl->idxdef)) return false;
                 if (Lane(fl->iter)) return false;
@@ -321,6 +402,7 @@ struct LaneGen {
                 return NoJumps(ib->body) && Body(ib->body, true);
             }
             case NK_Block: return Body(static_cast<Block *>(s), true);
+            case NK_IfExpr: return IfParts(static_cast<IfExpr *>(s), false);
             default: return false;
         }
     }
@@ -461,6 +543,69 @@ struct LaneGen {
         return t;
     }
 
+    // The lanes a store reaches: those every condition around it holds in,
+    // a gs_l4m of all ones or none per lane; empty for every lane.
+    string mask;
+
+    // A condition as such a mask.
+    string MaskOf(Node *c) {
+        string m;
+        if (!Lane(c)) {
+            m = cat("gs_l4m_splat(-(long long)(", Uniform(c), "))");
+        } else if (auto u = Is<Unary>(c)) {
+            m = cat("(~", MaskOf(u->child), ")");
+        } else {
+            auto b = static_cast<Binary *>(c);
+            if (b->op == T_ANDAND || b->op == T_OROR) {
+                auto l = MaskOf(b->left);
+                auto r = MaskOf(b->right);
+                m = cat("(", l, b->op == T_ANDAND ? " & " : " | ", r, ")");
+            } else {
+                static const unordered_map<int, const char *> ops = {
+                    { T_LT, "<" }, { T_GT, ">" }, { T_LTEQ, "<=" }, { T_GTEQ, ">=" }, { T_EQ, "==" }, { T_NEQ, "!=" } };
+                auto l = Operand(b->left);
+                auto r = Operand(b->right);
+                m = cat("(gs_l4m)(", l, " ", ops.at(b->op), " ", r, ")");
+            }
+        }
+        auto t = cg.T();
+        cg.L("gs_l4m ", t, " = ", m, ";");
+        return t;
+    }
+
+    string Within(const string &m) { return mask.empty() ? m : cat("(", mask, " & ", m, ")"); }
+
+    // Each lane's a where m holds there, its b where not.
+    string Blend(const string &m, const string &a, const string &b) {
+        return cat("((gs_l4d)(((gs_l4m)(", a, ") & ", m, ") | ((gs_l4m)(", b, ") & ~", m, ")))");
+    }
+
+    // dst, of type t, takes v in the lanes the mask holds in.
+    void Masked(const string &dst, TypeExpr *t, const string &v) {
+        for (auto &p : Leaves(t))
+            cg.L(dst, p, " = ", Blend(mask, cat("(", v, ")", p), cat(dst, p)), ";");
+    }
+
+    // A branch's statements, and its value into res where res is given.
+    void BranchCode(Node *b, const string &res, TypeExpr *t) {
+        if (!b) return;
+        if (auto x = Is<IfExpr>(b)) {
+            if (res.empty()) S(x);
+            else cg.L(res, " = ", LX(x), ";");
+            return;
+        }
+        auto bl = Is<goose::Block>(b);
+        if (!bl) {
+            if (res.empty()) S(b);
+            else Put(res, t, b);
+            return;
+        }
+        for (auto st : bl->stmts) S(st);
+        if (!bl->tail) return;
+        if (res.empty()) S(bl->tail);
+        else Put(res, t, bl->tail);
+    }
+
     // Stores the lane value or the uniform one into dst, of type t.
     void Put(const string &dst, TypeExpr *t, Node *val) {
         if (Lane(val)) {
@@ -536,6 +681,33 @@ struct LaneGen {
                 for (auto s : ib->body->stmts) S(s);
                 return LX(ib->body->tail);
             }
+            case NK_IfExpr: {
+                auto x = static_cast<IfExpr *>(n);
+                auto t = x->exprtype;
+                auto res = NewLane(t);
+                if (!Lane(x->cond)) {
+                    cg.L("if (", Uniform(x->cond), ") {");
+                    cg.ind++;
+                    BranchCode(x->thenb, res, t);
+                    cg.ind--;
+                    cg.L("} else {");
+                    cg.ind++;
+                    BranchCode(x->elseb, res, t);
+                    cg.ind--;
+                    cg.L("}");
+                    return res;
+                }
+                auto m = MaskOf(x->cond);
+                auto outer = mask;
+                auto a = NewLane(t), b = NewLane(t);
+                mask = Within(m);
+                BranchCode(x->thenb, a, t);
+                mask = Within(cat("~", m));
+                BranchCode(x->elseb, b, t);
+                mask = outer;
+                for (auto &p : Leaves(t)) cg.L(res, p, " = ", Blend(m, cat(a, p), cat(b, p)), ";");
+                return res;
+            }
             case NK_StructLit: {
                 auto sl = static_cast<StructLit *>(n);
                 auto t = NewLane(sl->exprtype);
@@ -593,8 +765,18 @@ struct LaneGen {
                 }
                 if (lanev.count(RootLocal(a->lval))) {
                     auto dst = LanePath(a->lval);
-                    if (a->op == T_ASSIGN) Put(dst, a->lval->exprtype, a->rhs);
-                    else cg.L(dst, " = (", dst, " ", OpStr(a->op), " ", Operand(a->rhs), ");");
+                    auto t = a->lval->exprtype;
+                    if (mask.empty()) {
+                        if (a->op == T_ASSIGN) Put(dst, t, a->rhs);
+                        else cg.L(dst, " = (", dst, " ", OpStr(a->op), " ", Operand(a->rhs), ");");
+                        return;
+                    }
+                    // Under a condition: the new value, then into the lanes
+                    // the condition holds in.
+                    auto v = NewLane(t);
+                    if (a->op == T_ASSIGN) Put(v, t, a->rhs);
+                    else cg.L(v, " = (", dst, " ", OpStr(a->op), " ", Operand(a->rhs), ");");
+                    Masked(dst, t, v);
                     return;
                 }
                 auto x = cg.GenX(a->rhs);
@@ -631,6 +813,33 @@ struct LaneGen {
                 return;
             }
             case NK_InlineBlock: Run(static_cast<InlineBlock *>(s)->body); return;
+            case NK_IfExpr: {
+                auto x = static_cast<IfExpr *>(s);
+                if (!Lane(x->cond)) {
+                    cg.L("if (", Uniform(x->cond), ") {");
+                    cg.ind++;
+                    BranchCode(x->thenb, "", nullptr);
+                    cg.ind--;
+                    if (x->elseb) {
+                        cg.L("} else {");
+                        cg.ind++;
+                        BranchCode(x->elseb, "", nullptr);
+                        cg.ind--;
+                    }
+                    cg.L("}");
+                    return;
+                }
+                // Both branches, each storing into the lanes it is taken in.
+                auto m = MaskOf(x->cond);
+                auto outer = mask;
+                mask = Within(m);
+                BranchCode(x->thenb, "", nullptr);
+                mask = outer;
+                mask = Within(cat("~", m));
+                BranchCode(x->elseb, "", nullptr);
+                mask = outer;
+                return;
+            }
             case NK_Block:
                 cg.L("{");
                 cg.ind++;

@@ -4038,6 +4038,14 @@ typedef double gs_l4d __attribute__((vector_size(32)));
         double gs_l4d_s_ = (x);                                               \
         (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
     })
+/* A condition per lane, all ones where it holds and none where not, as a
+   comparison of two gs_l4d gives it: which lanes a branch stores into. */
+typedef long long gs_l4m __attribute__((vector_size(32)));
+#define gs_l4m_splat(x)                                                       \
+    __extension__({                                                           \
+        long long gs_l4m_s_ = (x);                                            \
+        (gs_l4m){ gs_l4m_s_, gs_l4m_s_, gs_l4m_s_, gs_l4m_s_ };               \
+    })
 #ifdef GS_SQRT_NO_ERRNO
 #define gs_l4d_sqrt(v) __builtin_elementwise_sqrt(v)
 #else
@@ -4088,7 +4096,8 @@ static float gs_mul_addf(float x, float y, float z) {
    memory: a loop around one loads again after it whatever it had hoisted
    out or kept in registers. Goose has no errno, so where the compiler has
    asm labels and the const attribute each is libm's own function declared
-   under a name of its own as depending on its arguments alone; elsewhere
+)GSRT"
+R"GSRT(   under a name of its own as depending on its arguments alone; elsewhere
    the name forwards to libm. */
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
 #define GS_LIBM_SYM2(p, f) #p #f
@@ -4103,8 +4112,7 @@ static float gs_mul_addf(float x, float y, float z) {
 #endif
 GS_LIBM double gs_sin(double x) GS_LIBM1(sin)
 GS_LIBM double gs_cos(double x) GS_LIBM1(cos)
-)GSRT"
-R"GSRT(GS_LIBM double gs_tan(double x) GS_LIBM1(tan)
+GS_LIBM double gs_tan(double x) GS_LIBM1(tan)
 GS_LIBM double gs_asin(double x) GS_LIBM1(asin)
 GS_LIBM double gs_acos(double x) GS_LIBM1(acos)
 GS_LIBM double gs_atan(double x) GS_LIBM1(atan)

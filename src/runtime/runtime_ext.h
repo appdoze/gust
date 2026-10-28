@@ -91,6 +91,14 @@ typedef double gs_l4d __attribute__((vector_size(32)));
         double gs_l4d_s_ = (x);                                               \
         (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
     })
+/* A condition per lane, all ones where it holds and none where not, as a
+   comparison of two gs_l4d gives it: which lanes a branch stores into. */
+typedef long long gs_l4m __attribute__((vector_size(32)));
+#define gs_l4m_splat(x)                                                       \
+    __extension__({                                                           \
+        long long gs_l4m_s_ = (x);                                            \
+        (gs_l4m){ gs_l4m_s_, gs_l4m_s_, gs_l4m_s_, gs_l4m_s_ };               \
+    })
 #ifdef GS_SQRT_NO_ERRNO
 #define gs_l4d_sqrt(v) __builtin_elementwise_sqrt(v)
 #else
