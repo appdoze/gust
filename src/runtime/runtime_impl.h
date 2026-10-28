@@ -379,99 +379,6 @@ static size_t gs_page_size = 0;
    stack's overflow (gs_native_stack_init). */
 #define GS_STACK_GUARANTEE (64u << 10)
 
-/* Gust: test/stress's probe of the AVX state across a commit (stress
-   branch only, where every native build has it): for each commit, whether
-   its context record carries the AVX state, whether the live registers at
-   entry match it, and whether the VirtualAlloc changed them; the last 4096
-   commits by address. */
-#if !defined(__TINYC__) && !defined(__MIRC__)
-#define GS_FAULT_PROBE 1
-#endif
-#ifdef GS_FAULT_PROBE
-#include <immintrin.h>
-#ifndef XSTATE_AVX
-#define XSTATE_AVX 2
-#endif
-#ifndef XSTATE_MASK_AVX
-#define XSTATE_MASK_AVX (1ull << 2)
-#endif
-#ifndef CONTEXT_XSTATE
-#define CONTEXT_XSTATE 0x00100040
-#endif
-WINBASEAPI BOOL WINAPI GetXStateFeaturesMask(PCONTEXT Context, PDWORD64 FeatureMask);
-WINBASEAPI PVOID WINAPI LocateXStateFeature(PCONTEXT Context, DWORD FeatureId, PDWORD Length);
-#define GS_FP_RING 4096
-static volatile LONG gs_fp_count[8];
-static struct { uint8_t *page; size_t n; uint8_t *hit; int flags; } gs_fp_ring[GS_FP_RING];
-static volatile LONG gs_fp_next;
-static GS_TLS __declspec(align(64)) uint8_t gs_fp_live[1024];
-/* Nothing here may touch a vector register before the state is saved:
-   no memset or memcmp, which can, and volatile loops the compiler cannot
-   vectorize. */
-#if defined(__clang__) || defined(__GNUC__)
-__attribute__((target("xsave")))
-#endif
-static void gs_fp_xsave(uint8_t *area) { _xsave64(area, 4); }
-static int gs_fp_same(const uint8_t *a, const uint8_t *b, int n) {
-    for (int i = 0; i < n; i++)
-        if (((const volatile uint8_t *)a)[i] != ((const volatile uint8_t *)b)[i]) return 0;
-    return 1;
-}
-/* Whether the AVX state saved in area is not in its init state (all zero),
-   in which XSAVE may leave the area unwritten. */
-static int gs_fp_inuse(const uint8_t *area) { return (((const volatile uint8_t *)area)[512] & 4) != 0; }
-/* flags: 1 no xstate, 2 AVX in init in the record, 4 AVX in the record,
-   8 live registers differ from the record, 16 the VirtualAlloc changed the
-   live registers, 32 live AVX in init at entry. */
-static int gs_fault_probe_enter(EXCEPTION_POINTERS *ep) {
-    gs_fp_xsave(gs_fp_live);
-    CONTEXT *c = ep->ContextRecord;
-    DWORD64 mask = 0;
-    int flags = gs_fp_inuse(gs_fp_live) ? 0 : 32;
-    if ((c->ContextFlags & CONTEXT_XSTATE) == CONTEXT_XSTATE && GetXStateFeaturesMask(c, &mask)) {
-        if (mask & XSTATE_MASK_AVX) {
-            flags |= 4;
-            const uint8_t *rec = (const uint8_t *)LocateXStateFeature(c, XSTATE_AVX, NULL);
-            if (rec && (!gs_fp_inuse(gs_fp_live) || !gs_fp_same(rec, gs_fp_live + 576, 256))) flags |= 8;
-        } else {
-            flags |= 2;
-            if (gs_fp_inuse(gs_fp_live)) flags |= 8;
-        }
-    } else {
-        flags |= 1;
-    }
-    return flags;
-}
-static void gs_fault_probe_leave(EXCEPTION_POINTERS *ep, int flags, uint8_t *hit, uint8_t *page, size_t n) {
-    (void)ep;
-    __declspec(align(64)) uint8_t after[1024];
-    gs_fp_xsave(after);
-    int was = gs_fp_inuse(gs_fp_live), now = gs_fp_inuse(after);
-    if (was != now || (was && !gs_fp_same(after + 576, gs_fp_live + 576, 256))) flags |= 16;
-    for (int b = 0; b < 6; b++)
-        if (flags & (1 << b)) InterlockedIncrement(&gs_fp_count[b]);
-    InterlockedIncrement(&gs_fp_count[7]);
-    LONG k = InterlockedIncrement(&gs_fp_next) % GS_FP_RING;
-    gs_fp_ring[k].page = page;
-    gs_fp_ring[k].n = n;
-    gs_fp_ring[k].hit = hit;
-    gs_fp_ring[k].flags = flags;
-}
-/* which 0..5: commits with that flag; 7: all commits; 100 + address: the
-   flags of the latest commit whose chunk holds that address (-1: none),
-   and 200 + address that commit's faulting address. */
-GS_API int64_t gs_fault_probe(int64_t which, int64_t addr) {
-    if (which < 8) return gs_fp_count[which];
-    for (LONG j = 0; j < GS_FP_RING; j++) {
-        LONG k = ((gs_fp_next - j) % GS_FP_RING + GS_FP_RING) % GS_FP_RING;
-        uint8_t *p = gs_fp_ring[k].page;
-        if (p && (uint8_t *)(uintptr_t)addr >= p && (uint8_t *)(uintptr_t)addr < p + gs_fp_ring[k].n)
-            return which == 100 ? gs_fp_ring[k].flags : (int64_t)(uintptr_t)gs_fp_ring[k].hit;
-    }
-    return -1;
-}
-#endif
-
 static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     if (code == EXCEPTION_STACK_OVERFLOW) {
@@ -494,14 +401,8 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
             if (hit < r->base + r->usable) {
                 uint8_t *page = (uint8_t *)((size_t)hit & ~(gs_page_size - 1));
                 size_t n = gs_commit_size(r, page);
-#ifdef GS_FAULT_PROBE
-                int probe = gs_fault_probe_enter(ep);
-#endif
                 if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
                     if (page + n > r->committed) r->committed = page + n;
-#ifdef GS_FAULT_PROBE
-                    gs_fault_probe_leave(ep, probe, hit, page, n);
-#endif
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
                 static const char nomem[] =
