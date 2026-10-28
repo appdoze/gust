@@ -61,6 +61,17 @@ var starts: i64[>..] = [];
 
 // Where the bytes are (net_starved_probe.c).
 extern fn starved_addr(bytes: const u8[:]) -> i64;
+// The runtime's record of its commits, built with -DGS_FAULT_PROBE
+// (runtime_impl.h): counts by flag, and the flags of the commit behind an
+// address.
+extern fn gs_fault_probe(which: i64, addr: i64) -> i64;
+
+fn probe_totals() {
+    print("  commits ", gs_fault_probe(7, 0), ": record without xstate ", gs_fault_probe(0, 0),
+          ", AVX init in the record ", gs_fault_probe(1, 0), ", AVX in the record ", gs_fault_probe(2, 0),
+          ", live differs from the record ", gs_fault_probe(3, 0), ", VirtualAlloc changed the live state ",
+          gs_fault_probe(4, 0), ", live AVX init at entry ", gs_fault_probe(5, 0));
+}
 
 // Bytes from..to of got, in hex, those not the pattern's marked with *.
 fn dump(got: const u8[:], from: i64, to: i64) {
@@ -218,6 +229,12 @@ fn main() {
                 for q in lo..min(starts.len, j + 2) { format(line, " ", starts[q]); }
                 print("  second's pieces began at", line);
             }
+            if wrong2 >= 0 {
+                let at = a2 + wrong2;
+                print("  the commit behind the second's wrong byte: flags ", gs_fault_probe(100, at),
+                      ", faulting at offset ", gs_fault_probe(200, at) - a2);
+            }
+            probe_totals();
             exit(1);
         }
         net::close(p, m1);
@@ -225,4 +242,5 @@ fn main() {
     }
     net::request_stop();
     print("served: ", qget<net::Stats>().bytes_out > 0);
+    probe_totals();
 }

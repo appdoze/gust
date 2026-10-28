@@ -1762,6 +1762,100 @@ static size_t gs_page_size = 0;
    stack's overflow (gs_native_stack_init). */
 #define GS_STACK_GUARANTEE (64u << 10)
 
+/* Gust: test/stress's probe of the AVX state across a commit (stress
+   branch only, where every native build has it): for each commit, whether
+   its context record carries the AVX state, whether the live registers at
+   entry match it, and whether the VirtualAlloc changed them; the last 4096
+   commits by address. */
+#if !defined(__TINYC__) && !defined(__MIRC__)
+#define GS_FAULT_PROBE 1
+#endif
+#ifdef GS_FAULT_PROBE
+#include <immintrin.h>
+#ifndef XSTATE_AVX
+#define XSTATE_AVX 2
+#endif
+#ifndef XSTATE_MASK_AVX
+#define XSTATE_MASK_AVX (1ull << 2)
+#endif
+#ifndef CONTEXT_XSTATE
+#define CONTEXT_XSTATE 0x00100040
+#endif
+WINBASEAPI BOOL WINAPI GetXStateFeaturesMask(PCONTEXT Context, PDWORD64 FeatureMask);
+WINBASEAPI PVOID WINAPI LocateXStateFeature(PCONTEXT Context, DWORD FeatureId, PDWORD Length);
+#define GS_FP_RING 4096
+)GSRT"
+R"GSRT(static volatile LONG gs_fp_count[8];
+static struct { uint8_t *page; size_t n; uint8_t *hit; int flags; } gs_fp_ring[GS_FP_RING];
+static volatile LONG gs_fp_next;
+static GS_TLS __declspec(align(64)) uint8_t gs_fp_live[1024];
+/* Nothing here may touch a vector register before the state is saved:
+   no memset or memcmp, which can, and volatile loops the compiler cannot
+   vectorize. */
+#if defined(__clang__) || defined(__GNUC__)
+__attribute__((target("xsave")))
+#endif
+static void gs_fp_xsave(uint8_t *area) { _xsave64(area, 4); }
+static int gs_fp_same(const uint8_t *a, const uint8_t *b, int n) {
+    for (int i = 0; i < n; i++)
+        if (((const volatile uint8_t *)a)[i] != ((const volatile uint8_t *)b)[i]) return 0;
+    return 1;
+}
+/* Whether the AVX state saved in area is not in its init state (all zero),
+   in which XSAVE may leave the area unwritten. */
+static int gs_fp_inuse(const uint8_t *area) { return (((const volatile uint8_t *)area)[512] & 4) != 0; }
+/* flags: 1 no xstate, 2 AVX in init in the record, 4 AVX in the record,
+   8 live registers differ from the record, 16 the VirtualAlloc changed the
+   live registers, 32 live AVX in init at entry. */
+static int gs_fault_probe_enter(EXCEPTION_POINTERS *ep) {
+    gs_fp_xsave(gs_fp_live);
+    CONTEXT *c = ep->ContextRecord;
+    DWORD64 mask = 0;
+    int flags = gs_fp_inuse(gs_fp_live) ? 0 : 32;
+    if ((c->ContextFlags & CONTEXT_XSTATE) == CONTEXT_XSTATE && GetXStateFeaturesMask(c, &mask)) {
+        if (mask & XSTATE_MASK_AVX) {
+            flags |= 4;
+            const uint8_t *rec = (const uint8_t *)LocateXStateFeature(c, XSTATE_AVX, NULL);
+            if (rec && (!gs_fp_inuse(gs_fp_live) || !gs_fp_same(rec, gs_fp_live + 576, 256))) flags |= 8;
+        } else {
+            flags |= 2;
+            if (gs_fp_inuse(gs_fp_live)) flags |= 8;
+        }
+    } else {
+        flags |= 1;
+    }
+    return flags;
+}
+static void gs_fault_probe_leave(EXCEPTION_POINTERS *ep, int flags, uint8_t *hit, uint8_t *page, size_t n) {
+    (void)ep;
+    __declspec(align(64)) uint8_t after[1024];
+    gs_fp_xsave(after);
+    int was = gs_fp_inuse(gs_fp_live), now = gs_fp_inuse(after);
+    if (was != now || (was && !gs_fp_same(after + 576, gs_fp_live + 576, 256))) flags |= 16;
+    for (int b = 0; b < 6; b++)
+        if (flags & (1 << b)) InterlockedIncrement(&gs_fp_count[b]);
+    InterlockedIncrement(&gs_fp_count[7]);
+    LONG k = InterlockedIncrement(&gs_fp_next) % GS_FP_RING;
+    gs_fp_ring[k].page = page;
+    gs_fp_ring[k].n = n;
+    gs_fp_ring[k].hit = hit;
+    gs_fp_ring[k].flags = flags;
+}
+/* which 0..5: commits with that flag; 7: all commits; 100 + address: the
+   flags of the latest commit whose chunk holds that address (-1: none),
+   and 200 + address that commit's faulting address. */
+GS_API int64_t gs_fault_probe(int64_t which, int64_t addr) {
+    if (which < 8) return gs_fp_count[which];
+    for (LONG j = 0; j < GS_FP_RING; j++) {
+        LONG k = ((gs_fp_next - j) % GS_FP_RING + GS_FP_RING) % GS_FP_RING;
+        uint8_t *p = gs_fp_ring[k].page;
+        if (p && (uint8_t *)(uintptr_t)addr >= p && (uint8_t *)(uintptr_t)addr < p + gs_fp_ring[k].n)
+            return which == 100 ? gs_fp_ring[k].flags : (int64_t)(uintptr_t)gs_fp_ring[k].hit;
+    }
+    return -1;
+}
+#endif
+
 static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
     DWORD code = ep->ExceptionRecord->ExceptionCode;
     if (code == EXCEPTION_STACK_OVERFLOW) {
@@ -1778,15 +1872,20 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
     for (long i = 0; i < gs_nregions; i++) {
         gs_region *r = &gs_regions[i];
         if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
-)GSRT"
-R"GSRT(            /* Within the usable part: commit another chunk (clamped to the
+            /* Within the usable part: commit another chunk (clamped to the
                region) and resume, or where the system has no more memory to
                commit, say so. Within the gap: a data stack overran. */
             if (hit < r->base + r->usable) {
                 uint8_t *page = (uint8_t *)((size_t)hit & ~(gs_page_size - 1));
                 size_t n = gs_commit_size(r, page);
+#ifdef GS_FAULT_PROBE
+                int probe = gs_fault_probe_enter(ep);
+#endif
                 if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
                     if (page + n > r->committed) r->committed = page + n;
+#ifdef GS_FAULT_PROBE
+                    gs_fault_probe_leave(ep, probe, hit, page, n);
+#endif
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
                 static const char nomem[] =
@@ -1874,7 +1973,8 @@ static GS_TLS uintptr_t gs_native_lo, gs_native_hi;
 static GS_TLS void *gs_sigstack;
 #define GS_SIGSTACK_MIN (64u << 10)
 /* What the fault handler replaced, for the faults that are not its own. */
-static struct sigaction gs_prev_segv, gs_prev_bus;
+)GSRT"
+R"GSRT(static struct sigaction gs_prev_segv, gs_prev_bus;
 
 /* For gs_trim_memory, which discards whole pages only, and the commit. */
 static size_t gs_page_size = 0;
@@ -1972,8 +2072,7 @@ static size_t gs_sigstack_size(void) {
 
 /* Run by each thread program's thread as it starts: an alternate stack for
    the fault handler, unless the thread has one (ASan gives every thread its
-)GSRT"
-R"GSRT(   own), and the bounds of the thread's stack. */
+   own), and the bounds of the thread's stack. */
 static void gs_native_stack_init(void) {
     stack_t ss;
     uintptr_t lo = 0, hi = 0;
@@ -2080,7 +2179,8 @@ static GS_NORETURN void gs_end(int code) {
 
 /* Gust: freeze(a)'s copies, never freed: they are static data to the
    program (§11.2), which any thread may hold a view of at any time. Each
-   follows a link to the one before, so that all stay reachable until the
+)GSRT"
+R"GSRT(   follows a link to the one before, so that all stay reachable until the
    program ends, as static data is, and a leak checker counts none lost.
    One byte at least, so that an empty array's view points at something. */
 static void **gs_frozen;
@@ -2168,8 +2268,7 @@ GS_API uint8_t gs_trim_memory(void) {
         if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
 #endif
         if (start >= end) continue;
-)GSRT"
-R"GSRT(        size_t len = (size_t)(end - start);
+        size_t len = (size_t)(end - start);
 #ifdef _WIN32
         /* The access-fault handler commits the pages again on growth. */
         if (VirtualFree((void *)start, len, MEM_DECOMMIT))
@@ -2248,7 +2347,8 @@ typedef struct {
 } gs_sppath;
 
 #define GS_SPHEAD(p) ((gs_sphead *)(p)->base)
-#define GS_SPLEAF(p, i) ((gs_spleaf *)((p)->base + (i) * GS_SPAN_NODE))
+)GSRT"
+R"GSRT(#define GS_SPLEAF(p, i) ((gs_spleaf *)((p)->base + (i) * GS_SPAN_NODE))
 #define GS_SPINNER(p, i) ((gs_spinner *)((p)->base + (i) * GS_SPAN_NODE))
 
 static int64_t gs_sp_newnode(gs_sppath *p) {
@@ -2375,8 +2475,7 @@ static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     gs_spinner *rn = GS_SPINNER(p, r);
     rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
-)GSRT"
-R"GSRT(    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
+    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
     rn->child[0] = a;
     rn->key[1] = gs_sp_key(p, b, leaf);
     rn->max[1] = gs_sp_max(p, b, leaf, INT64_MAX);
@@ -2486,7 +2585,8 @@ static void gs_sp_delete(gs_sppath *p, int64_t k) {
     while (GS_SPHEAD(p)->height > 0 && GS_SPINNER(p, GS_SPHEAD(p)->root)->n == 1) {
         int64_t r = GS_SPHEAD(p)->root;
         GS_SPHEAD(p)->root = GS_SPINNER(p, r)->child[0];
-        GS_SPHEAD(p)->height--;
+)GSRT"
+R"GSRT(        GS_SPHEAD(p)->height--;
         gs_sp_dropnode(p, r);
     }
 }
@@ -2605,8 +2705,7 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
    to it is only made where its first span touches the run. */
 typedef struct {
     gs_spleaf *lf, *nl;
-)GSRT"
-R"GSRT(    int64_t k, nk;
+    int64_t k, nk;
     gs_sppath *np;
 } gs_spnear;
 
@@ -2713,7 +2812,8 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
     return gs_spans_alloc(base, n, top, len, cnt);
 }
 
-/* ---------------------------------------------------------------------------
+)GSRT"
+R"GSRT(/* ---------------------------------------------------------------------------
    Byte search: std's find_any and find_pair (docs/stdlib.md). A set arrives
    as std's ByteSet, made by its byte_set, which gs_byteset lays out as the
    Goose struct is (spec C.2: packed, in declaration order). `members` is
@@ -2823,8 +2923,7 @@ static GS_INLINE void gs_bsm_init(gs_bsm *m, const gs_byteset *s, int tables) {
 
 /* The members among the 16 bytes of x, as 0xff bytes, for a set of kind k
    from 1 to 4, a constant wherever this is inlined. A range holds x where
-)GSRT"
-R"GSRT(   x - lo, wrapping, is at most its width. */
+   x - lo, wrapping, is at most its width. */
 static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
     __m128i r, t;
     if (k == 1) {
@@ -2888,7 +2987,8 @@ static GS_SSSE3 GS_INLINE __m128i gs_bsm_tables(const gs_bsm *m, __m128i x) {
 #define GS_TABLES_A(x) gs_bsm_tables(&ma, x)
 #define GS_TABLES_B(x) gs_bsm_tables(&mb, x)
 
-static GS_INLINE int64_t gs_scan_any_k(const uint8_t *p, int64_t n, const gs_byteset *s, int ks) {
+)GSRT"
+R"GSRT(static GS_INLINE int64_t gs_scan_any_k(const uint8_t *p, int64_t n, const gs_byteset *s, int ks) {
     gs_bsm ms;
     gs_bsm_init(&ms, s, 0);
     GS_ANY_LOOP(GS_TEST_S)
@@ -2989,8 +3089,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     /* The workers the budget holds beside the main program, each at the
        most regions one can take: what hardware_threads() reports at most.
        At least one, so a program sized by it still runs; the regions the
-)GSRT"
-R"GSRT(       platform then refuses are retried smaller (gs_reserve_region). */
+       platform then refuses are retried smaller (gs_reserve_region). */
     if (workerregions > 0) {
         uint64_t per = reserve + gap;
         uint64_t total = per ? budget / per : 0;
@@ -3080,7 +3179,8 @@ GS_API int64_t gs_fmt_i64(uint8_t *dst, int64_t v) {
    The numbers are naturals in 32-bit limbs, least significant first. The
    denominator s stays below 2^1079 (ten times 2^1075, for the smallest
    doubles), and the others below eleven times s. */
-typedef struct { int n; uint32_t d[36]; } gs_big;
+)GSRT"
+R"GSRT(typedef struct { int n; uint32_t d[36]; } gs_big;
 
 /* a = v << sh, for v > 0. */
 static void gs_big_set(gs_big *a, uint64_t v, int sh) {
@@ -3202,8 +3302,7 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
             c = gs_big_cmp(&t, &s);
             high = c > 0 || (c == 0 && (d & 1));
         }
-)GSRT"
-R"GSRT(        dig[n++] = (char)('0' + d + high);
+        dig[n++] = (char)('0' + d + high);
         return n;
     }
 }
@@ -3304,7 +3403,8 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
 }
 
 /* stdout is unbuffered (gs_rt_start): each print is this one write. */
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
+)GSRT"
+R"GSRT(GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
 )GSRT"
     ) },
     { "runtime_threads.h", string_view(
