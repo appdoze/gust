@@ -8,9 +8,12 @@
 // become MIR's square root, an instruction added to it, which the generator
 // keeps in registers rather than spilling every live one around a call into
 // the C library (c2mir's own copies of small structs are moves, another
-// change to it). memcpy stays a call: written as loads and stores, a copy
-// out of a register variable whose address c2mir took read its stack home
-// before the generator had stored it there. The places of the frame c2mir
+// change to it). A memset or memcpy of up to 32 or 16 bytes, the runtime's
+// small zeroing, copies and unaligned loads, becomes stores and loads there
+// too (MirLowerCalls), but not through an address of a register variable
+// that anything else reads: written in the runtime's C as loads and stores,
+// such a copy had read the variable's stack home before the generator
+// stored it there. The places of the frame c2mir
 // keeps struct locals in become registers where nothing else can reach
 // them (MirPromoteFrame), as a C compiler keeps a struct's fields in
 // registers. The runtime treats c2mir as it
@@ -72,12 +75,91 @@ inline char mir_error[512];
     longjmp(*mir_bail, 1);
 }
 
-// Calls of sqrt and sqrtf, made MIR's square root.
+// The registers of a function that may hold an address `addr` took of a
+// register variable, or one computed from such an address.
+inline unordered_set<MIR_reg_t> MirAddrRegs(MIR_context_t ctx, MIR_func_t f) {
+    unordered_set<MIR_reg_t> regs;
+    for (auto changed = true; changed;) {
+        changed = false;
+        for (auto insn = DLIST_HEAD(MIR_insn_t, f->insns); insn; insn = DLIST_NEXT(MIR_insn_t, insn)) {
+            auto from = MIR_addr_code_p(insn->code);
+            for (size_t i = 0; i < insn->nops && !from; i++) {
+                int out;
+                MIR_insn_op_mode(ctx, insn, i, &out);
+                auto &o = insn->ops[i];
+                if (out) continue;
+                if (o.mode == MIR_OP_REG) from = regs.count(o.u.reg) > 0;
+                else if (o.mode == MIR_OP_MEM) from = regs.count(o.u.mem.base) || regs.count(o.u.mem.index);
+            }
+            if (!from) continue;
+            for (size_t i = 0; i < insn->nops; i++) {
+                int out;
+                MIR_insn_op_mode(ctx, insn, i, &out);
+                if (out && insn->ops[i].mode == MIR_OP_REG) changed = regs.insert(insn->ops[i].u.reg).second || changed;
+            }
+        }
+    }
+    return regs;
+}
+
+// The instruction that last sets reg before insn in its block, or null
+// (a label, or the function's start, comes first).
+inline MIR_insn_t MirDefAt(MIR_context_t ctx, MIR_insn_t insn, MIR_reg_t reg) {
+    for (auto p = DLIST_PREV(MIR_insn_t, insn); p && p->code != MIR_LABEL; p = DLIST_PREV(MIR_insn_t, p))
+        for (size_t i = 0; i < p->nops; i++) {
+            int out;
+            MIR_insn_op_mode(ctx, p, i, &out);
+            if (out && p->ops[i].mode == MIR_OP_REG && p->ops[i].u.reg == reg) return p;
+        }
+    return nullptr;
+}
+
+// The constant an operand of insn is: an immediate, or a register a
+// `mov` of one set last in the block.
+inline bool MirConstAt(MIR_context_t ctx, MIR_insn_t insn, const MIR_op_t &o, int64_t &v) {
+    auto imm = [&](const MIR_op_t &x) {
+        if (x.mode != MIR_OP_INT && x.mode != MIR_OP_UINT) return false;
+        v = x.u.i;
+        return true;
+    };
+    if (imm(o)) return true;
+    if (o.mode != MIR_OP_REG) return false;
+    auto d = MirDefAt(ctx, insn, o.u.reg);
+    return d && d->code == MIR_MOV && imm(d->ops[1]);
+}
+
+// The `addr reg, v` that set reg last in insn's block, and v.
+inline MIR_insn_t MirAddrAt(MIR_context_t ctx, MIR_insn_t insn, MIR_reg_t reg, MIR_reg_t &v) {
+    auto d = MirDefAt(ctx, insn, reg);
+    if (!d || d->code != MIR_ADDR || d->ops[1].mode != MIR_OP_REG) return nullptr;
+    v = d->ops[1].u.reg;
+    return d;
+}
+
+// Whether an instruction of f other than `except` reads reg.
+inline bool MirReads(MIR_context_t ctx, MIR_func_t f, MIR_reg_t reg, MIR_insn_t except = nullptr) {
+    for (auto i = DLIST_HEAD(MIR_insn_t, f->insns); i; i = DLIST_NEXT(MIR_insn_t, i))
+        for (size_t k = 0; k < i->nops && i != except; k++) {
+            int out;
+            MIR_insn_op_mode(ctx, i, k, &out);
+            auto &o = i->ops[k];
+            if (!out && ((o.mode == MIR_OP_REG && o.u.reg == reg) ||
+                         (o.mode == MIR_OP_MEM && (o.u.mem.base == reg || o.u.mem.index == reg))))
+                return true;
+        }
+    return false;
+}
+
+// Calls of sqrt and sqrtf, made MIR's square root, and of a small memset or
+// memcpy, made stores and loads.
 inline void MirLowerCalls(MIR_context_t ctx) {
     for (auto m = DLIST_HEAD(MIR_module_t, *MIR_get_module_list(ctx)); m; m = DLIST_NEXT(MIR_module_t, m))
         for (auto it = DLIST_HEAD(MIR_item_t, m->items); it; it = DLIST_NEXT(MIR_item_t, it)) {
             if (it->item_type != MIR_func_item) continue;
             auto f = it->u.func;
+            auto addrregs = MirAddrRegs(ctx, f);
+            vector<MIR_insn_t> addrs;
+            int mcregs = 0;
             for (auto insn = DLIST_HEAD(MIR_insn_t, f->insns), next = insn; insn; insn = next) {
                 next = DLIST_NEXT(MIR_insn_t, insn);
                 if (insn->code != MIR_CALL || insn->nops < 4) continue;
@@ -94,8 +176,103 @@ inline void MirLowerCalls(MIR_context_t ctx) {
                      (name == "sqrtf" && p->res_types[0] == MIR_T_F))) {
                     add(MIR_new_insn(ctx, name == "sqrt" ? MIR_DSQRT : MIR_FSQRT, insn->ops[2], insn->ops[3]));
                     MIR_remove_insn(ctx, it, insn);
+                    continue;
+                }
+                if (nargs != 3 || insn->nops != 6 || insn->ops[2].mode != MIR_OP_REG ||
+                    insn->ops[3].mode != MIR_OP_REG || (name != "memset" && name != "memcpy"))
+                    continue;
+                // Small memsets and memcpys of a constant size, where the
+                // runtime's GS_MEMZERO, GS_MEMCPY, gs_ld32 and gs_ld64 call
+                // them (runtime.h): stores and loads where the call was,
+                // whose alias set is 0, any, so no type-based alias analysis
+                // can move them past the stores and loads they used to be
+                // ordered with by the call. A store of zero for each part of a
+                // pushed element (bintrees' links), a load or a store of the
+                // register a copy into or out of `&v` names (a slice key's
+                // compare), a load and a store for the rest. Otherwise an
+                // address `addr` took is left to the call: a store through
+                // it of a narrower type than the variable's left the
+                // generator's address transformation reading stale halves
+                // (typing/explicit_type_args crashed).
+                int64_t n = 0, c = -1;
+                if (!MirConstAt(ctx, insn, insn->ops[5], n) || n <= 0 || n > 32) continue;
+                auto dr = insn->ops[3].u.reg;
+                auto part = [](int64_t left) { return left >= 8 ? 8 : left >= 4 ? 4 : left >= 2 ? 2 : 1; };
+                auto ptype = [](int64_t w) {
+                    return w == 8 ? MIR_T_I64 : w == 4 ? MIR_T_U32 : w == 2 ? MIR_T_U16 : MIR_T_U8;
+                };
+                auto mem = [&](MIR_type_t t, int64_t off, MIR_reg_t base) {
+                    return MIR_new_mem_op(ctx, t, off, base, 0, 1);
+                };
+                // The call's result, its first argument, where anything reads it.
+                auto done = [&]() {
+                    if (MirReads(ctx, f, insn->ops[2].u.reg))
+                        add(MIR_new_insn(ctx, MIR_MOV, insn->ops[2], insn->ops[3]));
+                    MIR_remove_insn(ctx, it, insn);
+                };
+                if (name == "memset") {
+                    if (addrregs.count(dr) || !MirConstAt(ctx, insn, insn->ops[4], c) || c != 0) continue;
+                    for (int64_t off = 0; off < n; off += part(n - off))
+                        add(MIR_new_insn(ctx, MIR_MOV, mem(ptype(part(n - off)), off, dr), MIR_new_int_op(ctx, 0)));
+                    done();
+                    continue;
+                }
+                if (insn->ops[4].mode != MIR_OP_REG) continue;
+                auto sr = insn->ops[4].u.reg;
+                MIR_reg_t dv = 0, sv = 0;
+                auto da = MirAddrAt(ctx, insn, dr, dv), sa = MirAddrAt(ctx, insn, sr, sv);
+                // A variable whose address something else reads stays the
+                // call's.
+                if ((da || sa) && (MirReads(ctx, f, insn->ops[2].u.reg) ||
+                                   (da && MirReads(ctx, f, dr, insn)) || (sa && MirReads(ctx, f, sr, insn))))
+                    continue;
+                // The mov of n bytes to or from a register variable.
+                auto regmov = [&](MIR_reg_t v, bool load, MIR_insn_code_t &code, MIR_type_t &t) {
+                    auto rt = MIR_reg_type(ctx, v, f);
+                    if (rt == MIR_T_D && n == 8) return code = MIR_DMOV, t = MIR_T_D, true;
+                    if (rt == MIR_T_F && n == 4) return code = MIR_FMOV, t = MIR_T_F, true;
+                    if (rt != MIR_T_I64 || (n != 8 && n != 4)) return false;
+                    code = MIR_MOV;
+                    t = n == 8 ? MIR_T_I64 : MIR_T_U32;
+                    // A load into a 32-bit variable extends as c2mir's name
+                    // for it says: `u` unsigned, `i` signed.
+                    auto nm = MIR_reg_name(ctx, v, f);
+                    if (load && n == 4) {
+                        if (nm[0] == 'i') t = MIR_T_I32;
+                        else if (nm[0] != 'u') return false;
+                    }
+                    return true;
+                };
+                MIR_insn_code_t code;
+                MIR_type_t t;
+                if (da && !sa && !addrregs.count(sr) && regmov(dv, true, code, t)) {
+                    add(MIR_new_insn(ctx, code, MIR_new_reg_op(ctx, dv), mem(t, 0, sr)));
+                    addrs.push_back(da);
+                    done();
+                } else if (sa && !da && !addrregs.count(dr) && regmov(sv, false, code, t)) {
+                    add(MIR_new_insn(ctx, code, mem(t, 0, dr), MIR_new_reg_op(ctx, sv)));
+                    addrs.push_back(sa);
+                    done();
+                } else if (!da && !sa && !addrregs.count(dr) && !addrregs.count(sr) && n <= 16) {
+                    // Every part loaded before any is stored, as memmove
+                    // would; memcpy's runs do not overlap anyway.
+                    vector<pair<MIR_reg_t, int64_t>> parts;
+                    for (int64_t off = 0; off < n; off += part(n - off)) {
+                        auto r = MIR_new_func_reg(ctx, f, MIR_T_I64, cat("gs_mc", mcregs++).c_str());
+                        add(MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, r), mem(ptype(part(n - off)), off, sr)));
+                        parts.push_back({ r, off });
+                    }
+                    for (auto [r, off] : parts)
+                        add(MIR_new_insn(ctx, MIR_MOV, mem(ptype(part(n - off)), off, dr), MIR_new_reg_op(ctx, r)));
+                    done();
                 }
             }
+            // An `addr` whose address only the calls lowered took is dead:
+            // without it the variable is a register again.
+            sort(addrs.begin(), addrs.end());
+            addrs.erase(unique(addrs.begin(), addrs.end()), addrs.end());
+            for (auto a : addrs)
+                if (!MirReads(ctx, f, a->ops[0].u.reg)) MIR_remove_insn(ctx, it, a);
         }
 }
 

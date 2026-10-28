@@ -213,7 +213,11 @@ git log upstream/master..main
   function as it is first called, its imports resolved from the packages'
   native functions and then the C library's (`SystemSymbol`,
   `src/process.cpp`); calls of sqrt and sqrtf become MIR's square root
-  first. The runtime takes c2mir (`__MIRC__`) for a compiler without GCC's
+  first, and a memset or memcpy of up to 32 or 16 bytes of a constant
+  size, the runtime's small zeroing, copies and unaligned loads, becomes
+  stores and loads of alias set 0 (`MirLowerCalls`), but not through an
+  address of a register variable that anything else reads: bintrees runs
+  about a quarter faster. The runtime takes c2mir (`__MIRC__`) for a compiler without GCC's
   atomics, its SSE scan and epoll, as it takes TinyCC (`src/runtime/`).
   `test/mir_runs.py` (new) runs the fixtures with an expected output both
   ways and requires the same output and outcome. Then the runtime compiled
@@ -556,6 +560,11 @@ git log upstream/master..main
   index by the access's size, as its patterns do, not by the size's log:
   SSA combining had folded a packed field's displacement of 57 into an
   8-byte access, which no pattern matched (230 MIR fixtures on macOS).
+  And GVN's memory availability across blocks (`mem_av_trans_func`) is
+  ended by every store of a block, not only by those still available at
+  its end: a store a later one had made unavailable, the two possibly
+  aliasing, still wrote memory an expression from before the block read,
+  which aliasing that is not transitive (alias set 0) let through.
 - `third_party/mir` is built with `__WIN32` defined on Windows
   (`CMakeLists.txt`): its built-in headers test MinGW's macro, which MSVC
   and clang do not define, and c2mir's stdarg.h declared no `va_list`.
