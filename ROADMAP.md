@@ -320,7 +320,13 @@ the plain function.
   `gs_memeq`, inlined where c2mir calls it: strings from 2.0x to 1.4x, bintrees from
   2.9x to 2.5x. Measured as the fastest of five alternating runs in WSL, the geometric
   mean is 1.51x; hashmap (1.8x) and bintrees (2.5x) are furthest off, hashmap's hot
-  loop calling nothing and bintrees' recursion each call's.)**
+  loop calling nothing and bintrees' recursion each call's. On a hosted Ubuntu runner
+  (`compare/ci_measure.py`, the fastest of seven alternating runs of each build, run
+  40625482742) the geometric mean against gcc -O2 is 1.43x: n-body 1.52x, raytrace 1.56x,
+  interp 1.06x, sort 0.99x, astar 1.50x, bintrees 2.11x, hashmap 1.62x, strings 1.40x. What
+  is left in bintrees and hashmap is MIR's own code for a call and a probe loop: the same
+  leaf-test inlining by hand ran bintrees' check 7% faster under MIR, against a native
+  build twice as fast.)**
 - **Python bindings generator**: turn a library into a pip-installable module, the route
   Rust grew through with PyO3. **(Done: `scripts/gust_python.py` builds a library's
   exports into a ctypes package with checked integers, structs, slices read from
@@ -343,7 +349,8 @@ the plain function.
   compiles and runs.)**
 
 **Exit:** a fork library installed with `pip` and called from Python; no-build runs within
-1.5x of compiled speed.
+1.5x of compiled speed. **(Both met: `test/python_bindings.py`; `gust run --mir` 1.43x off
+gcc -O2 across `compare/` on a hosted runner, above.)**
 
 ## Phase 7: Expressiveness (months 12–16)
 
@@ -421,12 +428,29 @@ commands, with no callbacks kept as objects; the samples' runner plays it off sc
   two of them crashes, all fixed.)**
 - A soundness review of the memory model and the new parallel features, ideally with
   outside reviewers. "Safer than Rust" has to be earned by people trying to break it.
+  **(The brief is written: `docs/gust/soundness_review.md`, the claims and where each is
+  enforced, what already tries to break them, the escape hatches and where to look first.
+  The review itself needs reviewers. Found on the way: on hosted Windows under load, a
+  data stack's commit fault inside the C library's vector memcpy came back with the
+  thread's AVX state zero, storing 16 zero bytes of every 32 (`net_serve.goose`'s
+  intermittent failure). Fixed by a scalar first touch of each page before any bulk copy,
+  move or fill (`GS_TOUCHED`, `src/runtime/runtime.h`), with
+  `.github/workflows/stress.yml` reproducing it without the fix and running clean with it.)**
 - Freeze the spec; publish a stability and edition policy. **(The policy written:
   `docs/gust/stability.md`, what 1.0 freezes and what not, editions opted into in the
   sidecar, versions and deprecation. The freeze itself is the 1.0 tag's.)**
 - Release 1.0 with a published benchmark and safety report (`compare/`, rerun).
 
 **Exit:** no known soundness bugs; ahead of Rust on every benchmark in `compare/`; 1.0 tagged.
+**(Ahead on all eight, with clang, Gust's default, on hosted runners: `compare/ci_measure.py`,
+the fastest of seven alternating runs of each build, run 40745431333, Gust's time over
+Rust's (rustc -O3, fat LTO). Ubuntu: n-body 0.26x, raytrace 0.93x, interp 0.66x, sort 0.96x,
+astar 0.81x, bintrees 0.17x, hashmap 0.80x, strings 0.52x, geomean 0.55x. Windows: 0.26x,
+0.84x, 0.56x, 0.90x, 0.86x, 0.06x, 0.85x, 0.60x, geomean 0.48x. raytrace and interp had been
+level (1.01x and 1.04x on Ubuntu); the lanes' filter form and base-case inlining's match form
+made them ahead. With gcc, raytrace (1.08x) and sort (1.15x) are still behind on Ubuntu.
+No soundness bug is known with the Windows commit fix, but the review has not happened
+(`docs/gust/soundness_review.md` keeps the list), and 1.0 is not tagged.)**
 
 ## Upstream policy
 
