@@ -12,6 +12,7 @@ name: CI
 
 on:
   push:
+    branches-ignore: ['stress/**']
   pull_request:
   workflow_dispatch:
 
