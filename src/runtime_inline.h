@@ -536,7 +536,16 @@ static GS_NOINLINE int gs_memeq_long(const uint8_t *p, const uint8_t *q, size_t 
 R"GSRT(            (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
 }
 
-static int gs_memeq(const void *a, const void *b, size_t n) {
+/* Gust: inline for c2mir, which then marks its calls to be inlined (MIR's
+   inliner leaves a call of a function this long a call): a slice key's
+   compare, each dictionary probe's, was 38% of strings' time under
+   gust run --mir. */
+#ifdef __MIRC__
+#define GS_MEMEQ_STATIC static inline
+#else
+#define GS_MEMEQ_STATIC static
+#endif
+GS_MEMEQ_STATIC int gs_memeq(const void *a, const void *b, size_t n) {
     const uint8_t *p = (const uint8_t *)a, *q = (const uint8_t *)b;
     if (n >= 8 && n <= 16)
         return ((gs_ld64(p) ^ gs_ld64(q)) | (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
@@ -690,7 +699,8 @@ static int64_t gs_mul_i64(int64_t a, int64_t b, const char *file, int line) {
 }
 static int64_t gs_neg_i64(int64_t a, const char *file, int line) {
     if (a == INT64_MIN) gs_ovf_neg(a, "i64", file, line);
-    return (int64_t)(0u - (uint64_t)a);
+)GSRT"
+R"GSRT(    return (int64_t)(0u - (uint64_t)a);
 }
 static int64_t gs_shl_i64(int64_t a, int64_t n) {
     return (int64_t)((uint64_t)a << (n & 63));
@@ -698,8 +708,7 @@ static int64_t gs_shl_i64(int64_t a, int64_t n) {
 static int64_t gs_shr_i64(int64_t a, int64_t n) { return a >> (n & 63); }
 static uint64_t gs_add_u64(uint64_t a, uint64_t b) { return a + b; }
 static uint64_t gs_sub_u64(uint64_t a, uint64_t b) { return a - b; }
-)GSRT"
-R"GSRT(static uint64_t gs_mul_u64(uint64_t a, uint64_t b) { return a * b; }
+static uint64_t gs_mul_u64(uint64_t a, uint64_t b) { return a * b; }
 static uint64_t gs_shl_u64(uint64_t a, int64_t n) { return a << (n & 63); }
 static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 
@@ -886,15 +895,15 @@ static GS_NOINLINE int64_t gs_f2iwrap_slow(double d) {
     return (int64_t)(uint64_t)d;
 }
 static int64_t gs_f2iwrap(double d) {
-    if (d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
+)GSRT"
+R"GSRT(    if (d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
     return gs_f2iwrap_slow(d);
 }
 
 /* `as` conversion checks (§6.3): abort in debug builds whenever the
    conversion would change the value, naming the value, the target type and
    the cast's file and line; identity/plain casts in release, which drop all
-)GSRT"
-R"GSRT(   three unevaluated. A conversion to a float is a plain C cast in every build
+   three unevaluated. A conversion to a float is a plain C cast in every build
    and has none. */
 #if GS_DEBUG
 
@@ -1052,7 +1061,8 @@ typedef struct gs_qnode {
 } gs_qnode;
 
 typedef struct gs_qstate *gs_queue;
-#define GS_QUEUE_INIT NULL
+)GSRT"
+R"GSRT(#define GS_QUEUE_INIT NULL
 
 GS_API void gs_qinit(gs_queue *q);
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
@@ -1060,8 +1070,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q);
 GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms);
 GS_API gs_qnode *gs_qpoll(gs_queue *q);
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
-)GSRT"
-R"GSRT(/* Gust: thread `id`'s own queue of q's type (qsend, qrecv), and this
+/* Gust: thread `id`'s own queue of q's type (qsend, qrecv), and this
    thread's id (thread_self: main's is -1). */
 GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id);
 GS_API int64_t gs_thread_self(void);
@@ -1266,7 +1275,8 @@ static GS_NOINLINE int64_t gs_uleb_size_slow(const uint8_t *p) {
 }
 
 #define GS_ULEB_READ(p) ((*(p) & 0x80) ? gs_uleb_read_slow(p) : (int64_t)*(p))
-#define GS_ULEB_SIZE(p) ((*(p) & 0x80) ? gs_uleb_size_slow(p) : (int64_t)1)
+)GSRT"
+R"GSRT(#define GS_ULEB_SIZE(p) ((*(p) & 0x80) ? gs_uleb_size_slow(p) : (int64_t)1)
 
 static int64_t gs_uleb_write(uint8_t *p, uint64_t v) {
     uint8_t *q = p;
@@ -1279,8 +1289,7 @@ static int64_t gs_uleb_write(uint8_t *p, uint64_t v) {
 }
 
 static int64_t gs_zig_read(const uint8_t *p) {
-)GSRT"
-R"GSRT(    uint64_t u = (uint64_t)gs_uleb_read(p);
+    uint64_t u = (uint64_t)gs_uleb_read(p);
     return (int64_t)((u >> 1) ^ (0u - (u & 1)));
 }
 

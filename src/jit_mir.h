@@ -128,10 +128,11 @@ inline bool MirConstAt(MIR_context_t ctx, MIR_insn_t insn, const MIR_op_t &o, in
     return d && d->code == MIR_MOV && imm(d->ops[1]);
 }
 
-// The `addr reg, v` that set reg last in insn's block, and v.
+// The `addr reg, v` (or `addr32`, a 32-bit variable's, at its start on the
+// little-endian targets MIR has) that set reg last in insn's block, and v.
 inline MIR_insn_t MirAddrAt(MIR_context_t ctx, MIR_insn_t insn, MIR_reg_t reg, MIR_reg_t &v) {
     auto d = MirDefAt(ctx, insn, reg);
-    if (!d || d->code != MIR_ADDR || d->ops[1].mode != MIR_OP_REG) return nullptr;
+    if (!d || (d->code != MIR_ADDR && d->code != MIR_ADDR32) || d->ops[1].mode != MIR_OP_REG) return nullptr;
     v = d->ops[1].u.reg;
     return d;
 }
@@ -211,7 +212,28 @@ inline void MirLowerCalls(MIR_context_t ctx) {
                     MIR_remove_insn(ctx, it, insn);
                 };
                 if (name == "memset") {
-                    if (addrregs.count(dr) || !MirConstAt(ctx, insn, insn->ops[4], c) || c != 0) continue;
+                    if (!MirConstAt(ctx, insn, insn->ops[4], c) || c != 0) continue;
+                    // Zeroing the whole of a register variable through its
+                    // address, which nothing else reads: a mov of zero.
+                    MIR_reg_t zv = 0;
+                    if (auto za = MirAddrAt(ctx, insn, dr, zv)) {
+                        if (MirReads(ctx, f, insn->ops[2].u.reg) || MirReads(ctx, f, dr, insn)) continue;
+                        auto rt = MIR_reg_type(ctx, zv, f);
+                        auto wide = za->code == MIR_ADDR;
+                        MIR_insn_t z = nullptr;
+                        if (rt == MIR_T_I64 && n == (wide ? 8 : 4))
+                            z = MIR_new_insn(ctx, MIR_MOV, MIR_new_reg_op(ctx, zv), MIR_new_int_op(ctx, 0));
+                        else if (wide && rt == MIR_T_D && n == 8)
+                            z = MIR_new_insn(ctx, MIR_DMOV, MIR_new_reg_op(ctx, zv), MIR_new_double_op(ctx, 0.0));
+                        else if (wide && rt == MIR_T_F && n == 4)
+                            z = MIR_new_insn(ctx, MIR_FMOV, MIR_new_reg_op(ctx, zv), MIR_new_float_op(ctx, 0.0f));
+                        if (!z) continue;
+                        add(z);
+                        addrs.push_back(za);
+                        MIR_remove_insn(ctx, it, insn);
+                        continue;
+                    }
+                    if (addrregs.count(dr)) continue;
                     for (int64_t off = 0; off < n; off += part(n - off))
                         add(MIR_new_insn(ctx, MIR_MOV, mem(ptype(part(n - off)), off, dr), MIR_new_int_op(ctx, 0)));
                     done();
@@ -227,11 +249,16 @@ inline void MirLowerCalls(MIR_context_t ctx) {
                                    (da && MirReads(ctx, f, dr, insn)) || (sa && MirReads(ctx, f, sr, insn))))
                     continue;
                 // The mov of n bytes to or from a register variable.
-                auto regmov = [&](MIR_reg_t v, bool load, MIR_insn_code_t &code, MIR_type_t &t) {
+                // The copy covers the whole variable: all 8 bytes of a
+                // register `addr` took, the 4 of a float's, or the 4 of a
+                // 32-bit variable's `addr32` (whose upper half c2mir keeps
+                // extended).
+                auto regmov = [&](MIR_insn_t a, MIR_reg_t v, bool load, MIR_insn_code_t &code, MIR_type_t &t) {
                     auto rt = MIR_reg_type(ctx, v, f);
-                    if (rt == MIR_T_D && n == 8) return code = MIR_DMOV, t = MIR_T_D, true;
-                    if (rt == MIR_T_F && n == 4) return code = MIR_FMOV, t = MIR_T_F, true;
-                    if (rt != MIR_T_I64 || (n != 8 && n != 4)) return false;
+                    auto wide = a->code == MIR_ADDR;
+                    if (wide && rt == MIR_T_D && n == 8) return code = MIR_DMOV, t = MIR_T_D, true;
+                    if (wide && rt == MIR_T_F && n == 4) return code = MIR_FMOV, t = MIR_T_F, true;
+                    if (rt != MIR_T_I64 || n != (wide ? 8 : 4)) return false;
                     code = MIR_MOV;
                     t = n == 8 ? MIR_T_I64 : MIR_T_U32;
                     // A load into a 32-bit variable extends as c2mir's name
@@ -245,11 +272,11 @@ inline void MirLowerCalls(MIR_context_t ctx) {
                 };
                 MIR_insn_code_t code;
                 MIR_type_t t;
-                if (da && !sa && !addrregs.count(sr) && regmov(dv, true, code, t)) {
+                if (da && !sa && !addrregs.count(sr) && regmov(da, dv, true, code, t)) {
                     add(MIR_new_insn(ctx, code, MIR_new_reg_op(ctx, dv), mem(t, 0, sr)));
                     addrs.push_back(da);
                     done();
-                } else if (sa && !da && !addrregs.count(dr) && regmov(sv, false, code, t)) {
+                } else if (sa && !da && !addrregs.count(dr) && regmov(sa, sv, false, code, t)) {
                     add(MIR_new_insn(ctx, code, mem(t, 0, dr), MIR_new_reg_op(ctx, sv)));
                     addrs.push_back(sa);
                     done();

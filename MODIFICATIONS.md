@@ -217,7 +217,11 @@ git log upstream/master..main
   size, the runtime's small zeroing, copies and unaligned loads, becomes
   stores and loads of alias set 0 (`MirLowerCalls`), but not through an
   address of a register variable that anything else reads: bintrees runs
-  about a quarter faster. The runtime takes c2mir (`__MIRC__`) for a compiler without GCC's
+  about a quarter faster. A copy or a zeroing of the whole of a register
+  variable through its `addr` or `addr32` becomes a mov of the register,
+  and the `addr` goes; and `gs_memeq` is `static inline` under c2mir
+  (`src/runtime/runtime.h`), which then inlines its calls: strings runs a
+  quarter faster too. The runtime takes c2mir (`__MIRC__`) for a compiler without GCC's
   atomics, its SSE scan and epoll, as it takes TinyCC (`src/runtime/`).
   `test/mir_runs.py` (new) runs the fixtures with an expected output both
   ways and requires the same output and outcome. Then the runtime compiled

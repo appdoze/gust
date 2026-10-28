@@ -520,7 +520,16 @@ static GS_NOINLINE int gs_memeq_long(const uint8_t *p, const uint8_t *q, size_t 
             (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
 }
 
-static int gs_memeq(const void *a, const void *b, size_t n) {
+/* Gust: inline for c2mir, which then marks its calls to be inlined (MIR's
+   inliner leaves a call of a function this long a call): a slice key's
+   compare, each dictionary probe's, was 38% of strings' time under
+   gust run --mir. */
+#ifdef __MIRC__
+#define GS_MEMEQ_STATIC static inline
+#else
+#define GS_MEMEQ_STATIC static
+#endif
+GS_MEMEQ_STATIC int gs_memeq(const void *a, const void *b, size_t n) {
     const uint8_t *p = (const uint8_t *)a, *q = (const uint8_t *)b;
     if (n >= 8 && n <= 16)
         return ((gs_ld64(p) ^ gs_ld64(q)) | (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;

@@ -314,8 +314,12 @@ the plain function.
   copy on the way out), and with math's sqrt reaching c2mir as `sqrt` itself, which a
   call of a wrapper had kept a call whose every live double was saved around it on
   SysV: n-body 1.5x, raytrace 1.2x, interp 1.2x, sort 1.2x, astar 1.2x, hashmap 1.6x.
-  Not yet: the 1.5x exit, which bintrees (2.9x) and strings (2.0x) are furthest
-  from.)**
+  Then the runtime's small memsets and memcpys made stores and loads at MIR's level
+  (bintrees' zeroed links, the unaligned loads of a key's compare), and that compare,
+  `gs_memeq`, inlined where c2mir calls it: strings from 2.0x to 1.4x, bintrees from
+  2.9x to 2.5x. Measured as the fastest of five alternating runs in WSL, the geometric
+  mean is 1.51x; hashmap (1.8x) and bintrees (2.5x) are furthest off, hashmap's hot
+  loop calling nothing and bintrees' recursion each call's.)**
 - **Python bindings generator**: turn a library into a pip-installable module, the route
   Rust grew through with PyO3. **(Done: `scripts/gust_python.py` builds a library's
   exports into a ctypes package with checked integers, structs, slices read from
