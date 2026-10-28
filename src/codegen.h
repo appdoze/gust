@@ -1292,6 +1292,9 @@ struct CodeGen {
     // vector (codegen_lanes.h), then the rest as the loop is.
     bool LanesFor(ForLoop *f);
     void GenLanes(ForLoop *f, const string &ctr, const ArrView &v);
+    bool LaneFilterFor(ForLoop *f);
+    void GenLaneFilter(ForLoop *f, const string &ctr, const ArrView &v, const function<void()> &bind,
+                       const Dst &d);
 
     // ------------------------------------------------------------------
     // Exits delivering a value: where the receiver expects it (§7.3, §7.9).

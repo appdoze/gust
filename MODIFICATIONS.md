@@ -390,6 +390,15 @@ git log upstream/master..main
   `test/codegen/lanes.goose`, `test/codegen/lanes_short.goose` and
   `test/codegen/lanes_if.goose` (new): the same output, and the same
   abort, one iteration at a time and in lanes.
+- The lanes' filter form (`PlanFilter`, `EmitFilter` in
+  `src/codegen_lanes.h`; `CodeGen::GenLaneFilter`, hooked in beside the
+  lanes in `ForLoop::CgStmt`): a loop of pure statements ending in an `if`
+  tests four iterations at once and runs them as the loop does wherever any
+  lane's tests hold, skipping the rest. Elements bound by reference and
+  inlined functions that return early are lane values there.
+  `gs_l4m_any` (`src/runtime/runtime_ext.h`). `compare/`'s raytrace runs
+  27% faster under clang with the same checksum.
+  `test/codegen/lanes_filter.goose` (new).
 
 ## Safety checks
 

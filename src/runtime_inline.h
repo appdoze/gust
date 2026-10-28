@@ -4046,6 +4046,12 @@ typedef long long gs_l4m __attribute__((vector_size(32)));
         long long gs_l4m_s_ = (x);                                            \
         (gs_l4m){ gs_l4m_s_, gs_l4m_s_, gs_l4m_s_, gs_l4m_s_ };               \
     })
+/* Whether a condition holds in any lane. */
+#define gs_l4m_any(m)                                                         \
+    __extension__({                                                           \
+        gs_l4m gs_l4m_a_ = (m);                                               \
+        (gs_l4m_a_[0] | gs_l4m_a_[1] | gs_l4m_a_[2] | gs_l4m_a_[3]) != 0;     \
+    })
 #ifdef GS_SQRT_NO_ERRNO
 #define gs_l4d_sqrt(v) __builtin_elementwise_sqrt(v)
 #else
@@ -4091,13 +4097,13 @@ static float gs_mul_addf(float x, float y, float z) {
 #define gs_mul_add(x, y, z) GS_MUL_ADD_CAT(gs_mul_add_, GS_MUL_ADD_MODE)(x, y, z)
 #define gs_mul_addf(x, y, z) GS_MUL_ADD_CAT(gs_mul_addf_, GS_MUL_ADD_MODE)(x, y, z)
 
-/* math's other libm functions (stdlib/math.goose). C has them set errno on a
+)GSRT"
+R"GSRT(/* math's other libm functions (stdlib/math.goose). C has them set errno on a
    domain or range error, so a C compiler takes each call for a write to
    memory: a loop around one loads again after it whatever it had hoisted
    out or kept in registers. Goose has no errno, so where the compiler has
    asm labels and the const attribute each is libm's own function declared
-)GSRT"
-R"GSRT(   under a name of its own as depending on its arguments alone; elsewhere
+   under a name of its own as depending on its arguments alone; elsewhere
    the name forwards to libm. */
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
 #define GS_LIBM_SYM2(p, f) #p #f

@@ -6020,6 +6020,27 @@ iteration at a time and clang in lanes. gcc 15 compiles the lanes into
 code several times slower than the loop as it is, so only clang builds
 them.
 
+The filter form (`LaneGen::PlanFilter`, `CodeGen::GenLaneFilter`) takes a
+search instead: a body of pure statements ending in `if c1 && c2 ... { S }`
+with no else, where `S` may do anything, return, break or continue. The
+lanes compute the statements and each `&&` operand they can (`keys`, under
+the masked rules, since the `&&` would have stopped earlier) for four
+iterations. A block in which no lane's keys hold is skipped, and any other
+runs its four iterations as the loop is, in a second copy of the body that
+shares the loop's scope (as `GenBlocked`'s copies do); the rest of the loop
+follows. That is exact whatever `S` does. Until the first iteration whose
+condition holds, no iteration has changed anything, so that iteration's
+keys, evaluated on the block's starting state, hold in the lanes too.
+The element may be bound by reference (`refs`: the binder and the locals
+an inlined call binds to it are the element's lanes), and an inlined
+function may return early (`RetBlock`, `RetEmit`). A return takes its
+value into the lanes still running, which then stop. An `if` holding
+returns runs each branch in the lanes taking it, skipped at run time where
+none does, and both branches and what follows a return some lanes took run
+under the masked rules. In `compare/`, the sphere loops of raytrace's
+`nearest` and `any_hit` take this form: 27% faster on clang, with the same
+checksum (`test/codegen/lanes_filter.goose`).
+
 ### 6.13 `simd` functions
 
 A `simd fn` (spec §7.12) is emitted by `EmitSimdVersions` from the finished
