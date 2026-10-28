@@ -45,6 +45,16 @@ jobs:
           wait
         continue-on-error: true
 
+      # Whether AVX registers survive a commit-on-fault handler that resumes
+      # in a thread that waited just before (test/stress/avx_commit_probe.c,
+      # modes 2 and 3): three copies of each.
+      - name: AVX across the commit handler, after waits
+        run: |
+          "/c/Program Files/LLVM/bin/clang.exe" -O2 -o probe.exe test/stress/avx_commit_probe.c
+          for m in 2 2 2 3 3 3; do ./probe.exe $m 90 & done
+          wait
+        continue-on-error: true
+
       # Six copies of the stress, 40 rounds each, and two loops of the whole
       # test, all at once; each failure's output is kept. Copies 4 to 6 and
       # the second loop poll with WSAPoll (GUST_NET_POLL=1) rather than AFD.

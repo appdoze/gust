@@ -6,8 +6,12 @@
    into a reserved region the handler commits 16 KB at a time, under load,
    and counts what came out wrong, with the handler as the runtime's
    (mode 0) and with the AVX state saved before its VirtualAlloc and
-   restored after (mode 1). It also reports whether the context record the
-   handler gets carries the AVX state.
+   restored after (mode 1). Modes 2 and 3 block for a moment before each
+   copy, as a program waiting on its sockets does (a yield, and every 16th
+   time a wait), so that the thread was switched out before its fault, and copy into a fresh 16 KB chunk each
+   time: mode 2 with the loop below, mode 3 with the C library's memcpy.
+   It also reports whether the context record the handler gets carries the
+   AVX state.
 
        avx_commit_probe mode seconds */
 #include <windows.h>
@@ -69,6 +73,7 @@ __attribute__((target("avx2"), noinline)) static void copy_avx(uint8_t *d, const
 }
 
 static volatile LONG stop;
+static HANDLE idle;   /* never set: a wait of a millisecond */
 static DWORD WINAPI burn(void *arg) {
     (void)arg;
     volatile uint64_t x = 1;
@@ -85,12 +90,19 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < SRC; i++) src[i] = (uint8_t)(i * 7 + i / 251 + 1);
     AddVectoredExceptionHandler(1, handler);
     HANDLE burner = CreateThread(NULL, 0, burn, NULL, 0, NULL);
+    idle = CreateEventW(NULL, TRUE, FALSE, NULL);
     ULONGLONG end = GetTickCount64() + (ULONGLONG)seconds * 1000;
     long long pieces = 0, bad = 0, passes = 0;
     while (GetTickCount64() < end) {
-        for (size_t off = 0; off < PASS; off += PIECE) {
+        size_t step = mode >= 2 ? 16384 : PIECE;
+        for (size_t off = 0; off < PASS && GetTickCount64() < end; off += step) {
             const uint8_t *s = src + (off % (SRC - PIECE));
-            copy_avx(base + off, s, PIECE);
+            if (mode >= 2) {
+                if (pieces % 16 == 0) WaitForSingleObject(idle, 1);
+                else Sleep(0);
+            }
+            if (mode == 3) memcpy(base + off, s, PIECE);
+            else copy_avx(base + off, s, PIECE);
             pieces++;
             if (memcmp(base + off, s, PIECE) != 0) {
                 size_t k = 0;
