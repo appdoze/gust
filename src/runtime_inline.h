@@ -4011,11 +4011,13 @@ static float gs_sqrtf(float x) { return sqrtf(x); }
 
 /* Gust: four doubles side by side, one per lane of a loop the compiler runs
    four iterations at a time (src/codegen_lanes.h). Each lane's operations
-   are its iteration's, rounded as they are. Where the C compiler has no
-   vector types, GS_LANES stays undefined and the loops run one iteration at
-   a time; -DGS_NO_LANES asks for that anywhere. */
-#if (defined(__clang__) || defined(__GNUC__)) && !defined(__TINYC__) && !defined(__MIRC__) && \
-    !defined(GS_NO_LANES)
+   are its iteration's, rounded as they are. clang alone builds them: gcc
+   15 compiles the same vectors into code several times slower than the
+   loop one iteration at a time (n-body 1.78 s against 0.17 s, 0.58 s with
+   -mavx2), and MSVC, TinyCC and MIR have no vector types. Elsewhere
+   GS_LANES stays undefined and the loops run one iteration at a time;
+   -DGS_NO_LANES asks for that anywhere. */
+#if defined(__clang__) && !defined(__MIRC__) && !defined(GS_NO_LANES)
 #define GS_LANES 4
 typedef double gs_l4d __attribute__((vector_size(32)));
 /* Macros, not functions: a function that takes or returns a vector has an
@@ -4092,11 +4094,11 @@ static float gs_mul_addf(float x, float y, float z) {
 #endif
 GS_LIBM double gs_sin(double x) GS_LIBM1(sin)
 GS_LIBM double gs_cos(double x) GS_LIBM1(cos)
-GS_LIBM double gs_tan(double x) GS_LIBM1(tan)
+)GSRT"
+R"GSRT(GS_LIBM double gs_tan(double x) GS_LIBM1(tan)
 GS_LIBM double gs_asin(double x) GS_LIBM1(asin)
 GS_LIBM double gs_acos(double x) GS_LIBM1(acos)
-)GSRT"
-R"GSRT(GS_LIBM double gs_atan(double x) GS_LIBM1(atan)
+GS_LIBM double gs_atan(double x) GS_LIBM1(atan)
 GS_LIBM double gs_atan2(double x, double y) GS_LIBM2(atan2)
 GS_LIBM double gs_exp(double x) GS_LIBM1(exp)
 GS_LIBM double gs_log(double x) GS_LIBM1(log)

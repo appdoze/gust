@@ -279,7 +279,8 @@ the unmodified `compare/gust/main.goose`, built by clang 22 at -O2, n-body runs 
 0.107 s against rustc -O3 with fat LTO's 0.215 to 0.258 s, 2.1x to 2.5x run for run, with
 the same checksum. That is 0.13 s with SSE2's lanes alone and 0.22 s one iteration at a
 time. `test/codegen/lanes.goose` gives the same output to the last digit under TinyCC,
-MSVC, MIR, clang and gcc, and `test/codegen/lanes_short.goose` the same abort.
+MSVC, MIR, clang and gcc, and `test/codegen/lanes_short.goose` the same abort. Only clang
+builds the lanes: gcc 15's code for them ran n-body ten times slower than its own loop.
 
 **Exit:** unmodified `compare/gust/main.goose` nbody at least 2x faster than Rust with an
 identical checksum (the hand prototype reached 2.1x); `simd fn` copies never slower than

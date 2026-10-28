@@ -1,9 +1,9 @@
 // Loops whose iterations are independent run four at a time, one per lane
-// (src/codegen_lanes.h), where the C compiler has vector types; elsewhere
-// one at a time. Every lane computes what its iteration does, so the output
-// is the same to the last digit either way: the suite builds this with
-// TinyCC and MSVC, which run it one iteration at a time, and with clang and
-// gcc, which run the lanes.
+// (src/codegen_lanes.h), where clang builds the C; elsewhere one at a
+// time. Every lane computes what its iteration does, so the output is the
+// same to the last digit either way: the suite builds this with TinyCC,
+// MSVC and gcc, which run it one iteration at a time, and with clang, which
+// runs the lanes.
 import std;
 import math;
 import vec;

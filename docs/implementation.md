@@ -6007,8 +6007,10 @@ C compiler's own to vectorize. A function with a loop in lanes is emitted as
 a `simd fn` is (§6.13), but its versions keep math's `mul_add` as the
 baseline does: its AVX2 and AVX-512 versions run a lane vector in one
 instruction, the baseline in two SSE2 ones. Covered by
-`test/codegen/lanes.goose`, whose output TinyCC and MSVC give one iteration
-at a time and clang and gcc in lanes.
+`test/codegen/lanes.goose`, whose output TinyCC, MSVC and gcc give one
+iteration at a time and clang in lanes. gcc 15 compiles the lanes into
+code several times slower than the loop as it is, so only clang builds
+them.
 
 ### 6.13 `simd` functions
 

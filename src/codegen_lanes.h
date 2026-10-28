@@ -20,8 +20,9 @@
 // The lanes are C vector types (`vector_size`, runtime_ext.h's GS_LANES):
 // the C compiler's own vectorizer had made the same loop twice as slow
 // (ROADMAP Phase 5), while explicit lanes leave it the instructions alone to
-// pick. Where the C compiler has no vector types (MSVC, TinyCC, MIR), the
-// block of lanes is not compiled and the loop runs as it is.
+// pick. clang alone compiles the block of lanes: MSVC, TinyCC and MIR have
+// no vector types, and gcc's code for them is slower than the loop as it
+// is. Elsewhere the loop runs as it is.
 //
 // What a body may hold, checked before anything is emitted (LaneGen::Plan):
 // locals of doubles and of structs of them, arithmetic, field reads, sqrt,
