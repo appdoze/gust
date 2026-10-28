@@ -22,7 +22,8 @@ Where v1 differs from the target below:
   each field bound to that branch's). A reference in a field, an element or
   an optional, and a returned one, are rejected: before the checker the
   lowering cannot tell which struct a field path reaches, and each would
-  have to carry every field's reference.
+  have to carry every field's reference. "Next: references to an owner in
+  fields", below, is a design for the first.
 * A generic owner names its type arguments (`slot_pool<i64> { .. }`).
 
 The scalar-allocator probe from the investigation is accepted: a reference
@@ -437,6 +438,48 @@ reviewed migration path. Root structs can ship independently of that decision.
   General copying, reassignment and moving need separate semantics.
 * **Worker snapshots and coordinated serialization.** Reconstruct independent
   components with an explicit format/lifecycle contract; never memcpy an owner.
+
+## Next: references to an owner in fields
+
+Not built. v1 rejects `struct Ctx { st: ParserState& }`, an element or
+optional of `ParserState&`, and a function returning one, because the
+lowering runs before the checker and cannot tell which struct a field path
+such as `x.st.tokens` reaches. This is how it could be allowed without
+moving the lowering into the checker. The restriction in step 4 is a
+language decision, so it needs agreeing before anyone builds it.
+
+1. **A struct holding one carries every component.** A field `st: R&` of an
+   ordinary struct `Ctx` gains, beside it, one reference field per
+   resizable field `f` of `R`, named `st.f`, as a parameter `st: R&` gains
+   parameters today. A `const R&` field gains `const` ones. `Ctx` is then
+   an ordinary struct of references, and the checker's store rule (§9.2)
+   applies to each component as to any reference field. No new lifetime
+   rule is needed.
+2. **Construction and assignment fill every component.** In
+   `Ctx { st: p, .. }`, where `p` is a root value as v1 defines one,
+   `st.f: p.f` is added for each `f`. `c.st = p` becomes the assignment of
+   `c.st` and of each `c.st.f`. Any other expression for `st` is an error,
+   as a root value anywhere else is.
+3. **A copy of `Ctx` copies the components with it.** It is a struct of
+   references, so a copy, a return and a stored element all carry them. A
+   `Ctx` therefore needs no rule of its own.
+4. **Reaching the owner needs a name of known type.** `c.st.f` and a call
+   passing `c.st` as an `R&` are rewritten to name the component fields
+   only where `c` is a name whose type the source spells: a parameter or a
+   binding declared `Ctx`, `Ctx&`, `const Ctx&`, or initialized by a `Ctx`
+   literal. Every other path to `.st` (a call's result, an element, an
+   optional's binding) is an error that says to bind it to such a name
+   first. This is the restriction.
+5. **Returning `R&`, and `R&` elements and optionals, stay rejected.** Each
+   would need the components as several results, or a parallel array of
+   each. Owning factory results (V2 candidates, above) are the way there.
+
+Tests to write first: the fixtures of `test/storage/root_structs.goose`
+with the owner reached through a `Ctx`; a `Ctx` copied, returned and
+stored as an element; a component's view kept across a push into another
+component through the `Ctx` (accepted); a reference into a component stored
+in a `Ctx` that outlives the owner (rejected by §9.2); and one rejection per
+path that step 4 refuses.
 
 ## Implementation sequence and acceptance
 
