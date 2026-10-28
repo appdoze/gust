@@ -63,8 +63,12 @@ struct BaseCaseInliner {
     bool guarded = false;
     vector<Node *> basestmts;
     // The match form: the scrutinee and the leaf arms, to which a self-call
-    // adds a wildcard arm of its own.
+    // adds a wildcard arm of its own; and the self-calls it leaves as they
+    // are, those an integer function returns the value of (or one side of
+    // an associative operator's), which tail-recursion elimination
+    // (optimize_tre.h) makes a loop of instead.
     MatchExpr *basematch = nullptr;
+    set<const Call *> tailcalls;
 
     BaseCaseInliner(Optimizer &_o) : o(_o), ast(_o.ast) {}
 
@@ -150,6 +154,7 @@ struct BaseCaseInliner {
         basenot = guarded = false;
         basestmts.clear();
         basematch = nullptr;
+        tailcalls.clear();
         if (!o.caninline || !sp->sf->isrec || !sp->body) return;
         // Binding a non-fixed parameter to a temporary would give a cycle
         // member a non-fixed local in scope at the self-call, which §7.8
@@ -199,7 +204,38 @@ struct BaseCaseInliner {
         for (auto arm : leaves) basematch->arms.push_back(CpArm(inl, *arm));
         basematch->exprtype = m->exprtype;
         basespec = sp;
+        if (sp->rets[0]->kind == TY_INT) {
+            TailCalls(body->tail, sp);
+            ReturnedCalls(body, sp);
+        }
         return true;
+    }
+
+    // The self-calls of a result: the value itself, either side of an
+    // associative operator, and the values of the branches it is made of.
+    void TailCalls(Node *n, FnSpec *sp) {
+        if (!n) return;
+        if (auto c = Is<Call>(n)) {
+            if (c->spec == sp) tailcalls.insert(c);
+        } else if (auto b = Is<Binary>(n)) {
+            if (b->op == T_PLUS || b->op == T_MUL || b->op == T_BITAND || b->op == T_BITOR || b->op == T_XOR) {
+                TailCalls(b->left, sp);
+                TailCalls(b->right, sp);
+            }
+        } else if (auto bl = Is<Block>(n)) {
+            TailCalls(bl->tail, sp);
+        } else if (auto x = Is<IfExpr>(n)) {
+            TailCalls(x->thenb, sp);
+            TailCalls(x->elseb, sp);
+        } else if (auto m = Is<MatchExpr>(n)) {
+            for (auto &arm : m->arms) TailCalls(arm.body, sp);
+        }
+    }
+    // The same for every value the function returns.
+    void ReturnedCalls(Node *n, FnSpec *sp) {
+        if (!n || Is<FunVal>(n) || Is<FnDecl>(n)) return;
+        if (auto r = Is<Return>(n); r && r->target == sp->sf && r->vals.size() == 1) TailCalls(r->vals[0], sp);
+        RunChildren(n, [&](Node *ch) { ReturnedCalls(ch, sp); });
     }
 
     // An enum arm copied as MatchExpr::Cp1 copies it.
@@ -327,6 +363,7 @@ struct BaseCaseInliner {
         if (!basespec || basespec != o.curspec) return nullptr;
         if (c->spec != basespec || c->builtin >= 0 || !c->dispatch.empty()) return nullptr;
         if (!Is<Ident>(c->callee) && !Is<Dot>(c->callee)) return nullptr;
+        if (basematch && tailcalls.count(c)) return nullptr;
         auto K = basespec;
         // The arguments in parameter order, a UFCS receiver first: the checker
         // has already made each the node its parameter takes (an `&` it binds
