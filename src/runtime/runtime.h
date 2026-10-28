@@ -422,8 +422,9 @@ static inline int gs_simd_level(void) {
    byte keeps its value, and the copy then writes it as it would. Copies of
    a constant size the compiler writes out itself use 16-byte registers
    (32-byte ones only inside a simd function's AVX versions), and a fill of
-   zeros loses only zeros, so neither needs it. */
-#ifdef _WIN32
+   zeros loses only zeros, so neither needs it. -DGS_NO_FIRST_TOUCH leaves
+   the touches out, for measuring them. */
+#if defined(_WIN32) && !defined(GS_NO_FIRST_TOUCH)
 static void gs_first_touch(void *d, size_t n) {
     for (uintptr_t a = (uintptr_t)d, p = a; p < a + n; p = (p | 4095) + 1) {
         volatile uint8_t *q = (volatile uint8_t *)p;
@@ -464,7 +465,7 @@ static void gs_first_touch(void *d, size_t n) {
      : GS_KSZ(n, 9, 16) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, (n) - 8)) \
      : GS_KSZ(n, 17, 32) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, 8), \
                                   GS_CP(uint64_t, d, s, (n) - 16), GS_CP(uint64_t, d, s, (n) - 8)) \
-     : (void)memcpy((d), (s), (n)))
+     : (GS_TOUCHED(d, n), (void)memcpy((d), (s), (n))))
 #define GS_MEMZERO(d, n) \
     (GS_KSZ(n, 8, 8) ? (void)(GS_AT(uint64_t, d, 0) = 0) \
      : GS_KSZ(n, 4, 4) ? (void)(GS_AT(uint32_t, d, 0) = 0) \

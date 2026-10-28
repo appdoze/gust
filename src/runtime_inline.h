@@ -437,8 +437,9 @@ static inline int gs_simd_level(void) {
    byte keeps its value, and the copy then writes it as it would. Copies of
    a constant size the compiler writes out itself use 16-byte registers
    (32-byte ones only inside a simd function's AVX versions), and a fill of
-   zeros loses only zeros, so neither needs it. */
-#ifdef _WIN32
+   zeros loses only zeros, so neither needs it. -DGS_NO_FIRST_TOUCH leaves
+   the touches out, for measuring them. */
+#if defined(_WIN32) && !defined(GS_NO_FIRST_TOUCH)
 static void gs_first_touch(void *d, size_t n) {
     for (uintptr_t a = (uintptr_t)d, p = a; p < a + n; p = (p | 4095) + 1) {
         volatile uint8_t *q = (volatile uint8_t *)p;
@@ -479,7 +480,7 @@ static void gs_first_touch(void *d, size_t n) {
      : GS_KSZ(n, 9, 16) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, (n) - 8)) \
      : GS_KSZ(n, 17, 32) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, 8), \
                                   GS_CP(uint64_t, d, s, (n) - 16), GS_CP(uint64_t, d, s, (n) - 8)) \
-     : (void)memcpy((d), (s), (n)))
+     : (GS_TOUCHED(d, n), (void)memcpy((d), (s), (n))))
 #define GS_MEMZERO(d, n) \
     (GS_KSZ(n, 8, 8) ? (void)(GS_AT(uint64_t, d, 0) = 0) \
      : GS_KSZ(n, 4, 4) ? (void)(GS_AT(uint32_t, d, 0) = 0) \
@@ -519,12 +520,12 @@ static uint64_t gs_bytemask(int64_t k) {
    overlapping, where the library's memcpy would take a call and a dispatch
    on the length; as the C library's memcpy, it takes runs that do not
    overlap. */
-static void gs_memcpy(void *dst, const void *src, size_t n) {
+)GSRT"
+R"GSRT(static void gs_memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     if (n <= 16) {
-)GSRT"
-R"GSRT(        if (n >= 8) {
+        if (n >= 8) {
             uint64_t a = gs_ld64(s), b = gs_ld64(s + n - 8);
             GS_MEMCPY(d, &a, 8);
             GS_MEMCPY(d + n - 8, &b, 8);
@@ -691,11 +692,11 @@ static T gs_sub_##SFX(T a, T b, const char *file, int line) { \
 static T gs_mul_##SFX(T a, T b, const char *file, int line) { \
     int64_t r = (int64_t)a * (int64_t)b; \
     if (r < MIN || r > MAX) gs_ovf(a, "*", b, #SFX, file, line); \
-    return (T)r; } \
+)GSRT"
+R"GSRT(    return (T)r; } \
 static T gs_neg_##SFX(T a, const char *file, int line) { \
     int64_t r = -(int64_t)a; \
-)GSRT"
-R"GSRT(    if (r < MIN || r > MAX) gs_ovf_neg(a, #SFX, file, line); \
+    if (r < MIN || r > MAX) gs_ovf_neg(a, #SFX, file, line); \
     return (T)r; } \
 static T gs_shl_##SFX(T a, int64_t n) { \
     return (T)((uint64_t)a << (n & (BITS - 1))); } \
@@ -879,10 +880,10 @@ static uint64_t gs_divu_gen(uint64_t d, uint8_t *more) {
 static uint64_t gs_divu_q(uint64_t x, uint64_t magic, uint8_t more) {
 #if GS_HAVE_U128
     uint64_t q;
-    if (!magic) return x >> more;
-    q = gs_mulhi_u64(magic, x);
 )GSRT"
-R"GSRT(    if (more & GS_DIVU_ADD) return (((x - q) >> 1) + q) >> (more & GS_DIVU_SHIFT);
+R"GSRT(    if (!magic) return x >> more;
+    q = gs_mulhi_u64(magic, x);
+    if (more & GS_DIVU_ADD) return (((x - q) >> 1) + q) >> (more & GS_DIVU_SHIFT);
     return q >> more;
 #else
     (void)magic;
