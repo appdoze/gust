@@ -572,7 +572,12 @@ git log upstream/master..main
   ended by every store of a block, not only by those still available at
   its end: a store a later one had made unavailable, the two possibly
   aliasing, still wrote memory an expression from before the block read,
-  which aliasing that is not transitive (alias set 0) let through.
+  which aliasing that is not transitive (alias set 0) let through. And the
+  generator's address transformation (`addr_eliminable_p`,
+  `collect_addr_uses`) keeps an `addr` whose pseudo a store of fewer bytes
+  than it has reaches: it had made `*(char *)&x = 7` an assignment of all
+  of x, at level 2 (a C reproducer: an int's low byte stored through a
+  char pointer to it, read back wrong).
 - `third_party/mir` is built with `__WIN32` defined on Windows
   (`CMakeLists.txt`): its built-in headers test MinGW's macro, which MSVC
   and clang do not define, and c2mir's stdarg.h declared no `va_list`.
