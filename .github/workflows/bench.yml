@@ -1,0 +1,49 @@
+# Gust: the compare suite measured on CI runners (compare/ci_measure.py):
+# gust run --mir against the native builds, and Gust against Rust, each
+# benchmark's builds run in turn and the fastest of each kept. Runs on the
+# bench/ branches only, and when started by hand.
+name: Bench
+
+on:
+  push:
+    branches: ['bench/**']
+  workflow_dispatch:
+
+jobs:
+  measure:
+    name: ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target goose -j 4
+
+      - name: Toolchains
+        run: |
+          rustc --version || true
+          clang --version | head -1 || true
+          gcc --version | head -1 || true
+          nproc || true
+
+      # MIR on Linux, where its 1.5x goal was set against gcc.
+      - name: Measure
+        run: >-
+          python compare/ci_measure.py --out cmpb --runs 7
+          --gust build/${{ runner.os == 'Windows' && 'Release/gust.exe' || 'gust' }}
+          ${{ runner.os == 'Windows' && '--no-mir' || '' }}
