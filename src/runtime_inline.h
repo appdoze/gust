@@ -513,6 +513,13 @@ static void gs_memcpy(void *dst, const void *src, size_t n) {
         GS_MEMCPY(d + n - 16, s + n - 16, 16);
         return;
     }
+#ifdef _WIN32
+    /* Stress variant A: each page the copy writes takes its first store
+       here, a byte, with no vector state live, before the library's
+       vector loop runs (test/stress/net_starved.goose). */
+    for (uintptr_t a = (uintptr_t)d, p = a; p < a + n; p = (p | 4095) + 1)
+        *(volatile uint8_t *)p = s[p - a];
+#endif
     memcpy(dst, src, n);
 }
 
@@ -526,14 +533,14 @@ static void gs_memmove(void *dst, const void *src, size_t n) {
    that a call and memcmp's own dispatch cost more than the compare. The
    longer compares are a function of their own, so that gs_memeq stays small
    enough for the C compiler to inline where the length is known. */
-static GS_NOINLINE int gs_memeq_long(const uint8_t *p, const uint8_t *q, size_t n) {
+)GSRT"
+R"GSRT(static GS_NOINLINE int gs_memeq_long(const uint8_t *p, const uint8_t *q, size_t n) {
     if (n > 256) return memcmp(p, q, n) == 0;
     for (size_t i = 0; i + 16 < n; i += 16)
         if ((gs_ld64(p + i) ^ gs_ld64(q + i)) | (gs_ld64(p + i + 8) ^ gs_ld64(q + i + 8)))
             return 0;
     return ((gs_ld64(p + n - 16) ^ gs_ld64(q + n - 16)) |
-)GSRT"
-R"GSRT(            (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
+            (gs_ld64(p + n - 8) ^ gs_ld64(q + n - 8))) == 0;
 }
 
 /* Gust: inline for c2mir, which then marks its calls to be inlined (MIR's
@@ -691,7 +698,8 @@ static int64_t gs_sub_i64(int64_t a, int64_t b, const char *file, int line) {
     return r;
 }
 static int64_t gs_mul_i64(int64_t a, int64_t b, const char *file, int line) {
-    int64_t r = (int64_t)((uint64_t)a * (uint64_t)b);
+)GSRT"
+R"GSRT(    int64_t r = (int64_t)((uint64_t)a * (uint64_t)b);
     if (a && b &&
         ((a == -1 && b == INT64_MIN) || (b == -1 && a == INT64_MIN) || r / b != a))
         gs_ovf(a, "*", b, "i64", file, line);
@@ -699,8 +707,7 @@ static int64_t gs_mul_i64(int64_t a, int64_t b, const char *file, int line) {
 }
 static int64_t gs_neg_i64(int64_t a, const char *file, int line) {
     if (a == INT64_MIN) gs_ovf_neg(a, "i64", file, line);
-)GSRT"
-R"GSRT(    return (int64_t)(0u - (uint64_t)a);
+    return (int64_t)(0u - (uint64_t)a);
 }
 static int64_t gs_shl_i64(int64_t a, int64_t n) {
     return (int64_t)((uint64_t)a << (n & 63));
@@ -886,7 +893,8 @@ static uint32_t gs_divu32_q(uint32_t x, uint32_t magic, uint8_t more) {
    the same on every platform, unlike a raw C cast of an out-of-range value.
    A value lies in the i64 range exactly when its truncation does, and there
    the C cast truncates by itself (one hardware conversion, where trunc() is
-   a libm call on baseline x86-64), so only NaN and the values beyond the
+)GSRT"
+R"GSRT(   a libm call on baseline x86-64), so only NaN and the values beyond the
    range take the wrap, out of line. */
 static GS_NOINLINE int64_t gs_f2iwrap_slow(double d) {
     if (d != d) return 0;
@@ -895,8 +903,7 @@ static GS_NOINLINE int64_t gs_f2iwrap_slow(double d) {
     return (int64_t)(uint64_t)d;
 }
 static int64_t gs_f2iwrap(double d) {
-)GSRT"
-R"GSRT(    if (d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
+    if (d >= -9223372036854775808.0 && d < 9223372036854775808.0) return (int64_t)d;
     return gs_f2iwrap_slow(d);
 }
 
@@ -1050,7 +1057,8 @@ GS_API void gs_pfor_wait(gs_pfor_job *j);
 
 /* One queue per flat element type the program uses (the compiler emits a
    gs_queue global per type, which main sets up before anything can use it).
-   Values are contiguous byte images: gs_qget, gs_qwait and gs_qpoll return a
+)GSRT"
+R"GSRT(   Values are contiguous byte images: gs_qget, gs_qwait and gs_qpoll return a
    malloc'd node the caller copies from and frees, gs_qwait and gs_qpoll NULL
    when nothing came. gs_qput returns 0, queueing nothing, when the queue is
    at its limit. */
@@ -1061,8 +1069,7 @@ typedef struct gs_qnode {
 } gs_qnode;
 
 typedef struct gs_qstate *gs_queue;
-)GSRT"
-R"GSRT(#define GS_QUEUE_INIT NULL
+#define GS_QUEUE_INIT NULL
 
 GS_API void gs_qinit(gs_queue *q);
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
@@ -1263,7 +1270,8 @@ static int64_t gs_uleb_size(const uint8_t *p) {
    walk, against which the call costs nothing. Both read the pointer twice,
    which the emitting sites already assume (they form the element address
    from the same text). A varint *value*, by contrast, is whatever the
-   program stored, so scalar fields and relative offsets keep the loop above
+)GSRT"
+R"GSRT(   program stored, so scalar fields and relative offsets keep the loop above
    inline, where the compilers peel the first byte themselves. */
 
 static GS_NOINLINE int64_t gs_uleb_read_slow(const uint8_t *p) {
@@ -1275,8 +1283,7 @@ static GS_NOINLINE int64_t gs_uleb_size_slow(const uint8_t *p) {
 }
 
 #define GS_ULEB_READ(p) ((*(p) & 0x80) ? gs_uleb_read_slow(p) : (int64_t)*(p))
-)GSRT"
-R"GSRT(#define GS_ULEB_SIZE(p) ((*(p) & 0x80) ? gs_uleb_size_slow(p) : (int64_t)1)
+#define GS_ULEB_SIZE(p) ((*(p) & 0x80) ? gs_uleb_size_slow(p) : (int64_t)1)
 
 static int64_t gs_uleb_write(uint8_t *p, uint64_t v) {
     uint8_t *q = p;

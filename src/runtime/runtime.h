@@ -498,6 +498,13 @@ static void gs_memcpy(void *dst, const void *src, size_t n) {
         GS_MEMCPY(d + n - 16, s + n - 16, 16);
         return;
     }
+#ifdef _WIN32
+    /* Stress variant A: each page the copy writes takes its first store
+       here, a byte, with no vector state live, before the library's
+       vector loop runs (test/stress/net_starved.goose). */
+    for (uintptr_t a = (uintptr_t)d, p = a; p < a + n; p = (p | 4095) + 1)
+        *(volatile uint8_t *)p = s[p - a];
+#endif
     memcpy(dst, src, n);
 }
 
