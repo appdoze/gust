@@ -403,6 +403,12 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
                 size_t n = gs_commit_size(r, page);
                 if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
                     if (page + n > r->committed) r->committed = page + n;
+                    /* Stress variant B: each committed page faulted in here,
+                       rather than in the store that resumes. */
+                    for (uint8_t *q = page; q < page + n; q += gs_page_size) {
+                        volatile uint8_t *v = q;
+                        *v = *v;
+                    }
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
                 static const char nomem[] =

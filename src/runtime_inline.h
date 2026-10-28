@@ -1787,6 +1787,12 @@ R"GSRT(            /* Within the usable part: commit another chunk (clamped to t
                 size_t n = gs_commit_size(r, page);
                 if (VirtualAlloc(page, n, MEM_COMMIT, PAGE_READWRITE)) {
                     if (page + n > r->committed) r->committed = page + n;
+                    /* Stress variant B: each committed page faulted in here,
+                       rather than in the store that resumes. */
+                    for (uint8_t *q = page; q < page + n; q += gs_page_size) {
+                        volatile uint8_t *v = q;
+                        *v = *v;
+                    }
                     return EXCEPTION_CONTINUE_EXECUTION;
                 }
                 static const char nomem[] =
@@ -1963,7 +1969,8 @@ static void gs_regions_init(void) {
 #ifdef __linux__
 /* pthread.h declares it only under _GNU_SOURCE, which would have to come
    before every system header a file includes. */
-int pthread_getattr_np(pthread_t, pthread_attr_t *);
+)GSRT"
+R"GSRT(int pthread_getattr_np(pthread_t, pthread_attr_t *);
 #endif
 
 static size_t gs_sigstack_size(void) {
@@ -1972,8 +1979,7 @@ static size_t gs_sigstack_size(void) {
 
 /* Run by each thread program's thread as it starts: an alternate stack for
    the fault handler, unless the thread has one (ASan gives every thread its
-)GSRT"
-R"GSRT(   own), and the bounds of the thread's stack. */
+   own), and the bounds of the thread's stack. */
 static void gs_native_stack_init(void) {
     stack_t ss;
     uintptr_t lo = 0, hi = 0;
@@ -2161,15 +2167,15 @@ GS_API uint8_t gs_trim_memory(void) {
         if (top < base || top - base > r->usable)
             gs_panic("data stack top outside its region in trim_memory");
         uintptr_t start = (top + page - 1) / page * page;
-        uintptr_t end = (base + r->usable) / page * page;
+)GSRT"
+R"GSRT(        uintptr_t end = (base + r->usable) / page * page;
 #if defined(_WIN32) || defined(GS_POSIX_COMMIT_ON_FAULT)
         /* Nothing above the commit mark was ever committed (base is
            allocation-aligned and the mark page-aligned). */
         if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
 #endif
         if (start >= end) continue;
-)GSRT"
-R"GSRT(        size_t len = (size_t)(end - start);
+        size_t len = (size_t)(end - start);
 #ifdef _WIN32
         /* The access-fault handler commits the pages again on growth. */
         if (VirtualFree((void *)start, len, MEM_DECOMMIT))
@@ -2365,7 +2371,8 @@ static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
     p->node[p->h] = i;
     lf = GS_SPLEAF(p, i);
     for (k = 0; k < lf->n && lf->idx[k] <= idx; k++) {}
-    p->pos[p->h] = k - 1;
+)GSRT"
+R"GSRT(    p->pos[p->h] = k - 1;
     return k - 1;
 }
 
@@ -2375,8 +2382,7 @@ static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     gs_spinner *rn = GS_SPINNER(p, r);
     rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
-)GSRT"
-R"GSRT(    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
+    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
     rn->child[0] = a;
     rn->key[1] = gs_sp_key(p, b, leaf);
     rn->max[1] = gs_sp_max(p, b, leaf, INT64_MAX);
@@ -2599,14 +2605,14 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
 
 /* The spans around a run [idx, end): the path to the leaf holding the last
    span that starts at or before idx (its position k there, or -1), and the
-   span after that one where it follows in the same leaf, or where it starts
+)GSRT"
+R"GSRT(   span after that one where it follows in the same leaf, or where it starts
    the next leaf and at end (nl and nk, reached by the path np). A next
    leaf's first index is the key of the entry that leads to it, so a path
    to it is only made where its first span touches the run. */
 typedef struct {
     gs_spleaf *lf, *nl;
-)GSRT"
-R"GSRT(    int64_t k, nk;
+    int64_t k, nk;
     gs_sppath *np;
 } gs_spnear;
 
@@ -2815,7 +2821,8 @@ static GS_INLINE void gs_bsm_init(gs_bsm *m, const gs_byteset *s, int tables) {
         m->flip = _mm_setzero_si128();
     } else {
         m->a = _mm_set1_epi8((char)s->bytes[0]);
-        m->b = _mm_set1_epi8((char)s->bytes[1]);
+)GSRT"
+R"GSRT(        m->b = _mm_set1_epi8((char)s->bytes[1]);
         m->c = _mm_set1_epi8((char)s->bytes[2]);
         m->flip = s->invert ? _mm_set1_epi8(-1) : _mm_setzero_si128();
     }
@@ -2823,8 +2830,7 @@ static GS_INLINE void gs_bsm_init(gs_bsm *m, const gs_byteset *s, int tables) {
 
 /* The members among the 16 bytes of x, as 0xff bytes, for a set of kind k
    from 1 to 4, a constant wherever this is inlined. A range holds x where
-)GSRT"
-R"GSRT(   x - lo, wrapping, is at most its width. */
+   x - lo, wrapping, is at most its width. */
 static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
     __m128i r, t;
     if (k == 1) {
@@ -2983,14 +2989,14 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     if (!reserve) gs_panic("the data stack reservation (GS_STACK_RESERVE) is less than a page");
     gs_region_usable = gs_region_reserve = (size_t)reserve;
     gs_region_gap = (size_t)gap;
-    gs_stack_budget = budget;
+)GSRT"
+R"GSRT(    gs_stack_budget = budget;
     gs_mainregions = mainregions;
     gs_workerregions = workerregions;
     /* The workers the budget holds beside the main program, each at the
        most regions one can take: what hardware_threads() reports at most.
        At least one, so a program sized by it still runs; the regions the
-)GSRT"
-R"GSRT(       platform then refuses are retried smaller (gs_reserve_region). */
+       platform then refuses are retried smaller (gs_reserve_region). */
     if (workerregions > 0) {
         uint64_t per = reserve + gap;
         uint64_t total = per ? budget / per : 0;
@@ -3194,7 +3200,8 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
         if (!low && !high) {
             dig[n++] = (char)('0' + d);
             continue;
-        }
+)GSRT"
+R"GSRT(        }
         if (low && high) {
             /* Both read back: the nearer, d + 1 when r is past half of s,
                and of two as near, the even one. */
@@ -3202,8 +3209,7 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
             c = gs_big_cmp(&t, &s);
             high = c > 0 || (c == 0 && (d & 1));
         }
-)GSRT"
-R"GSRT(        dig[n++] = (char)('0' + d + high);
+        dig[n++] = (char)('0' + d + high);
         return n;
     }
 }
