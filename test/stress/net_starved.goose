@@ -59,6 +59,24 @@ var wire_k = 0;
 var wire_got: u8[>..] = [];
 var starts: i64[>..] = [];
 
+// Where the bytes are (net_starved_probe.c).
+extern fn starved_addr(bytes: const u8[:]) -> i64;
+
+// Bytes from..to of got, in hex, those not the pattern's marked with *.
+fn dump(got: const u8[:], from: i64, to: i64) {
+    var line: u8[>..] = [];
+    for i in max(0, from)..min(to, got.len) {
+        if i % 16 == 0 { format(line, "\n    +", i, ":"); }
+        let b = got[i] as i64;
+        let hex = "0123456789abcdef";
+        line.push(' ');
+        line.push(hex[b >> 4]);
+        line.push(hex[b & 15]);
+        line.push(if got[i] != pattern(i) { '*' } else { ' ' });
+    }
+    print("  bytes", line);
+}
+
 fn first_wrong(bytes: const u8[:], from: i64) -> i64 {
     for i in bytes.len {
         if bytes[i] != pattern(from + i) { return i; }
@@ -184,8 +202,14 @@ fn main() {
                 print("  every piece was right as recv handed it over: the client's memory changed after");
             }
             if wrong1 >= 0 { report("first", got1, wrong1); }
+            let a1 = starved_addr(got1);
+            let a2 = starved_addr(got2);
+            print("  first at ", a1, " (64 KB boundary + ", a1 % 65536, "), second at ", a2, " (+ ", a2 % 65536,
+                  ")");
+            if wrong1 >= 0 { dump(got1, wrong1 - wrong1 % 16, wrong1 - wrong1 % 16 + 96); }
             if wrong2 >= 0 {
                 report("second", got2, wrong2);
+                dump(got2, wrong2 - wrong2 % 16 - 16, wrong2 - wrong2 % 16 + 96);
                 // The pieces around it.
                 var j = 0;
                 while j < starts.len && starts[j] <= wrong2 { j++; }

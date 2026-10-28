@@ -36,17 +36,19 @@ jobs:
           build/Release/gust.exe build -q -O2 --cc ${{ matrix.cc }} -o net_serve.exe test/threads/net_serve.goose
 
       # Six copies of the stress, 40 rounds each, and two loops of the whole
-      # test, all at once; each failure's output is kept.
+      # test, all at once; each failure's output is kept. Copies 4 to 6 and
+      # the second loop poll with WSAPoll (GUST_NET_POLL=1) rather than AFD.
       - name: Stress
         run: |
           mkdir -p out
           for c in 1 2 3 4 5 6; do
-            ( ./starved.exe 40 > out/starved-$c.txt 2>&1; echo "exit $?" >> out/starved-$c.txt ) &
+            poll=$([ $c -gt 3 ] && echo 1 || echo 0)
+            ( GUST_NET_POLL=$poll ./starved.exe 40 > out/starved-$c.txt 2>&1; echo "exit $? poll $poll" >> out/starved-$c.txt ) &
           done
           for c in 1 2; do
             (
               for i in $(seq 1 12); do
-                ./net_serve.exe > out/ns-$c-$i.txt 2>&1
+                GUST_NET_POLL=$((c - 1)) ./net_serve.exe > out/ns-$c-$i.txt 2>&1
                 if diff -q <(tr -d '\r' < out/ns-$c-$i.txt) test/expected/net_serve.out > /dev/null; then
                   rm out/ns-$c-$i.txt
                 else
