@@ -1353,8 +1353,8 @@ fn main() {
 ```
 
 A root struct value is a name, and nothing else: an owner, a parameter, or a
-binding of one (`let q = p;` binds by reference, `q .= other` rebinds every
-field). It is not copied, assigned whole, compared, printed, returned, or
+binding of one (`let q = p;` binds by reference, `let q = if c { a } else
+{ b };` binds the one the `if` chooses, `q .= other` rebinds every field). It is not copied, assigned whole, compared, printed, returned, or
 handed to a builtin. It is never a field's, an element's, a result's, an
 optional's or a type argument's type, through an alias or not. A function
 value or an untyped parameter does not take it either. A worker uses a root

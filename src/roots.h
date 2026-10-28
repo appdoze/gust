@@ -578,9 +578,115 @@ struct RootLowering {
             Bind(vd->names[0], NewBinding(rb->root, rb->args, cq));
             return out;
         }
+        if (vd->inits.size() == 1 && Is<IfExpr>(vd->inits[0])) {
+            vector<pair<Binding *, Ident *>> ch;
+            if (Choices(vd->inits[0], ch, false)) return Select(vd, ch);
+        }
         for (auto &i : vd->inits) i = Expr(i);
         for (auto n : vd->names) Bind(n, nullptr);
         return { vd };
+    }
+
+    // The value a branch of an `if` gives, as the slot it is in: a block's
+    // tail, or the branch itself (an `else if`, or a bare expression the
+    // optimizer would leave).
+    static Node *&BranchValue(Node *&b) {
+        if (auto bl = Is<Block>(b)) return bl->tail;
+        return b;
+    }
+
+    // The root values an `if` (with `else if`s) chooses among, in the order
+    // of its branches, every branch giving one; with `number`, each is
+    // replaced by its place in that order.
+    bool Choices(Node *&v, vector<pair<Binding *, Ident *>> &out, bool number) {
+        if (!v) return false;
+        if (auto x = Is<IfExpr>(v)) {
+            Node *thenb = x->thenb;
+            auto ok = x->elseb && Choices(BranchValue(thenb), out, number) &&
+                      Choices(BranchValue(x->elseb), out, number);
+            return ok;
+        }
+        Ident *id = nullptr;
+        auto b = RootOf(v, &id);
+        if (!b) return false;
+        out.push_back({ b, id });
+        if (number) v = ast.New<IntLit>(v->line, (int64_t)out.size() - 1);
+        return true;
+    }
+
+    // `let q = if c { a } else { b };` of root values a and b: the branch
+    // taken, numbered once (q#sel), so its conditions and statements run
+    // once and in order, then the owner's struct and each field bound to
+    // the one that branch gives, as typed references take a branch's value.
+    vector<Node *> Select(VarDecl *vd, vector<pair<Binding *, Ident *>> &ch) {
+        auto r = ch[0].first->root;
+        auto st = r->st;
+        auto cq = vd->isconst;
+        for (auto &[b, id] : ch) {
+            if (b->root != r || b->args.size() != ch[0].first->args.size()) {
+                Error(vd, cat("an if binding ", vd->names.empty() ? string_view() : vd->names[0],
+                              " chooses among values of different root structs"));
+                return { vd };
+            }
+            cq = cq || b->cq;
+        }
+        if (vd->names.size() != 1 || (vd->type && RootRef(vd->type) != r)) {
+            Error(vd, cat("a root struct (", st->name, ") chosen by an if is bound one name at a time, by reference"));
+            return { vd };
+        }
+        if (vd->type) {
+            cq = cq || vd->type->cq || vd->type->ref->sub->cq;
+            allowed.insert(vd->type);
+            allowed.insert(vd->type->ref->sub);
+        }
+        auto line = vd->line;
+        auto name = vd->names[0];
+        auto sel = ast.Intern(cat(name, "#sel"));
+        vector<pair<Binding *, Ident *>> numbered;
+        Choices(vd->inits[0], numbered, true);
+        auto s = ast.New<VarDecl>(line, false);
+        s->ns = vd->ns;
+        s->names.push_back(sel);
+        s->inits.push_back(Expr(vd->inits[0]));
+        s->end = vd->end;
+        vector<Node *> out { s };
+        Bind(sel, nullptr);
+        // if sel == 0 { leaf(0) } else if sel == 1 { leaf(1) } ... else { leaf(n - 1) }
+        auto chain = [&](const function<Node *(Ident *)> &leaf) {
+            Node *e = leaf(ch.back().second);
+            for (auto i = (int)ch.size() - 2; i >= 0; i--) {
+                auto c = ast.New<Binary>(line, T_EQ, ast.New<Ident>(line, sel, vd->ns), ast.New<IntLit>(line, (int64_t)i));
+                auto thenb = ast.New<Block>(line);
+                thenb->tail = leaf(ch[i].second);
+                auto elseb = ast.New<Block>(line);
+                elseb->tail = e;
+                e = ast.New<IfExpr>(line, c, thenb, elseb);
+            }
+            return e;
+        };
+        auto rt = ast.NewType(TY_STRUCT, line);
+        rt->struc = ast.NewDetail<TypeStruct>();
+        rt->struc->st = st;
+        rt->struc->args = ch[0].first->args;
+        vd->type = RefTo(rt, cq, line);
+        allowed.insert(vd->type);
+        allowed.insert(rt);
+        vd->byref = false;
+        vd->inits[0] = chain([&](Ident *id) { return ast.New<Ident>(id->line, id->name, id->ns); });
+        out.push_back(vd);
+        Binding b { r, ch[0].first->args, cq };
+        for (auto &c : r->comps) {
+            auto d = ast.New<VarDecl>(line, vd->isvar);
+            d->names.push_back(CompName(name, c.name));
+            d->type = RefTo(CompType(b, c), cq, line);
+            d->inits.push_back(chain([&](Ident *id) {
+                return ast.New<Ident>(id->line, CompName(id->name, c.name), id->ns);
+            }));
+            d->end = vd->end;
+            out.push_back(d);
+        }
+        Bind(name, NewBinding(r, ch[0].first->args, cq));
+        return out;
     }
 
     // A value expression, lowered in place: what replaces it.

@@ -17,9 +17,12 @@ Where v1 differs from the target below:
   each field it reaches (`test/threads/root_globals.goose`), rather than
   being rejected. Each field is an ordinary global, so the copy is the
   existing one, and no descriptor is ever copied.
-* References to an owner are parameters and bindings only. A reference in a
-  field, an element or an optional, a returned one and a branch-selected one
-  are rejected. Each would have to carry every field's reference.
+* References to an owner are parameters and bindings only, a binding
+  possibly chosen by an `if` (its branch numbered once, then the owner and
+  each field bound to that branch's). A reference in a field, an element or
+  an optional, and a returned one, are rejected: before the checker the
+  lowering cannot tell which struct a field path reaches, and each would
+  have to carry every field's reference.
 * A generic owner names its type arguments (`slot_pool<i64> { .. }`).
 
 The scalar-allocator probe from the investigation is accepted: a reference

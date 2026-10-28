@@ -125,4 +125,18 @@ fn main() {
     global_lexer.add("g");
     add(global_lexer, "h");
     print(global_lexer.text, " ", global_lexer.name, " ", global_lexer.spans.len);
+
+    // A binding an `if` chooses: its conditions run once, in order, and
+    // each field is the chosen owner's.
+    var la = Lexer { .. };
+    var lb = Lexer { .. };
+    var lc = Lexer { line: 10, .. };
+    for i in 5 {
+        let q = if note(i) % 3 == 0 { la } else if i % 3 == 1 { lb } else { lc };
+        q.add("x");
+        q.line += i;
+    }
+    let r: const Lexer& = if la.line > lb.line { la } else { lb };
+    print(la.text, " ", la.line, " ", lb.text, " ", lb.line, " ", lc.text, " ", lc.line, " ", r.spans.len,
+          " ", order.len);
 }

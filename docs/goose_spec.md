@@ -491,7 +491,9 @@ A root struct value is a name, of one of these forms:
 * a **reference parameter** `p: R&` or `p: const R&`, whose fields are
   then references to the caller's (const ones for `const R&`).
 * a **binding** of either, `let q = p;`, `let q .= p;` or `let q: R& = p;`,
-  which binds each field by reference. `q .= other` rebinds every field.
+  which binds each field by reference, or one an `if` chooses among
+  several (`let q = if c { a } else { b };`, with `else if`s), whose
+  conditions run once and in order. `q .= other` rebinds every field.
 
 Through one, `x.f` reaches a field, and a call `f(x, ...)` or `x.f(...)`
 passes it to a parameter declared `R&` or `const R&`. A root struct value
