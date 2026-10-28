@@ -409,6 +409,37 @@ static inline int gs_simd_level(void) {
 #endif
 #define GS_MUL_ADD_MODE GS_MUL_ADD_BASE
 
+/* Gust: Windows commits a data stack's pages as they are first touched,
+   from the fault handler (runtime_impl.h, gs_fault_filter), and on hosted
+   CI under load the exception that reaches it has come with its thread's
+   AVX state recorded as all zero although the C library's memcpy was in the
+   middle of its vector loop: resumed, the copy stored 16 zero bytes of
+   every 32 from the page on (test/stress/net_starved.goose, where the
+   context record said so; the live registers were zero by then too, so the
+   handler cannot put them back). So a copy, move or fill the library may
+   do with 32-byte registers first writes one byte of each page it reaches,
+   a store with no vector state live, which takes any commit there; the
+   byte keeps its value, and the copy then writes it as it would. Copies of
+   a constant size the compiler writes out itself use 16-byte registers
+   (32-byte ones only inside a simd function's AVX versions), and a fill of
+   zeros loses only zeros, so neither needs it. */
+#ifdef _WIN32
+static void gs_first_touch(void *d, size_t n) {
+    for (uintptr_t a = (uintptr_t)d, p = a; p < a + n; p = (p | 4095) + 1) {
+        volatile uint8_t *q = (volatile uint8_t *)p;
+        *q = *q;
+    }
+}
+#if defined(__clang__) || defined(__GNUC__)
+#define GS_TOUCHED(d, n) \
+    (!__builtin_constant_p(n) && (size_t)(n) >= 32 ? gs_first_touch((d), (size_t)(n)) : (void)0)
+#else
+#define GS_TOUCHED(d, n) ((size_t)(n) >= 32 ? gs_first_touch((d), (size_t)(n)) : (void)0)
+#endif
+#else
+#define GS_TOUCHED(d, n) ((void)0)
+#endif
+
 /* The generated code's memcpy and memset of zeros. Most move or clear the
    1 to 32 bytes of a field, an element or a reference, a constant size the
    optimizing backends turn into a few moves. TinyCC calls the C library for
@@ -446,7 +477,7 @@ static inline int gs_simd_level(void) {
                                   GS_AT(uint64_t, d, (n) - 16) = 0, GS_AT(uint64_t, d, (n) - 8) = 0) \
      : (void)memset((d), 0, (n)))
 #else
-#define GS_MEMCPY(d, s, n) memcpy((d), (s), (n))
+#define GS_MEMCPY(d, s, n) (GS_TOUCHED(d, n), (void)memcpy((d), (s), (n)))
 #define GS_MEMZERO(d, n) memset((d), 0, (n))
 #endif
 
@@ -498,12 +529,21 @@ static void gs_memcpy(void *dst, const void *src, size_t n) {
         GS_MEMCPY(d + n - 16, s + n - 16, 16);
         return;
     }
+    GS_TOUCHED(d, n);
     memcpy(dst, src, n);
 }
 
 static void gs_memmove(void *dst, const void *src, size_t n) {
-    if (n) memmove(dst, src, n);
+    if (!n) return;
+    GS_TOUCHED(dst, n);
+    memmove(dst, src, n);
 }
+
+/* Gust: the generated code's other moves and fills, touched as GS_MEMCPY's
+   copies are (a move's runs may overlap, which a byte keeping its value
+   does not disturb). */
+#define GS_MEMMOVE(d, s, n) (GS_TOUCHED(d, n), (void)memmove((d), (s), (n)))
+#define GS_MEMSET(d, c, n) (GS_TOUCHED(d, n), (void)memset((d), (c), (n)))
 
 /* Whether n bytes at a and b are equal: two overlapping loads per side up
    to 16 bytes, where keys and names mostly are, then 16 bytes a step with
