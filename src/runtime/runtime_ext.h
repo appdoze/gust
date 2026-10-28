@@ -99,6 +99,12 @@ typedef long long gs_l4m __attribute__((vector_size(32)));
         long long gs_l4m_s_ = (x);                                            \
         (gs_l4m){ gs_l4m_s_, gs_l4m_s_, gs_l4m_s_, gs_l4m_s_ };               \
     })
+/* Whether a condition holds in any lane. */
+#define gs_l4m_any(m)                                                         \
+    __extension__({                                                           \
+        gs_l4m gs_l4m_a_ = (m);                                               \
+        (gs_l4m_a_[0] | gs_l4m_a_[1] | gs_l4m_a_[2] | gs_l4m_a_[3]) != 0;     \
+    })
 #ifdef GS_SQRT_NO_ERRNO
 #define gs_l4d_sqrt(v) __builtin_elementwise_sqrt(v)
 #else

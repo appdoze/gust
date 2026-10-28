@@ -396,6 +396,15 @@ git log upstream/master..main
   to each self-call, with a wildcard arm making the call for the rest, so a
   child that is a leaf costs no frame. `compare/`'s interp runs a fifth
   faster under clang. `test/optimizer/basecase_match.goose` (new).
+- The lanes' filter form (`PlanFilter`, `EmitFilter` in
+  `src/codegen_lanes.h`; `CodeGen::GenLaneFilter`, hooked in beside the
+  lanes in `ForLoop::CgStmt`): a loop of pure statements ending in an `if`
+  tests four iterations at once and runs them as the loop does wherever any
+  lane's tests hold, skipping the rest. Elements bound by reference and
+  inlined functions that return early are lane values there.
+  `gs_l4m_any` (`src/runtime/runtime_ext.h`). `compare/`'s raytrace runs
+  27% faster under clang with the same checksum.
+  `test/codegen/lanes_filter.goose` (new).
 
 ## Safety checks
 

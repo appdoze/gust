@@ -1200,6 +1200,12 @@ inline void ForLoop::CgStmt(CodeGen &cg) {
                            { vdef, idxdef });
             return;
         }
+        // Gust: a search, its tests four iterations at a time.
+        if ((lenbound < 0 || lenbound >= 2 * LaneGen::K) && !held && cg.LaneFilterFor(this)) {
+            cg.L("int64_t ", gi, " = 0;");
+            cg.GenLaneFilter(this, gi, v, [&]() { bind(); }, d);
+            return;
+        }
     }
     setbound();
     // A body that calls a recursive function keeps what the loop needs in

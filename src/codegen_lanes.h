@@ -46,6 +46,17 @@
 // run where one iteration at a time runs one: they may store into no array
 // and run no loop, and nothing in them may abort (no checked index, no
 // integer arithmetic, no conversion but to a float).
+//
+// The filter form (PlanFilter), for a search: a body of pure statements
+// ending in `if c1 && c2 ... { anything }`, as a ray tracer's loop over
+// its spheres is. The lanes compute the statements and the conditions
+// they can for four iterations at once; where no lane's hold, none of the
+// four would have done anything, and they are skipped, and otherwise the
+// four run as the loop is. That is exact whatever the if does: until the
+// first iteration whose conditions hold, nothing has changed, so the lanes
+// see that one hold. Elements may be bound by reference, and an inlined
+// function may return early: each return takes its value into the lanes
+// still running, which then stop (RetBlock, RetEmit).
 #pragma once
 
 namespace goose {
@@ -63,6 +74,23 @@ struct LaneGen {
     vector<const VarDef *> indexed;          // Those used at the index, as first met.
     vector<TypeExpr *> structs;              // The lane struct types, inner ones first.
     bool innerloop = false, lanefloat = false;
+    // The filter form: the pure statements, the if they end in, and the
+    // conditions of its && the lanes test.
+    bool filtering = false;
+    vector<Node *> prefix;
+    IfExpr *gate = nullptr;
+    vector<Node *> keys;
+    // References to the element: the loop's binder of `for &s`, and the
+    // locals an inlined call binds to it. Each is the element's lanes.
+    unordered_set<const VarDef *> refs;
+
+    // The element's type, through a reference.
+    TypeExpr *ElemT() { return elem->type->kind == TY_REF ? elem->type->ref->sub : elem->type; }
+    // A lane value's type, a reference to the element being the element's.
+    TypeExpr *LaneT(Node *n) {
+        if (auto id = Is<Ident>(n); id && refs.count(id->vdef)) return ElemT();
+        return n->exprtype;
+    }
 
     LaneGen(CodeGen &c, ForLoop *l) : cg(c), f(l) {}
 
@@ -139,7 +167,11 @@ struct LaneGen {
                 return false;
             }
             case NK_Index: return IsVar(static_cast<Index *>(n)->idx, idx);
-            case NK_InlineBlock: return Lane(static_cast<InlineBlock *>(n)->body->tail);
+            case NK_InlineBlock: {
+                // One that returns early differs by lane where anything in it does.
+                auto ib = static_cast<InlineBlock *>(n);
+                return Lane(ib->body->tail) || (HasReturn(ib->body, ib->sf) && LaneAny(ib->body));
+            }
             case NK_StructLit: {
                 for (auto &fi : static_cast<StructLit *>(n)->inits)
                     if (Lane(fi.val)) return true;
@@ -152,6 +184,25 @@ struct LaneGen {
             case NK_Block: return Lane(static_cast<goose::Block *>(n)->tail);
             default: return false;
         }
+    }
+
+    // Whether anything in n reads a lane value.
+    bool LaneAny(Node *n) {
+        if (!n) return false;
+        if (auto id = Is<Ident>(n)) return lanev.count(id->vdef) > 0;
+        if (auto x = Is<Index>(n); x && IsVar(x->idx, idx)) return true;
+        auto found = false;
+        n->Children([&](Node *c) { found = found || LaneAny(c); });
+        return found;
+    }
+
+    // Whether n holds a return from sf, an inlined function.
+    static bool HasReturn(Node *n, SFunction *sf) {
+        if (!n || Is<FunVal>(n) || Is<FnDecl>(n)) return false;
+        if (auto r = Is<Return>(n)) return r->target == sf;
+        auto found = false;
+        n->Children([&](Node *c) { found = found || HasReturn(c, sf); });
+        return found;
     }
 
     // A branch's value: its block's tail, or the `else if` it is.
@@ -187,7 +238,14 @@ struct LaneGen {
                 }
                 n->Children([&](Node *c) { walk(c, under); });
             };
-            walk(f->body, false);
+            // The filter form's if runs one iteration at a time: only what
+            // comes before it and its conditions are the lanes'.
+            if (filtering) {
+                for (auto s : prefix) walk(s, false);
+                walk(gate->cond, false);
+            } else {
+                walk(f->body, false);
+            }
         }
     }
 
@@ -254,8 +312,8 @@ struct LaneGen {
         if (!n) return false;
         auto lane = Lane(n);
         if (lane && n->exprtype) {
-            if (!Laneable(n->exprtype)) return false;
-            NoteStruct(n->exprtype);
+            if (!Laneable(LaneT(n))) return false;
+            NoteStruct(LaneT(n));
         }
         switch (n->nkind) {
             case NK_IntLit: case NK_FltLit: case NK_BoolLit: return true;
@@ -319,7 +377,10 @@ struct LaneGen {
             }
             case NK_InlineBlock: {
                 auto ib = static_cast<InlineBlock *>(n);
-                return NoJumps(ib->body) && ib->body->tail && Body(ib->body, false) && Value(ib->body->tail);
+                if (NoJumps(ib->body)) return ib->body->tail && Body(ib->body, false) && Value(ib->body->tail);
+                // Returning early, in the filter form only.
+                auto ends = false;
+                return filtering && RetBlock(ib->body, ib->sf, ends) && ends;
             }
             case NK_StructLit: {
                 auto sl = static_cast<StructLit *>(n);
@@ -343,8 +404,17 @@ struct LaneGen {
         switch (s->nkind) {
             case NK_VarDecl: {
                 auto vd = static_cast<VarDecl *>(s);
-                if (vd->defs.size() != 1 || vd->inits.size() != 1 || vd->byref || vd->reusable) return false;
+                if (vd->defs.size() != 1 || vd->inits.size() != 1 || vd->reusable) return false;
                 auto v = vd->defs[0];
+                // An inlined call's parameter bound to the element by reference.
+                if (auto id = Is<Ident>(vd->inits[0]); id && refs.count(id->vdef) && v->type &&
+                                                        v->type->kind == TY_REF && !v->isglobal && !v->captured) {
+                    refs.insert(v);
+                    lanev.insert(v);
+                    inner.insert(v);
+                    return true;
+                }
+                if (vd->byref) return false;
                 if (v->isglobal || v->captured || v->reusable || !Plain(v->type)) return false;
                 inner.insert(v);
                 if (lanev.count(v)) {
@@ -412,6 +482,106 @@ struct LaneGen {
         for (auto s : b->stmts)
             if (!Stmt(s)) return false;
         return !tailstmt || !b->tail || Stmt(b->tail);
+    }
+
+    // An inlined body of sf that returns early, each return with one value:
+    // as a return of its own, or ending an if's branch. Both branches of
+    // such an if run in every lane, as does all that follows one some lanes
+    // return in, so none of that may abort (masked). `ends`: every lane has
+    // its value at the end.
+    bool RetBlock(Block *b, SFunction *sf, bool &ends) {
+        ends = false;
+        vector<Node *> all = b->stmts;
+        if (b->tail) all.push_back(b->tail);
+        auto added = 0;
+        auto ok = true;
+        for (size_t i = 0; ok && i < all.size(); i++) {
+            auto s = all[i];
+            auto last = i + 1 == all.size();
+            if (Is<Return>(s) || (Is<IfExpr>(s) && HasReturn(s, sf))) {
+                auto e = false;
+                ok = RetBranch(s, sf, e);
+                if (e) {
+                    ends = true;
+                    ok = ok && last;
+                } else {
+                    masked++;
+                    added++;
+                }
+            } else if (last && s == b->tail) {
+                ok = Value(s);
+                ends = true;
+            } else {
+                ok = Stmt(s);
+            }
+        }
+        masked -= added;
+        return ok;
+    }
+    bool RetBranch(Node *br, SFunction *sf, bool &ends) {
+        ends = false;
+        if (!br) return true;
+        if (auto bl = Is<goose::Block>(br)) return RetBlock(bl, sf, ends);
+        if (auto r = Is<Return>(br)) {
+            ends = true;
+            return r->target == sf && r->from.empty() && r->vals.size() == 1 && Value(r->vals[0]);
+        }
+        auto x = Is<IfExpr>(br);
+        if (!x || !HasReturn(x, sf)) return Stmt(br);
+        auto te = false, ee = false;
+        masked++;
+        auto ok = Cond(x->cond) && RetBranch(x->thenb, sf, te) && RetBranch(x->elseb, sf, ee);
+        masked--;
+        ends = te && ee;
+        return ok;
+    }
+
+    // The filter form: what the loop's body is (the header's last part).
+    bool PlanFilter() {
+        if (f->parallel || !f->label.empty() || !f->vdef) return false;
+        auto it = Is<Ident>(f->iter);
+        if (!it || !it->vdef || !it->vdef->type) return false;
+        elem = f->vdef;
+        idx = f->idxdef;
+        if (f->byref ? elem->type->kind != TY_REF : !elem->copybind) return false;
+        if (!Laneable(ElemT()) || elem->captured || (idx && idx->captured)) return false;
+        if (f->byref) refs.insert(elem);
+        NoteStruct(ElemT());
+        vector<Node *> all = f->body->stmts;
+        if (f->body->tail) all.push_back(f->body->tail);
+        if (all.empty()) return false;
+        gate = Is<IfExpr>(all.back());
+        if (!gate || gate->elseb) return false;
+        prefix.assign(all.begin(), all.end() - 1);
+        filtering = true;
+        Classify();
+        for (auto s : prefix)
+            if (!Stmt(s)) return false;
+        // Pure statements: nothing stored, so nothing the lanes skip.
+        if (!stored.empty() || innerloop) return false;
+        // The conditions of the if's && the lanes can test, anywhere along
+        // it: each one false is the if not taken. They run in every lane,
+        // where the && would have stopped at an earlier one: masked.
+        vector<Node *> conj;
+        function<void(Node *)> split = [&](Node *c) {
+            if (auto b = Is<Binary>(c); b && b->op == T_ANDAND) {
+                split(b->left);
+                split(b->right);
+            } else {
+                conj.push_back(c);
+            }
+        };
+        split(gate->cond);
+        auto lanekey = false;
+        for (auto c : conj) {
+            masked++;
+            auto ok = Cond(c);
+            masked--;
+            if (!ok) continue;
+            keys.push_back(c);
+            lanekey = lanekey || Lane(c);
+        }
+        return lanekey && lanefloat;
     }
 
     // Whether the loop runs in lanes, and what each part of it is.
@@ -678,8 +848,23 @@ struct LaneGen {
             }
             case NK_InlineBlock: {
                 auto ib = static_cast<InlineBlock *>(n);
-                for (auto s : ib->body->stmts) S(s);
-                return LX(ib->body->tail);
+                if (NoJumps(ib->body)) {
+                    for (auto s : ib->body->stmts) S(s);
+                    return LX(ib->body->tail);
+                }
+                // Returning early: each lane's value from the return it takes,
+                // the lanes still running in `mask`.
+                auto t = n->exprtype;
+                auto res = NewLane(t);
+                for (auto &p : Leaves(t)) cg.L(res, p, " = gs_l4d_splat(0.0);");
+                auto outer = mask;
+                if (mask.empty()) {
+                    mask = cg.T();
+                    cg.L("gs_l4m ", mask, " = gs_l4m_splat(-1LL);");
+                }
+                RetEmit(ib->body, ib->sf, res, t);
+                mask = outer;
+                return res;
             }
             case NK_IfExpr: {
                 auto x = static_cast<IfExpr *>(n);
@@ -733,6 +918,10 @@ struct LaneGen {
             case NK_VarDecl: {
                 auto vd = static_cast<VarDecl *>(s);
                 auto v = vd->defs[0];
+                if (refs.count(v)) {
+                    lnames[v] = lnames.at(static_cast<Ident *>(vd->inits[0])->vdef);
+                    return;
+                }
                 if (lanev.count(v)) {
                     auto name = cg.Unique2(cat(cg.Sanitize(v->name), "l"));
                     cg.L(LaneCT(v->type), " ", name, ";");
@@ -851,6 +1040,64 @@ struct LaneGen {
         }
     }
 
+    // RetBlock's body into res, the lanes still running in mask: a return
+    // takes its value into them and leaves none running; an if's branches
+    // each run in the lanes it is taken in, and those still running after
+    // either run on.
+    void RetEmit(Node *b, SFunction *sf, const string &res, TypeExpr *t) {
+        if (!b) return;
+        if (auto r = Is<Return>(b)) {
+            auto v = NewLane(t);
+            Put(v, t, r->vals[0]);
+            Masked(res, t, v);
+            mask = cg.T();
+            cg.L("gs_l4m ", mask, " = gs_l4m_splat(0LL);");
+            return;
+        }
+        if (auto x = Is<IfExpr>(b); x && HasReturn(x, sf)) {
+            auto m = MaskOf(x->cond);
+            auto live = mask;
+            auto mt = cg.T(), me = cg.T();
+            cg.L("gs_l4m ", mt, " = (", live, " & ", m, ");");
+            cg.L("gs_l4m ", me, " = (", live, " & ~", m, ");");
+            // A branch no running lane takes is skipped: what it computes
+            // is its own, and its lanes that run on are none.
+            auto branch = [&](Node *br, const string &bm) {
+                auto after = cg.T();
+                cg.L("gs_l4m ", after, " = ", bm, ";");
+                if (!br) return after;
+                cg.L("if (gs_l4m_any(", bm, ")) {");
+                cg.ind++;
+                mask = bm;
+                RetEmit(br, sf, res, t);
+                cg.L(after, " = ", mask, ";");
+                cg.ind--;
+                cg.L("}");
+                return after;
+            };
+            auto lt = branch(x->thenb, mt);
+            auto le = branch(x->elseb, me);
+            mask = cg.T();
+            cg.L("gs_l4m ", mask, " = (", lt, " | ", le, ");");
+            return;
+        }
+        auto bl = Is<goose::Block>(b);
+        if (!bl) {
+            S(b);
+            return;
+        }
+        for (auto s : bl->stmts) RetEmit(s, sf, res, t);
+        if (!bl->tail) return;
+        if (Is<Return>(bl->tail) || HasReturn(bl->tail, sf)) {
+            RetEmit(bl->tail, sf, res, t);
+            return;
+        }
+        // The body's value, in the lanes that reach it.
+        auto v = NewLane(t);
+        Put(v, t, bl->tail);
+        Masked(res, t, v);
+    }
+
     // An integer binder of an inner loop, a copy of its C counter.
     void Bind(VarDef *v, const string &c) {
         auto name = cg.Unique2(cg.Sanitize(v->name));
@@ -903,6 +1150,54 @@ struct LaneGen {
         cg.L("#endif");
         RestoreNames();
     }
+
+    // The filter form's blocks, ahead of the loop that runs what is left:
+    // the lanes' statements and tests, then, where any lane's tests hold,
+    // `scalar`, which runs the block's iterations as the loop does.
+    void EmitFilter(const string &ctr, const CodeGen::ArrView &v, const function<void()> &scalar) {
+        gi = ctr;
+        view = v;
+        cg.L("#if defined(GS_LANES)");
+        cg.L("/* loop shape: ", K, " lanes test, then one at a time (codegen_lanes.h) */");
+        string more = cat("(", v.len, ") - ", ctr, " >= ", K);
+        auto walked = static_cast<Ident *>(f->iter)->vdef;
+        for (auto s : indexed) {
+            if (s == walked) continue;
+            Ident at(f->line, s->name);
+            at.vdef = const_cast<VarDef *>(s);
+            at.exprtype = s->type;
+            auto lv = cg.GenLoc(&at);
+            if (lv.t->kind == TY_REF) cg.DerefLoc(lv);
+            auto sv = cg.ArrayView(lv);
+            views[s] = sv;
+            Append(more, " && (", sv.len, ") - ", ctr, " >= ", K);
+        }
+        cg.L("while (", more, ") {");
+        cg.ind++;
+        for (auto t : structs) {
+            string s = "typedef struct { ";
+            auto si = cg.SI(t);
+            for (size_t i = 0; i < si->st->fields.size(); i++)
+                Append(s, LaneCT(si->ftypes[i]), " ", cg.Sanitize(si->st->fields[i].name), "; ");
+            cg.L(s, "} ", LaneCT(t), ";");
+        }
+        lnames[elem] = Gather(v, ElemT());
+        for (auto s : prefix) S(s);
+        string all;
+        for (auto k : keys) {
+            auto m = MaskOf(k);
+            all = all.empty() ? m : cat("(", all, " & ", m, ")");
+        }
+        cg.L("if (!gs_l4m_any(", all, ")) {");
+        cg.L("    ", ctr, " += ", K, ";");
+        cg.L("    continue;");
+        cg.L("}");
+        RestoreNames();
+        scalar();
+        cg.ind--;
+        cg.L("}");
+        cg.L("#endif");
+    }
 };
 
 // Whether a loop over an array runs in lanes; the caller has checked that
@@ -920,6 +1215,51 @@ inline void CodeGen::GenLanes(ForLoop *f, const string &ctr, const ArrView &v) {
     (void)planned;
     g.Emit(ctr, v);
     lanesused = true;
+}
+
+// Gust: whether a loop over an array runs its tests in lanes (the filter
+// form); the caller has checked as for LanesFor.
+inline bool CodeGen::LaneFilterFor(ForLoop *f) {
+    if (f->stripk || f->sumred) return false;
+    LaneGen g(*this, f);
+    return g.PlanFilter();
+}
+
+// The loop in the filter form: blocks of lanes, each running its
+// iterations as the loop is where any lane's tests hold, then the rest.
+// The two copies of the body share one loop scope, as GenBlocked's do.
+inline void CodeGen::GenLaneFilter(ForLoop *f, const string &ctr, const ArrView &v,
+                                   const function<void()> &bind, const Dst &d) {
+    auto lp = OpenLoop(f->body, nullptr, { f->vdef, f->idxdef }, d);
+    auto si = lp.si;
+    cscopes[si].straight = StraightCode(f->body);
+    {
+        NameScope ns(*this);
+        LaneGen g(*this, f);
+        auto planned = g.PlanFilter();
+        assert(planned);
+        (void)planned;
+        g.EmitFilter(ctr, v, [&]() {
+            auto stop = T();
+            L("for (int64_t ", stop, " = ", ctr, " + ", LaneGen::K, "; ", ctr, " < ", stop, "; ", ctr, "++) {");
+            ind++;
+            bind();
+            GenBodyCopy(f->body, si);
+            ind--;
+            L("}");
+        });
+        lanesused = true;
+    }
+    cscopes[si].saves.clear();
+    cscopes[si].usedcnt = false;
+    cscopes[si].cntlbl = Lbl();
+    L("for (; ", ctr, " < (", v.len, "); ", ctr, "++) {");
+    ind++;
+    bind();
+    GenBodyCopy(f->body, si);
+    ind--;
+    L("}");
+    CloseLoop(lp);
 }
 
 }  // namespace goose
