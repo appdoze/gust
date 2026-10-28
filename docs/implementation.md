@@ -65,7 +65,7 @@ single translation unit, included in the order the driver lists them.
 |---|---|---|---|
 | Parse | `lexer.h`, `parser.h`, `ParseProgram` in `main.cpp` | source files, following `import` | the `Ast`: nodes, type expressions, symbols per namespace, globals in initialization order |
 | Resolve | `resolve.h` (`ResolveTypeNames`) | type names as written | struct/enum/generic kinds, aliases substituted away |
-| Root structs (Gust) | `roots.h` (`LowerRootStructs`) | `root struct` declarations and their uses | each resizable field a variable or parameter of its own (`owner.field`), calls passing them; every other use of a root struct an error |
+| Root structs (Gust) | `roots.h` (`LowerRootStructs`) | `root struct` declarations and their uses | each resizable field a variable or parameter of its own (`owner.field`), or a reference field beside an ordinary struct's `st: R&` (`st.field`), calls passing them; every other use of a root struct an error |
 | Typecheck | `typecheck*.h` (`TypeCheckProgram`) | the `Ast` | one `FnSpec` per specialization with a cloned, annotated body; `StructInst`/`EnumInst`; `VarDef`s; the store record; every diagnostic of §3--§11; the shader blobs `embed_shader` compiles (`gfx.h`, `shaderc.c`) |
 | Optimize | `optimize.h`, `optimize_basecase.h`, `optimize_tre.h`, `optimize_loops.h`, `optimize_reassoc.h` (`Optimizer`) | live specializations | bodies rewritten in place (inlined, folded, loops), liveness and use counts, loop shapes (`ForLoop::stripk`, `sumred`, `While::countdown`) |
 | BCE | `bce.h` (`BCE::RunAll`) | live specializations | `Index::nobc`, `SliceExpr::nobc`, `ForLoop::fixedlen` and `lenbound`, per-loop `hoistrefs` and `hoistfields` |

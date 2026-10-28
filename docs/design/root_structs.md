@@ -8,8 +8,12 @@ owner itself is the struct of the remaining fields. A call passes the owner,
 then each field. Component identity, per-field shrink checks, `index_of`,
 stack-top caching and bounds-check elimination therefore come from the
 existing rules for variables, and the generated C is the code for separate
-arrays. Covered by `test/storage/root_structs.goose`,
-`test/threads/root_globals.goose` and the `test/errors_tc/root_*` rejections.
+arrays. An ordinary struct may hold an owner by reference: its field
+`st: R&` carries a reference to each field stored apart, as a parameter
+does ("References to an owner in fields", below). Covered by
+`test/storage/root_structs.goose`, `test/storage/root_ref_fields.goose`,
+`test/threads/root_globals.goose` and the `test/errors_tc/root_*`
+rejections.
 
 Where v1 differs from the target below:
 
@@ -17,13 +21,25 @@ Where v1 differs from the target below:
   each field it reaches (`test/threads/root_globals.goose`), rather than
   being rejected. Each field is an ordinary global, so the copy is the
   existing one, and no descriptor is ever copied.
-* References to an owner are parameters and bindings only, a binding
-  possibly chosen by an `if` (its branch numbered once, then the owner and
-  each field bound to that branch's). A reference in a field, an element or
-  an optional, and a returned one, are rejected: before the checker the
-  lowering cannot tell which struct a field path reaches, and each would
-  have to carry every field's reference. "Next: references to an owner in
-  fields", below, is a design for the first.
+* References to an owner are parameters, bindings (possibly chosen by an
+  `if`: its branch numbered once, then the owner and each field bound to
+  that branch's) and fields of ordinary structs. A reference in an
+  element or an optional, or in a root struct's field, and a returned one,
+  are rejected: each would need the fields' references as several results
+  or a parallel array of each.
+* An owner held in a field `st` is reached only through a name whose type
+  the source writes as the holder's: a parameter or binding declared
+  `Ctx`, `Ctx&` or `const Ctx&`, or one a `Ctx` literal constructs. Before
+  the checker the lowering cannot tell which struct any other path to
+  `.st` reaches (a call's result, an element, an optional, a loop variable,
+  an untyped binding of a call, a field of a field), and each is an error.
+* The references a holder carries are one set of roots to the checker,
+  which joins a struct's reference fields, so through a holder the fields
+  are not separate regions: a shrink of one is rejected while a view into
+  another is live, where either is reached through the holder. A push is
+  not. The slot pool's free-then-allocate pattern therefore needs the owner
+  or an `R&` parameter, not a holder. Per-field roots for a struct's
+  reference fields would lift this, a change to the checker's joins.
 * A generic owner names its type arguments (`slot_pool<i64> { .. }`).
 
 The scalar-allocator probe from the investigation is accepted: a reference
@@ -439,14 +455,15 @@ reviewed migration path. Root structs can ship independently of that decision.
 * **Worker snapshots and coordinated serialization.** Reconstruct independent
   components with an explicit format/lifecycle contract; never memcpy an owner.
 
-## Next: references to an owner in fields
+## References to an owner in fields
 
-Not built. v1 rejects `struct Ctx { st: ParserState& }`, an element or
-optional of `ParserState&`, and a function returning one, because the
-lowering runs before the checker and cannot tell which struct a field path
-such as `x.st.tokens` reaches. This is how it could be allowed without
-moving the lowering into the checker. The restriction in step 4 is a
-language decision, so it needs agreeing before anyone builds it.
+Built as below (`src/roots.h`, `Hold`, `Lit` and `PathOf`), the
+restriction in step 4 agreed first. v1 rejected
+`struct Ctx { st: ParserState& }` because the lowering runs before the
+checker and cannot tell which struct a field path such as `x.st.tokens`
+reaches; this allows it without moving the lowering into the checker. An
+element or optional of `ParserState&`, and a function returning one, stay
+rejected.
 
 1. **A struct holding one carries every component.** A field `st: R&` of an
    ordinary struct `Ctx` gains, beside it, one reference field per
@@ -457,9 +474,11 @@ language decision, so it needs agreeing before anyone builds it.
    rule is needed.
 2. **Construction and assignment fill every component.** In
    `Ctx { st: p, .. }`, where `p` is a root value as v1 defines one,
-   `st.f: p.f` is added for each `f`. `c.st = p` becomes the assignment of
-   `c.st` and of each `c.st.f`. Any other expression for `st` is an error,
-   as a root value anywhere else is.
+   `st.f: p.f` is added for each `f`. `c.st .= p` becomes the rebinding of
+   `c.st` and of each `c.st.f`; `c.st = p` writes through the reference
+   (§3.8), an assignment of the whole owner, and is an error that says to
+   rebind. Any other expression for `st` is an error, as a root value
+   anywhere else is, and so is a default for `st`.
 3. **A copy of `Ctx` copies the components with it.** It is a struct of
    references, so a copy, a return and a stored element all carry them. A
    `Ctx` therefore needs no rule of its own.
@@ -474,12 +493,14 @@ language decision, so it needs agreeing before anyone builds it.
    would need the components as several results, or a parallel array of
    each. Owning factory results (V2 candidates, above) are the way there.
 
-Tests to write first: the fixtures of `test/storage/root_structs.goose`
-with the owner reached through a `Ctx`; a `Ctx` copied, returned and
-stored as an element; a component's view kept across a push into another
-component through the `Ctx` (accepted); a reference into a component stored
-in a `Ctx` that outlives the owner (rejected by §9.2); and one rejection per
-path that step 4 refuses.
+Tests: the fixtures of `test/storage/root_structs.goose` with the owner
+reached through a `Ctx`, a `Ctx` copied, returned and stored as an element,
+and a component's view kept across a push into another component through
+the `Ctx`, in `test/storage/root_ref_fields.goose`; a `Ctx` that outlives
+the owner (rejected by §9.2) and one rejection per path that step 4
+refuses, in `test/errors_tc/root_holder_*`. The pool fixture there frees
+and reallocates with no reference held across, for the reason in "Where v1
+differs" above.
 
 ## Implementation sequence and acceptance
 

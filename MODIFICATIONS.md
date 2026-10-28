@@ -371,6 +371,23 @@ git log upstream/master..main
   no other name takes. `test/storage/root_structs.goose`,
   `test/threads/root_globals.goose` (new) and 23 rejections
   `test/errors_tc/root_*` (new).
+- Root structs held by reference in fields (spec §3.4.1,
+  `docs/design/root_structs.md`): an ordinary struct's field `st: R&`
+  gains a reference field per field of R stored apart, `st.field`
+  (`Field::rootcomp`, `src/ast.h`), which the struct's literal fills from
+  the root value it gives `st` and `c.st .= p` rebinds (`src/roots.h`,
+  `Hold`, `Lit`). `c.st` is a root value only where `c` is a name whose
+  type the source writes as the struct's (`PathOf`); every other path to it
+  is an error, in `src/roots.h` for a call passing it and in the checker's
+  message for a field stored apart reached through it
+  (`src/typecheck_exprs.h`). The language server leaves the added fields
+  out (`src/lsp_features.h`, `src/lsp_analysis.h`).
+  `test/storage/root_ref_fields.goose` and 17 rejections
+  `test/errors_tc/root_holder_*` (new); `root_ref_in_field.goose` and
+  `root_alias_field.goose` now reject what stays rejected (an `R&` in a
+  root struct's field, an element of one), with
+  `root_ref_element_field.goose` and `root_ref_optional_field.goose`
+  (new).
 - Lanes (ROADMAP Phase 5): `src/codegen_lanes.h` (new) runs a loop over an
   array's elements four iterations at a time, one per lane of a vector of
   doubles, where the iterations are independent: n-body's force loop. Each

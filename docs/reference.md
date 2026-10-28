@@ -1355,11 +1355,51 @@ fn main() {
 A root struct value is a name, and nothing else: an owner, a parameter, or a
 binding of one (`let q = p;` binds by reference, `let q = if c { a } else
 { b };` binds the one the `if` chooses, `q .= other` rebinds every field). It is not copied, assigned whole, compared, printed, returned, or
-handed to a builtin. It is never a field's, an element's, a result's, an
-optional's or a type argument's type, through an alias or not. A function
-value or an untyped parameter does not take it either. A worker uses a root
-global as it uses any global, through its own copy of each field. Spec
-§3.4.1; the design is in `docs/design/root_structs.md`.
+handed to a builtin. It is never a root struct's field's, an element's, a
+result's, an optional's or a type argument's type, through an alias or not.
+A function value or an untyped parameter does not take it either. A worker
+uses a root global as it uses any global, through its own copy of each
+field. Spec §3.4.1; the design is in `docs/design/root_structs.md`.
+
+An ordinary struct may hold one by reference, `st: R&` or `st: const R&`:
+it then carries a reference to each of R's resizable fields too, which its
+literal fills and `c.st .= other` rebinds. Such a struct is copied,
+returned and stored as any struct of references. Its `c.st` is a root value
+where `c` is a name whose type is written: a parameter or binding declared
+with the struct's type (or a reference to it), or one the struct's literal
+constructs. Reached any other way, through a call's result, an element, an
+optional or a loop variable, bind it to such a name first.
+
+```goose
+root struct Log {
+    lines: u8[>..] = [],
+    marks: i64[>..<] = []
+}
+
+struct Writer { log: Log&, tag: u8 = '-' }
+
+fn mark(log: Log&) { log.marks.push(log.lines.len); }
+
+fn write(w: Writer, s: const u8[:]) {
+    w.log.lines.push(w.tag);
+    w.log.lines.append(s);
+    mark(w.log);
+}
+
+fn main() {
+    var log = Log { .. };
+    let w = Writer { log: log, tag: '+' };
+    w.write("ab");
+    let all: Writer[2] = [w, Writer { log: log }];
+    let second: Writer = all[1];
+    second.write("c");
+    print(log.lines, " ", log.marks);
+}
+```
+
+```
++ab-c [3, 5]
+```
 
 ### Generic structs
 

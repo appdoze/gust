@@ -107,9 +107,10 @@ In order of how new and how central each is:
   could lose the same state. Their stores go to elements that already
   exist, which are committed; a 32-byte store into a stack's fresh top from
   a `simd fn`'s AVX version is the case left.
-- **Root structs: references in fields, elements and optionals, and
-  returned ones, are rejected** (`docs/design/root_structs.md`, which has a
-  design for the first). A limit, not a hole: no such program compiles.
+- **Root structs: references in elements and optionals, and returned
+  ones, are rejected, and one in an ordinary struct's field is reached only
+  through a name whose type is written** (`docs/design/root_structs.md`).
+  A limit, not a hole: no other such program compiles.
 
 ## 6. Reporting
 

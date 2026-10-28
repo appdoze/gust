@@ -262,7 +262,8 @@ stored, the way Gust spells a tree in an array (reference section 11).
 | a function in a recursive cycle without `recursive` or a full signature | mark the cycle's entry `recursive fn` and write every signature in it |
 | an array of variable-size elements cannot be indexed | iterate it, keep an index of references, or use a capped element type (`u8[..16]`) |
 | a struct holds two resizable fields | declare it `root struct`, construct it as a variable (`var s = S { .. }`) and pass it as `S&`; or keep one resizable field, last |
-| a root struct used as a value (copied, printed, returned, a field's type) | name one of its fields (`s.items`), or pass it to an `S&` parameter |
+| a root struct used as a value (copied, printed, returned, a root struct's field's type) | name one of its fields (`s.items`), or pass it to an `S&` parameter; an ordinary struct may hold `st: S&` |
+| a field of a root struct reached through `e.st` (a call's result, an element, a loop variable) | bind the struct holding it to a name declared with its type (`let c: Ctx = e;`), then use `c.st` |
 | a write through a read-only parameter or slot | take `const` off where the data is yours, or copy it into a builder |
 | ambiguous call (`sqrt(n)`, an integer argument) | convert the argument: `sqrt(n as f64)` |
 | redundant `as` (a warning) | delete the cast: the conversion is implicit there |

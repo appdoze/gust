@@ -494,16 +494,37 @@ A root struct value is a name, of one of these forms:
   which binds each field by reference, or one an `if` chooses among
   several (`let q = if c { a } else { b };`, with `else if`s), whose
   conditions run once and in order. `q .= other` rebinds every field.
+* a **held owner**, `c.st`, where an ordinary struct H declares a field
+  `st: R&` or `st: const R&` and `c` is a name whose type the source
+  writes as H's: a parameter or binding declared `H`, `H&` or `const H&`,
+  or one an `H` literal constructs.
 
 Through one, `x.f` reaches a field, and a call `f(x, ...)` or `x.f(...)`
 passes it to a parameter declared `R&` or `const R&`. A root struct value
 is not copied, assigned whole, compared, printed, returned, converted,
 or passed to a builtin, a function value, or an untyped or other
-parameter. R is not the type of a field, element, payload, result,
-optional, type argument or function type, or a temporary's, through an
-alias or not, and a `thread_fn`, `export fn` or `extern fn` takes none. A
-worker uses a root global as any global (§11.2): through its own copy of
-each field it reaches.
+parameter. R is not the type of a root struct's field, or of an element,
+payload, result, optional, type argument or function type, or a
+temporary's, through an alias or not, and a `thread_fn`, `export fn` or
+`extern fn` takes none. A worker uses a root global as any global
+(§11.2): through its own copy of each field it reaches.
+
+An ordinary struct H whose field `st` is an `R&` (or `const R&`) holds,
+beside that field, a reference (const ones for `const R&`) to each of R's
+fields stored apart. H's literal fills them from the root value it gives
+`st`, which it must give (`H { st: x }`, with `x` a root value; `st` has
+no default), and `c.st .= y` rebinds them with it; `c.st = y` is an error,
+an assignment of the whole. H is otherwise an ordinary struct of
+references, copied, returned and stored as an element as any is, each of
+those references held to the store rule (§9.2) as any reference field's.
+Reached any other way -- a call's result, an element, an optional, a loop
+variable, an untyped binding of a call, a field of a field -- `.st` is no
+root value: its fields stored apart are not reached through it, and no
+`R&` parameter takes it, so bind the holder to such a name first. The
+references an H holds are one set of roots to the checker, so through an
+H R's fields are not separate regions: a shrink of one is rejected while
+a view into another is live, where either is reached through the H.
+Growth is not.
 
 ### 3.5 Algebraic data types
 

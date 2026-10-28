@@ -361,7 +361,12 @@ gcc -O2 across `compare/` on a hosted runner, above.)**
   `docs/design/root_structs.md`), so each is a region of its own to the lifetime rules and
   the generated C is that of separate arrays; owners, `R&` parameters, bindings, generic
   roots, globals and workers' copies in `test/storage/root_structs.goose` and
-  `test/threads/root_globals.goose`, 23 rejections in `test/errors_tc/root_*`.)** **(Moves done: `a.move()` gives an array's elements as a fresh
+  `test/threads/root_globals.goose`, 23 rejections in `test/errors_tc/root_*`. An
+  ordinary struct's field `st: R&` holds an owner by reference, carrying each field's
+  reference, reached through a name whose type is written; through such a struct the
+  fields share one set of roots, so a shrink of one with a view into another live is
+  rejected there: `test/storage/root_ref_fields.goose`, 17 rejections in
+  `test/errors_tc/root_holder_*`.)** **(Moves done: `a.move()` gives an array's elements as a fresh
   value and leaves it empty, checked as `clear()` is (no view or reference into it may
   still be used) and known to the bounds-check pass as a clear; `a = a.move()` and
   elements with self-relative links are compile errors; `test/codegen/move_resizable.goose`
