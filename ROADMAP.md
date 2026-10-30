@@ -132,6 +132,10 @@ criterion moves to Phase 5.
   outside its inner loop). What is left: the dictionary's hash buckets, the heap's
   children, indices read out of data (`env[x.i]`, `closed[n]` for a node off the heap).)**
 - Find out why Lobster (same author) runs `interp` 1.24x faster than Goose under clang.
+  **(Overtaken: with base-case inlining's match form (`src/optimize_basecase.h`), which gives
+  a tree evaluator's leaf children no frame of their own, gust/clang runs interp in 0.436 s
+  against Lobster's C++ build's 0.712 s and rust/o3-lto's 0.615 s on this machine, best of
+  five alternating runs each with the same checksum, 30 October.)**
 - Bundle clang (or an LLVM toolchain) with releases, so users without it don't get MSVC's
   17–27% slower code.
 
@@ -146,7 +150,11 @@ loops, so most likely layout, and needs lld; not made the default. After the bou
 work, 26 October, best of five runs each, gust/clang against rust/o3-lto: sort 0.190 against
 0.218 and interp 0.506 against 0.551, ahead on both now; nbody 0.160 against 0.160 and
 raytrace 0.082 against 0.083, level, so "strictly faster on all 8" is still not met, nor
-interp at Lobster's 0.419.)**
+interp at Lobster's 0.419. Met since, on hosted runners: ahead of Rust LTO on all eight on
+Ubuntu and on Windows (Phase 8's exit, run 40745431333), raytrace by the lanes' filter form
+and interp by base-case inlining's match form; interp 0.37 s on Ubuntu and 0.29 s on
+Windows there. On this machine interp is 0.436 s against Lobster's C++ build's 0.712 s,
+measured side by side; the 0.419 s was a different Lobster build, not at hand.)**
 
 ## Phase 3: Library access (months 3–5)
 
