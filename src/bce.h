@@ -3378,6 +3378,38 @@ struct BCE {
             return v && wdecl.count(v) && !wbad.count(v) && !v->captured && !v->isglobal &&
                    !v->isparam && !addrof.count(v) && IntBaseVar(v);
         };
+        // Gust: an invariant is set at v's declaration and checked at each
+        // write of v, so what can break it is a shrink or re-binding while v
+        // lives: in the statements of its block after its declaration. A
+        // place the whole body may shrink elsewhere, before v exists, keeps
+        // the candidate: an inlined dictionary probe's `i <= len(slots) - 1`,
+        // where the caller sized the table first.
+        map<VarDef *, pair<Block *, size_t>> declat;   // Each declaration's block and place in it.
+        function<void(Node *)> scan = [&](Node *n) {
+            if (!n || Is<FunVal>(n) || Is<FnDecl>(n)) return;
+            if (auto bl = Is<Block>(n))
+                for (size_t k = 0; k < bl->stmts.size(); k++)
+                    if (auto vd = Is<VarDecl>(bl->stmts[k]); vd && vd->defs.size() == 1 && vd->defs[0])
+                        declat.emplace(vd->defs[0], make_pair(bl, k));
+            RunChildren(n, scan);
+        };
+        scan(sp->body);
+        map<VarDef *, pair<set<int>, set<VarDef *>>> lifekills;
+        auto keeps = [&](VarDef *v, int pid) {
+            auto it = lifekills.find(v);
+            if (it == lifekills.end()) {
+                auto dt = declat.find(v);
+                if (dt == declat.end()) return false;
+                it = lifekills.emplace(v, pair<set<int>, set<VarDef *>> {}).first;
+                set<int> bk;
+                KillsScope ks(*this, &bk, &it->second.first, &it->second.second);
+                flow = Flow {};
+                auto [bl, at] = dt->second;
+                for (auto k = at + 1; k < bl->stmts.size(); k++) Walk(bl->stmts[k]);
+                if (bl->tail) Walk(bl->tail);
+            }
+            return !it->second.first.count(pid) && !it->second.second.count(places[pid].rootv);
+        };
         auto candidates = [&] {
             cands.clear();
             for (auto v : wdecl) {
@@ -3388,7 +3420,8 @@ struct BCE {
                     for (auto pid : rit->second) {
                         // `v <= len(P)` survives any growth of P, so only a
                         // shrink (or a re-bound access path) rules P out.
-                        if (shrunk.count(pid) || vbumped.count(places[pid].rootv)) continue;
+                        if ((shrunk.count(pid) || vbumped.count(places[pid].rootv)) && !keeps(v, pid))
+                            continue;
                         if (c.le.size() >= 8) break;
                         c.le.push_back({ pid, 0 });
                     }

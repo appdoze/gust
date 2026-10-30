@@ -28,7 +28,10 @@ fn dict_tag(h: u64) -> u32 { (h as! u32) | 2147483648 }
 
 // The slot holding key, or -1.
 fn dict_probe<K, V>(d: dictionary<K, V>&, key: K) -> i64 {
+    // An empty table has no slots, which also tells bounds-check
+    // elimination that every `& mask` below is a slot.
     if d.count == 0 { return -1; }
+    if d.slots.len == 0 { return -1; }
     let h = key.hash();
     let tag = dict_tag(h);
     let mask = d.slots.len - 1;
@@ -47,6 +50,9 @@ fn dict_probe<K, V>(d: dictionary<K, V>&, key: K) -> i64 {
 // The slot holding key, or else the unused slot where it goes, for a table
 // that has one.
 fn dict_slot<K, V>(d: dictionary<K, V>&, key: K, h: u64) -> i64 {
+    // Never taken (dict_room comes first), and with it every `& mask` below
+    // is a slot that needs no bounds check.
+    if d.slots.len == 0 { return -1; }
     let tag = dict_tag(h);
     let mask = d.slots.len - 1;
     var i = (h & (mask as u64)) as i64;
