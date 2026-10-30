@@ -130,7 +130,14 @@ criterion moves to Phase 5.
   remain in `compare/gust/main.goose`, where 17 did, and 36 of 171 counting the standard
   library code it runs, with no change in time beyond noise (the checks nbody lost sit
   outside its inner loop). What is left: the dictionary's hash buckets, the heap's
-  children, indices read out of data (`env[x.i]`, `closed[n]` for a node off the heap).)**
+  children, indices read out of data (`env[x.i]`, `closed[n]` for a node off the heap).
+  Then the hash buckets: a loop index's invariant is judged against the shrinks of its own
+  lifetime, from its declaration to the end of its block, rather than the whole body's,
+  so an inlined probe keeps `i <= len - 1` where its caller sized the table first, and the
+  dictionary's probes test for an empty table (`test/optimizer/bce_lifetime_invariants.goose`;
+  600 programs of `bench/bce_fuzz.py`, no mismatch). 26 of 168 remain counting the standard
+  library, 8 of them interp's `env[x.i]`, copied into each call by base-case inlining's
+  match form.)**
 - Find out why Lobster (same author) runs `interp` 1.24x faster than Goose under clang.
   **(Overtaken: with base-case inlining's match form (`src/optimize_basecase.h`), which gives
   a tree evaluator's leaf children no frame of their own, gust/clang runs interp in 0.436 s

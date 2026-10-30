@@ -407,6 +407,15 @@ git log upstream/master..main
   `test/codegen/lanes.goose`, `test/codegen/lanes_short.goose` and
   `test/codegen/lanes_if.goose` (new): the same output, and the same
   abort, one iteration at a time and in lanes.
+- Bounds-check elimination's loop invariants against a variable's own
+  lifetime (`src/bce.h`, the candidates of `RunSpecOnce`): a candidate the
+  whole body's kills rule out is judged again against the shrinks and
+  re-bindings of the statements after its declaration in its block, which
+  is where an invariant set at the declaration can break. An inlined probe
+  whose caller sized the table first keeps `i <= len - 1`, and
+  `stdlib/dictionary.goose`'s probes test for an empty table, so their
+  loops lose every check. `test/optimizer/bce_lifetime_invariants.goose`
+  (new).
 - Base-case inlining's match form (`SetupMatch`, `src/optimize_basecase.h`):
   a recursive function whose body is one `match` over an enum's variants,
   some arms recursing and some not, has the arms that do not recurse copied
