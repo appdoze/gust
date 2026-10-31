@@ -485,6 +485,14 @@ git log upstream/master..main
   `.github/workflows/api-bench.yml` (new, run by hand) checks and measures
   the servers on a Linux runner.
 
+- `stdlib/dictionary.goose`: a slot's tag is one byte, the top seven bits
+  of the key's hash, where it was the low 31 with the home slot in them, so
+  growth and removal hash the keys they move again. A slot of `i64` keys and
+  values takes 17 bytes, as in Rust's hashbrown, against 20: `compare/`'s
+  hashmap peaks at 9.4 MB where it took 10.6 (Rust 9.1) and runs as fast.
+  Growing a table of slice keys from empty costs a third more time than
+  before, still less than Rust's.
+
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
   over a `reusable` pool: a handle names one allocation by index and serial
   number, and using it after the allocation is released, or releasing it
