@@ -118,8 +118,48 @@ def hello_builds(gust, out, exe):
         path = os.path.join(out, f"hello-go{exe}")
         ok, t = build(["go", "build", "-o", path, "."], cwd=d)
         if ok:
-            sizes["go"] = (os.path.getsize(path), t)
+            sizes["go (cold)"] = (os.path.getsize(path), t)
+            # Again, with the standard library's packages in Go's build cache.
+            os.remove(path)
+            ok, t = build(["go", "build", "-o", path, "."], cwd=d)
+            if ok:
+                sizes["go"] = (os.path.getsize(path), t)
     return sizes
+
+
+def resident_maps(gust, out):
+    """Linux: where a sleeping hello world's resident memory is, by mapping,
+    in Gust, C (cc -O2) and Rust: what each one's baseline is made of."""
+    progs = {}
+    g = os.path.join(out, "sleepy.goose")
+    open(g, "w").write('import os;\n\nfn main() {\n    print("hello");\n    sleep(0.6);\n}\n')
+    if build([gust, "build", "-q", g, "-o", os.path.join(out, "sleepy-gust")])[0]:
+        progs["gust"] = os.path.join(out, "sleepy-gust")
+    c = os.path.join(out, "sleepy.c")
+    open(c, "w").write('#include <stdio.h>\n#include <unistd.h>\n'
+                       'int main(void) { puts("hello"); fflush(stdout); usleep(600000); return 0; }\n')
+    if shutil.which("cc") and build(["cc", "-O2", c, "-o", os.path.join(out, "sleepy-c")])[0]:
+        progs["c"] = os.path.join(out, "sleepy-c")
+    r = os.path.join(out, "sleepy.rs")
+    open(r, "w").write('fn main() { println!("hello"); std::thread::sleep(std::time::Duration::from_millis(600)); }\n')
+    if shutil.which("rustc") and build(["rustc", "-C", "opt-level=3", "-o", os.path.join(out, "sleepy-rust"), r])[0]:
+        progs["rust"] = os.path.join(out, "sleepy-rust")
+    print("\nresident memory of a sleeping hello world, KB, by mapping (Linux)")
+    for name, path in progs.items():
+        p = subprocess.Popen([path], stdout=subprocess.DEVNULL)
+        time.sleep(0.3)
+        rss, cur = {}, None
+        try:
+            for line in open(f"/proc/{p.pid}/smaps"):
+                f = line.split()
+                if len(f) >= 5 and "-" in f[0] and ":" in f[3]:
+                    cur = os.path.basename(f[5]) if len(f) > 5 else "[anon]"
+                elif f and f[0] == "Rss:" and cur is not None:
+                    rss[cur] = rss.get(cur, 0) + int(f[1])
+        finally:
+            p.wait()
+        top = sorted(rss.items(), key=lambda kv: -kv[1])
+        print(f"  {name:<5} {sum(rss.values()):6d} total: " + ", ".join(f"{k} {v}" for k, v in top[:9]))
 
 
 def main():
@@ -214,6 +254,8 @@ def main():
     print("executable size, bytes, and build time: hello world, each toolchain's default build")
     for n, (s, t) in hello_builds(gust, out, exe).items():
         print(f"  {n:<12}{s:>10}  {t:6.2f} s")
+    if sys.platform.startswith("linux"):
+        resident_maps(gust, out)
 
 
 if __name__ == "__main__":
