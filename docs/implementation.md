@@ -111,7 +111,17 @@ which nothing in the executable sets.
   under `GOOSE_HOME`, and compiles and links it into an executable beside
   the source (`build.h`: the runtime object compiled once per toolchain and
   configuration, the native modules' response files, `-o`, `--debug`,
-  `--standalone`, `-v`, `--dry-run`; `-O2` by default).
+  `--standalone`, `-v`, `--dry-run`; `-O2` by default). Gust: a release
+  build puts each function and datum in a section of its own
+  (`-ffunction-sections -fdata-sections` for clang and gcc, `/Gy /Gw` for
+  the msvc style), and the link leaves out what nothing reaches
+  (`--gc-sections`, `-dead_strip`, or the msvc-style linkers' default
+  `/OPT:REF`). On Windows a release build that links no C of a package's
+  or its own takes the C runtime as a DLL, as Rust's msvc target does
+  (`/MD`, `-fms-runtime-lib=dll` from clang 16; `--static-crt` links it in),
+  against a runtime object of its own (`release-gc-md`). compare/'s program
+  goes from 268 KB to 64 KB under clang and to 51 KB under MSVC, against
+  189 KB for Rust's with fat LTO.
 * `goose check file.goose` typechecks it (`--check`).
 * `goose fetch file.goose` fetches the packages the root declares and stops
   (`--parse`; `--update` fetches tags and branches again).

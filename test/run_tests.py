@@ -2232,6 +2232,21 @@ def main():
             code, out, err = tc.run_capture([exe, "build", "--dry-run", "-o", str(dry), probe])
             checks.append(("build --dry-run", code == 0 and not dry.exists() and
                            "verbs" in out and "goose_runtime" in out, out + err))
+            # Gust: on Windows a release build that links no C package takes
+            # the C runtime as a DLL (MSVC, clang 16 on), but not with
+            # --static-crt (src/build.h, DllCrt).
+            if os.name == "nt":
+                code, tcout, err = tc.run_capture([exe, "toolchain"])
+                m = re.search(r"C compiler:\s+(MSVC|clang-cl|clang) (\d+)", tcout)
+                if m:
+                    expect = m[1] != "clang" or int(m[2]) >= 16
+                    code1, out1, err1 = tc.run_capture([exe, "build", "--dry-run", "-o", str(dry), probe])
+                    code2, out2, err2 = tc.run_capture([exe, "build", "--dry-run", "--static-crt", "-o",
+                                                        str(dry), probe])
+                    dll = lambda o: "/MD" in o.split() or "-fms-runtime-lib=dll" in o
+                    checks.append(("build: the C runtime a DLL, linked in with --static-crt",
+                                   code1 == 0 and code2 == 0 and dll(out1) == expect and not dll(out2),
+                                   out1 + err1 + out2 + err2))
         # Gust's --checked: --debug's overflow checks in an optimized build. The
         # sum overflows by one, the program's arguments being only itself.
         overflow = gendir / "checked_overflow.goose"

@@ -18,6 +18,7 @@ struct BuildOptions {
     bool dryrun = false;      // --dry-run: print the commands and run nothing
     bool standalone = false;  // --standalone: no runtime object
     string exe;               // -o: the executable; "" puts it beside the root source
+    bool staticcrt = false;   // Gust: --static-crt, the C runtime linked in on Windows
 };
 
 inline string AbsolutePath(const string &path) {
@@ -42,18 +43,64 @@ struct Builder {
     const Toolchain &tc;
     const BuildOptions &opts;
     FILE *msgs;
+    // Gust: the C runtime as a DLL (DllCrt), for a Windows release build
+    // that links no C of a package's or its own.
+    bool dllcrt = false;
 
     // The compile flags of both styles: optimization, or debug information
     // and none of it. Defines go into the C itself (main.cpp), never here.
+    // Gust: a release build puts each function and datum in a section of
+    // its own, which lets the linker leave out what nothing reaches: most
+    // of the runtime, for most programs (a quarter of compare/'s program).
+    // The linkers of the msvc style do so by default without /DEBUG, the
+    // others by LinkFlags.
     vector<string> CFlags() const {
         if (tc.style == "msvc") {
             vector<string> f = { "/nologo" };
             if (opts.debug) f.push_back("/Od"), f.push_back("/Zi");
-            else f.push_back("/O2");
+            else f.push_back("/O2"), f.push_back("/Gy"), f.push_back("/Gw");
+            if (dllcrt) f.push_back("/MD");
             return f;
         }
         if (opts.debug) return { "-O0", "-g" };
-        return { "-O2" };
+        vector<string> f = { "-O2" };
+        if (tc.name == "clang" || tc.name == "gcc")
+            f.push_back("-ffunction-sections"), f.push_back("-fdata-sections");
+        if (dllcrt) f.push_back("-fms-runtime-lib=dll");
+        return f;
+    }
+
+    // Gust: the cc style's link flags for a release build: unreferenced
+    // sections left out (CFlags). Windows' clang links with the msvc-style
+    // linkers, which do that already.
+    vector<string> LinkFlags() const {
+        if (opts.debug || tc.style == "msvc" || (tc.name != "clang" && tc.name != "gcc")) return {};
+        #if defined(__APPLE__)
+            return { "-Wl,-dead_strip" };
+        #elif defined(_WIN32)
+            if (tc.name == "clang") return {};
+            return { "-Wl,--gc-sections" };
+        #else
+            return { "-Wl,--gc-sections" };
+        #endif
+    }
+
+    // Gust: whether a release build on Windows takes the C runtime as a DLL
+    // (vcruntime and the universal CRT, as Rust's msvc target does), which
+    // leaves the C library out of the executable: compare/'s program goes
+    // from 204 to 64 KB. Only where nothing else is linked: a package's C,
+    // and the C of the program's own sidecar, are built against the static
+    // runtime (native.h), which one executable cannot mix with the DLL's.
+    // clang spells it -fms-runtime-lib from version 16.
+    bool DllCrt(bool othercode) const {
+        #ifdef _WIN32
+            if (opts.debug || opts.staticcrt || othercode) return false;
+            if (tc.style == "msvc") return true;
+            return tc.name == "clang" && atoi(tc.version.c_str()) >= 16;
+        #else
+            (void)othercode;
+            return false;
+        #endif
     }
 
     // The system libraries a program links beyond the C library, in the cc
@@ -166,6 +213,7 @@ struct Builder {
             argv.push_back(exe);
             for (auto &r : rsps) argv.push_back(cat("@", r));
             for (auto &l : SystemLibs()) argv.push_back(l);
+            for (auto &f : LinkFlags()) argv.push_back(f);
         }
         return Run(argv, cat("building ", exe), logfile);
     }
@@ -176,8 +224,10 @@ struct Builder {
 // hash>/<toolchain id>-<config>/goose_runtime.o. "" when it could not be
 // built, after the builder said why.
 inline string RuntimeObject(const Builder &b) {
+    // Gust: a release object is built with sections per function (-gc) and,
+    // where the C runtime is a DLL, against it (-md): each its own object.
     auto dir = cat(GooseHome(), "/build/runtime/", RuntimeVersion(), "/", b.tc.id, "-",
-                   b.opts.debug ? "debug" : "release");
+                   b.opts.debug ? "debug" : b.dllcrt ? "release-gc-md" : "release-gc");
     auto obj = cat(dir, "/goose_runtime.", b.tc.style == "msvc" ? "obj" : "o");
     if (PathExists(obj) && !b.opts.dryrun) return obj;
     auto src = cat(dir, "/goose_runtime.c");
@@ -218,6 +268,7 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
                            const Toolchain &tc, const BuildOptions &opts, FILE *msgs,
                            const vector<string> &nativersps, const string &output) {
     Builder b { tc, opts, msgs };
+    b.dllcrt = b.DllCrt(!nativersps.empty());
     vector<string> objects;
     if (!opts.standalone) {
         auto obj = RuntimeObject(b);

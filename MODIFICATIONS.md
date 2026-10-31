@@ -407,6 +407,14 @@ git log upstream/master..main
   `test/codegen/lanes.goose`, `test/codegen/lanes_short.goose` and
   `test/codegen/lanes_if.goose` (new): the same output, and the same
   abort, one iteration at a time and in lanes.
+- Smaller executables (`src/build.h`, `Builder::CFlags`, `LinkFlags`,
+  `DllCrt`): a release build compiles with a section per function and
+  datum and links with the unreferenced ones left out; on Windows one that
+  links no C package takes the C runtime as a DLL, as Rust's msvc target
+  does, unless `--static-crt` (`src/main.cpp`). The runtime object's cache
+  directory names both (`release-gc`, `release-gc-md`). compare/'s program:
+  268 KB to 64 KB under clang, 51 KB under MSVC. `test/run_tests.py` checks
+  the DLL runtime and `--static-crt` in a dry run.
 - Bounds-check elimination's loop invariants against a variable's own
   lifetime (`src/bce.h`, the candidates of `RunSpecOnce`): a candidate the
   whole body's kills rule out is judged again against the shrinks and
