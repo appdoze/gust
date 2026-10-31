@@ -17,12 +17,13 @@
 //         acc[i] = a;                   for (; i < n; i++) { the loop as it is }
 //     }
 //
-// The lanes are C vector types (`vector_size`, runtime_ext.h's GS_LANES):
-// the C compiler's own vectorizer had made the same loop twice as slow
-// (ROADMAP Phase 5), while explicit lanes leave it the instructions alone to
-// pick. clang alone compiles the block of lanes: MSVC, TinyCC and MIR have
-// no vector types, and gcc's code for them is slower than the loop as it
-// is. Elsewhere the loop runs as it is.
+// The lanes are runtime_ext.h's gs_l4d, four doubles, and every operation
+// on them one of its macros (gs_l4d_add, gs_l4d_lt, gs_l4d_blend, ...): C
+// vector types (`vector_size`) under clang, pairs of SSE2 registers under
+// MSVC and gcc on x86-64 (GS_LANES). The C compiler's own vectorizer had
+// made the same loop twice as slow (ROADMAP Phase 5), while explicit lanes
+// leave it the instructions alone to pick. TinyCC and MIR have neither, and
+// there the loop runs as it is.
 //
 // What a body may hold, checked before anything is emitted (LaneGen::Plan):
 // locals of doubles and of structs of them, arithmetic, field reads, sqrt,
@@ -683,11 +684,11 @@ struct LaneGen {
         return s;
     }
 
-    // An operand of lane arithmetic: a lane value, or a uniform double the
-    // vector extension spreads across the lanes.
+    // An operand of lane arithmetic: a lane value, or a uniform double
+    // spread across the lanes.
     string Operand(Node *n) {
         if (Lane(n)) return LX(n);
-        return cat("(double)(", Uniform(n), ")");
+        return cat("gs_l4d_uni(", Uniform(n), ")");
     }
 
     CodeGen::ArrView &ViewOf(const VarDef *v, Node *at) {
@@ -705,10 +706,10 @@ struct LaneGen {
     string Gather(const CodeGen::ArrView &v, TypeExpr *et) {
         auto t = NewLane(et);
         for (auto &p : Leaves(et)) {
-            string s = cat(t, p, " = (gs_l4d){ ");
+            string s = cat(t, p, " = gs_l4d_make(");
             for (auto l = 0; l < K; l++)
                 Append(s, l ? ", " : "", Elem(v, et, cat("(", gi, " + ", l, ")")), p);
-            cg.L(s, " };");
+            cg.L(s, ");");
         }
         return t;
     }
@@ -723,19 +724,19 @@ struct LaneGen {
         if (!Lane(c)) {
             m = cat("gs_l4m_splat(-(long long)(", Uniform(c), "))");
         } else if (auto u = Is<Unary>(c)) {
-            m = cat("(~", MaskOf(u->child), ")");
+            m = cat("gs_l4m_not(", MaskOf(u->child), ")");
         } else {
             auto b = static_cast<Binary *>(c);
             if (b->op == T_ANDAND || b->op == T_OROR) {
                 auto l = MaskOf(b->left);
                 auto r = MaskOf(b->right);
-                m = cat("(", l, b->op == T_ANDAND ? " & " : " | ", r, ")");
+                m = cat(b->op == T_ANDAND ? "gs_l4m_and(" : "gs_l4m_or(", l, ", ", r, ")");
             } else {
                 static const unordered_map<int, const char *> ops = {
-                    { T_LT, "<" }, { T_GT, ">" }, { T_LTEQ, "<=" }, { T_GTEQ, ">=" }, { T_EQ, "==" }, { T_NEQ, "!=" } };
+                    { T_LT, "lt" }, { T_GT, "gt" }, { T_LTEQ, "le" }, { T_GTEQ, "ge" }, { T_EQ, "eq" }, { T_NEQ, "ne" } };
                 auto l = Operand(b->left);
                 auto r = Operand(b->right);
-                m = cat("(gs_l4m)(", l, " ", ops.at(b->op), " ", r, ")");
+                m = cat("gs_l4d_", ops.at(b->op), "(", l, ", ", r, ")");
             }
         }
         auto t = cg.T();
@@ -743,11 +744,11 @@ struct LaneGen {
         return t;
     }
 
-    string Within(const string &m) { return mask.empty() ? m : cat("(", mask, " & ", m, ")"); }
+    string Within(const string &m) { return mask.empty() ? m : cat("gs_l4m_and(", mask, ", ", m, ")"); }
 
     // Each lane's a where m holds there, its b where not.
     string Blend(const string &m, const string &a, const string &b) {
-        return cat("((gs_l4d)(((gs_l4m)(", a, ") & ", m, ") | ((gs_l4m)(", b, ") & ~", m, ")))");
+        return cat("gs_l4d_blend(", m, ", ", a, ", ", b, ")");
     }
 
     // dst, of type t, takes v in the lanes the mask holds in.
@@ -786,13 +787,16 @@ struct LaneGen {
         for (auto &p : Leaves(t)) cg.L(dst, p, " = gs_l4d_splat((double)((", u, ")", p, "));");
     }
 
-    static const char *OpStr(TType op) {
+    // The operation's macro, as a call of it on l and r.
+    static string Op(TType op, const string &l, const string &r) {
+        const char *f;
         switch (op) {
-            case T_PLUS: case T_PLUSEQ: return "+";
-            case T_MINUS: case T_MINUSEQ: return "-";
-            case T_MUL: case T_MULEQ: return "*";
-            default: return "/";
+            case T_PLUS: case T_PLUSEQ: f = "gs_l4d_add("; break;
+            case T_MINUS: case T_MINUSEQ: f = "gs_l4d_sub("; break;
+            case T_MUL: case T_MULEQ: f = "gs_l4d_mul("; break;
+            default: f = "gs_l4d_div("; break;
         }
+        return cat(f, l, ", ", r, ")");
     }
 
     // A lane value's C expression, after the statements it needs.
@@ -809,7 +813,7 @@ struct LaneGen {
                 if (b->exprtype->kind == TY_FLT) {
                     auto l = Operand(b->left);
                     auto r = Operand(b->right);
-                    return cat("(", l, " ", OpStr(b->op), " ", r, ")");
+                    return Op(b->op, l, r);
                 }
                 // Elementwise (§6.1): each leaf of the result from the
                 // operands' leaves, a scalar operand's value for every one.
@@ -817,7 +821,7 @@ struct LaneGen {
                     scalar = cg.OperandT(o->exprtype)->kind != b->exprtype->kind;
                     if (Lane(o)) return LX(o);
                     auto u = Uniform(o);
-                    return scalar ? cat("(double)(", u, ")") : u;
+                    return scalar ? cat("gs_l4d_uni(", u, ")") : u;
                 };
                 bool ls, rs;
                 auto l = side(b->left, ls);
@@ -826,18 +830,18 @@ struct LaneGen {
                 for (auto &p : Leaves(b->exprtype)) {
                     auto lp = ls ? l : cat("(", l, ")", p);
                     auto rp = rs ? r : cat("(", r, ")", p);
-                    if (!ls && !Lane(b->left)) lp = cat("(double)(", lp, ")");
-                    if (!rs && !Lane(b->right)) rp = cat("(double)(", rp, ")");
-                    cg.L(t, p, " = (", lp, " ", OpStr(b->op), " ", rp, ");");
+                    if (!ls && !Lane(b->left)) lp = cat("gs_l4d_uni(", lp, ")");
+                    if (!rs && !Lane(b->right)) rp = cat("gs_l4d_uni(", rp, ")");
+                    cg.L(t, p, " = ", Op(b->op, lp, rp), ";");
                 }
                 return t;
             }
             case NK_Unary: {
                 auto u = static_cast<Unary *>(n);
                 auto x = LX(u->child);
-                if (u->exprtype->kind == TY_FLT) return cat("(-", x, ")");
+                if (u->exprtype->kind == TY_FLT) return cat("gs_l4d_neg(", x, ")");
                 auto t = NewLane(u->exprtype);
-                for (auto &p : Leaves(u->exprtype)) cg.L(t, p, " = (-(", x, ")", p, ");");
+                for (auto &p : Leaves(u->exprtype)) cg.L(t, p, " = gs_l4d_neg((", x, ")", p, ");");
                 return t;
             }
             case NK_AsCast: return LX(static_cast<AsCast *>(n)->child);
@@ -895,7 +899,7 @@ struct LaneGen {
                 auto a = NewLane(t), b = NewLane(t);
                 mask = Within(m);
                 BranchCode(x->thenb, a, t);
-                mask = Within(cat("~", m));
+                mask = Within(cat("gs_l4m_not(", m, ")"));
                 BranchCode(x->elseb, b, t);
                 mask = outer;
                 for (auto &p : Leaves(t)) cg.L(res, p, " = ", Blend(m, cat(a, p), cat(b, p)), ";");
@@ -957,7 +961,7 @@ struct LaneGen {
                     }
                     for (auto l = 0; l < K; l++)
                         for (auto &p : Leaves(et))
-                            cg.L(Elem(v, et, cat("(", gi, " + ", l, ")")), p, " = (", val, ")", p, "[", l, "];");
+                            cg.L(Elem(v, et, cat("(", gi, " + ", l, ")")), p, " = gs_l4d_get((", val, ")", p, ", ", l, ");");
                     return;
                 }
                 if (lanev.count(RootLocal(a->lval))) {
@@ -965,14 +969,14 @@ struct LaneGen {
                     auto t = a->lval->exprtype;
                     if (mask.empty()) {
                         if (a->op == T_ASSIGN) Put(dst, t, a->rhs);
-                        else cg.L(dst, " = (", dst, " ", OpStr(a->op), " ", Operand(a->rhs), ");");
+                        else cg.L(dst, " = ", Op(a->op, dst, Operand(a->rhs)), ";");
                         return;
                     }
                     // Under a condition: the new value, then into the lanes
                     // the condition holds in.
                     auto v = NewLane(t);
                     if (a->op == T_ASSIGN) Put(v, t, a->rhs);
-                    else cg.L(v, " = (", dst, " ", OpStr(a->op), " ", Operand(a->rhs), ");");
+                    else cg.L(v, " = ", Op(a->op, dst, Operand(a->rhs)), ";");
                     Masked(dst, t, v);
                     return;
                 }
@@ -1032,7 +1036,7 @@ struct LaneGen {
                 mask = Within(m);
                 BranchCode(x->thenb, "", nullptr);
                 mask = outer;
-                mask = Within(cat("~", m));
+                mask = Within(cat("gs_l4m_not(", m, ")"));
                 BranchCode(x->elseb, "", nullptr);
                 mask = outer;
                 return;
@@ -1066,8 +1070,8 @@ struct LaneGen {
             auto m = MaskOf(x->cond);
             auto live = mask;
             auto mt = cg.T(), me = cg.T();
-            cg.L("gs_l4m ", mt, " = (", live, " & ", m, ");");
-            cg.L("gs_l4m ", me, " = (", live, " & ~", m, ");");
+            cg.L("gs_l4m ", mt, " = gs_l4m_and(", live, ", ", m, ");");
+            cg.L("gs_l4m ", me, " = gs_l4m_and(", live, ", gs_l4m_not(", m, "));");
             // A branch no running lane takes is skipped: what it computes
             // is its own, and its lanes that run on are none.
             auto branch = [&](Node *br, const string &bm) {
@@ -1086,7 +1090,7 @@ struct LaneGen {
             auto lt = branch(x->thenb, mt);
             auto le = branch(x->elseb, me);
             mask = cg.T();
-            cg.L("gs_l4m ", mask, " = (", lt, " | ", le, ");");
+            cg.L("gs_l4m ", mask, " = gs_l4m_or(", lt, ", ", le, ");");
             return;
         }
         auto bl = Is<goose::Block>(b);
@@ -1194,7 +1198,7 @@ struct LaneGen {
         string all;
         for (auto k : keys) {
             auto m = MaskOf(k);
-            all = all.empty() ? m : cat("(", all, " & ", m, ")");
+            all = all.empty() ? m : cat("gs_l4m_and(", all, ", ", m, ")");
         }
         cg.L("if (!gs_l4m_any(", all, ")) {");
         cg.L("    ", ctr, " += ", K, ";");
