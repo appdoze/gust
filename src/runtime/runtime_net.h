@@ -200,6 +200,17 @@ static int gs_net_nonblock(gs_sock s) {
     fcntl(s, F_SETFD, FD_CLOEXEC);
     return f >= 0 && fcntl(s, F_SETFL, f | O_NONBLOCK) == 0;
 }
+#ifdef __linux__
+/* Gust: an accepted connection non-blocking and close-on-exec in the accept
+   itself, as Go's and tokio's are, where gs_net_nonblock takes three more
+   system calls. glibc declares accept4 only under _GNU_SOURCE (as with
+   pthread_getattr_np), and then with a transparent union this would clash
+   with: declared here only where it has not been. */
+#define GS_NET_ACCEPT4 1
+#ifndef __USE_GNU
+int accept4(int, struct sockaddr *, socklen_t *, int);
+#endif
+#endif
 static int gs_net_poll(gs_pollfd *fds, int64_t n, int64_t ms) {
     int r = poll(n ? fds : NULL, (nfds_t)n, (int)ms);
     if (r < 0) {
@@ -1143,7 +1154,11 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
     }
     GS_NET_UNLOCK();
     if (!l) return GS_NET_BAD_HANDLE;
+#ifdef GS_NET_ACCEPT4
+    gs_sock s = accept4(ls, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+#else
     gs_sock s = GS_NET_CALL(accept)(ls, NULL, NULL);
+#endif
     int again = s == GS_BAD_SOCK && gs_net_wouldblock();
     int64_t err = s == GS_BAD_SOCK ? gs_net_oserr : 0;
 #ifndef _WIN32
@@ -1170,12 +1185,14 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
 #endif
         return again ? GS_NET_AGAIN : GS_NET_ERROR;
     }
+#ifndef GS_NET_ACCEPT4
     if (!gs_net_nonblock(s)) {
         gs_net_noteerr();
         gs_net_closesock(s);
         gs_net_tally_drop(t);
         return GS_NET_ERROR;
     }
+#endif
     gs_net_tune(s);
     int64_t h = gs_net_addcn(p, s);
     if (h < 0) { gs_net_tally_drop(t); return h; }
