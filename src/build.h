@@ -71,14 +71,15 @@ struct Builder {
     }
 
     // Gust: the cc style's link flags for a release build: unreferenced
-    // sections left out (CFlags). Windows' clang links with the msvc-style
-    // linkers, which do that already.
+    // sections left out (CFlags). Windows' clang for the MSVC target links
+    // with the msvc-style linkers, which do that already; MinGW's gcc and
+    // clang link with GNU's or lld's, which are asked to.
     vector<string> LinkFlags() const {
         if (opts.debug || tc.style == "msvc" || (tc.name != "clang" && tc.name != "gcc")) return {};
         #if defined(__APPLE__)
             return { "-Wl,-dead_strip" };
         #elif defined(_WIN32)
-            if (tc.name == "clang") return {};
+            if (tc.name == "clang" && tc.target.find("windows-gnu") == string::npos) return {};
             return { "-Wl,--gc-sections" };
         #else
             return { "-Wl,--gc-sections" };
@@ -91,12 +92,14 @@ struct Builder {
     // from 204 to 64 KB. Only where nothing else is linked: a package's C,
     // and the C of the program's own sidecar, are built against the static
     // runtime (native.h), which one executable cannot mix with the DLL's.
-    // clang spells it -fms-runtime-lib from version 16.
+    // clang spells it -fms-runtime-lib from version 16, for the MSVC target
+    // only (a MinGW clang links MinGW's own C runtime).
     bool DllCrt(bool othercode) const {
         #ifdef _WIN32
             if (opts.debug || opts.staticcrt || othercode) return false;
             if (tc.style == "msvc") return true;
-            return tc.name == "clang" && atoi(tc.version.c_str()) >= 16;
+            return tc.name == "clang" && atoi(tc.version.c_str()) >= 16 &&
+                   tc.target.find("windows-msvc") != string::npos;
         #else
             (void)othercode;
             return false;

@@ -39,6 +39,7 @@ struct Toolchain {
     string desc;      // For people: "MSVC 19.44.35207 (toolset 14.44.35207)".
     string id;        // For the cache: name-version-hash of the path and style.
     string how;       // Where it was found: on PATH, in Visual Studio, --cc, ...
+    string target;    // Gust: the triple clang's --version names, "" for the others.
 };
 
 struct ToolInfo {
@@ -310,8 +311,15 @@ inline Toolchain DescribeToolchain(const string &name, const string &style, cons
         auto toolset = getenv("VCToolsVersion");
         t.desc = cat("MSVC ", t.version, toolset ? cat(" (toolset ", toolset, ")") : string());
     } else {
-        t.version = ToolVersion(cc, { "--version" });
+        auto r = RunProcess({ cc, "--version" });
+        t.version = r.started ? VersionIn(FirstLine(r.output)) : "";
         t.desc = cat(name, " ", t.version);
+        // Gust: what clang builds for (`Target: x86_64-pc-windows-msvc`),
+        // which decides how a Windows build links (build.h).
+        if (auto at = r.started ? r.output.find("Target: ") : string::npos; at != string::npos) {
+            auto end = r.output.find_first_of("\r\n", at);
+            t.target = r.output.substr(at + 8, end == string::npos ? string::npos : end - at - 8);
+        }
     }
     t.id = cat(name, "-", t.version, "-", Hex8(cat(cc, "|", style)));
     return t;

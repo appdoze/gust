@@ -7,6 +7,7 @@ environment, which puts cl on PATH partway through; so cl starts off it here,
 as it would in a plain shell."""
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -54,8 +55,11 @@ def check_native_toolchain(exe, base, *, jit):
             return "no cmake"
         want = {info["cc"]["id"]}
 
+        # A runtime object's directory is the toolchain's id and its
+        # configuration: debug, or release with sections per function (-gc)
+        # and, where the C runtime is a DLL, -md (src/build.h).
         def ids(pattern, strip_config=False):
-            return {p.name.rsplit("-", 1)[0] if strip_config else p.name
+            return {re.sub(r"-(debug|release(-gc)?(-md)?)$", "", p.name) if strip_config else p.name
                     for p in home.glob(pattern) if p.is_dir()}
 
         app = root / ("app" + tc.EXE_SUFFIX)
