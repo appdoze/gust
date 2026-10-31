@@ -25,9 +25,20 @@ def sh(argv, **kw):
     return r.stdout
 
 
+GNU_TIME = "/usr/bin/time" if sys.platform.startswith("linux") and os.path.exists("/usr/bin/time") else None
+
+
 def run_measured(argv):
     """The program's output and its peak resident memory in bytes (None
-    where the platform does not say)."""
+    where the platform does not say). On Linux through GNU time, which
+    forks it from a small process: a child forked from Python counts
+    Python's pages in its maximum resident set until it execs."""
+    if GNU_TIME:
+        r = subprocess.run([GNU_TIME, "-f", "GUST_MAXRSS %M", *argv], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"{' '.join(map(str, argv))} failed:\n{r.stdout}{r.stderr}")
+        lines = [l for l in r.stderr.splitlines() if l.startswith("GUST_MAXRSS ")]
+        return r.stdout, int(lines[-1].split()[1]) * 1024 if lines else None
     p = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     if os.name == "nt":
         out, err = p.communicate()
@@ -87,7 +98,7 @@ def hello_sizes(gust, out, exe):
         if subprocess.run(["rustc", "-C", "opt-level=3", "-o", path, r], capture_output=True).returncode == 0:
             sizes["rust"] = os.path.getsize(path)
     if shutil.which("go"):
-        d = os.path.join(out, "hello-go")
+        d = os.path.join(out, "hello-go-src")
         os.makedirs(d, exist_ok=True)
         open(os.path.join(d, "main.go"), "w").write(
             'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("hello") }\n')
@@ -119,7 +130,9 @@ def main():
             builds[f"gust/{cc}"] = [path]
             sizes[f"gust/{cc}"] = os.path.getsize(path)
         else:
-            print(f"no gust/{cc} build: {(r.stdout + r.stderr).strip().splitlines()[-1:]}")
+            print(f"no gust/{cc} build:\n{r.stdout}{r.stderr}")
+            for log in __import__("glob").glob(os.path.expanduser("~/.gust/build/prog/main-*/cc.log")):
+                print(open(log, errors="replace").read()[-2000:])
     if shutil.which("rustc"):
         path = os.path.join(out, f"rust-o3-lto{exe}")
         sh(["rustc", "-C", "debuginfo=0", "-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1",
