@@ -465,13 +465,18 @@ commands, with no callbacks kept as objects; the samples' runner plays it off sc
 
 **Exit:** no known soundness bugs; ahead of Rust on every benchmark in `compare/`; 1.0 tagged.
 **(Ahead on all eight, with clang, Gust's default, on hosted runners: `compare/ci_measure.py`,
-the fastest of seven alternating runs of each build, run 40745431333, Gust's time over
-Rust's (rustc -O3, fat LTO). Ubuntu: n-body 0.26x, raytrace 0.93x, interp 0.66x, sort 0.96x,
-astar 0.81x, bintrees 0.17x, hashmap 0.80x, strings 0.52x, geomean 0.55x. Windows: 0.26x,
-0.84x, 0.56x, 0.90x, 0.86x, 0.06x, 0.85x, 0.60x, geomean 0.48x. raytrace and interp had been
-level (1.01x and 1.04x on Ubuntu); the lanes' filter form and base-case inlining's match form
-made them ahead. With gcc, raytrace (1.08x) and sort (1.15x) are still behind on Ubuntu.
-No soundness bug is known with the Windows commit fix, but the review has not happened
+the fastest of seven alternating runs of each build, run 41253296406, Gust's time over
+Rust's (rustc -O3, fat LTO). Ubuntu: n-body 0.25x, raytrace 0.93x, interp 0.63x, sort 0.98x,
+astar 0.85x, bintrees 0.17x, hashmap 0.85x, strings 0.59x, geomean 0.57x. Windows: 0.26x,
+0.91x, 0.60x, 0.88x, 0.85x, 0.06x, 0.77x, 0.54x, geomean 0.47x. With gcc, raytrace (1.12x to
+1.16x), astar (1.05x to 1.10x) and, on Ubuntu, sort (1.20x) are still behind, and with MSVC
+raytrace (1.37x), whose lanes are SSE2's alone. Peak memory, Gust's over Rust's, geomean
+0.84x on both: behind on Ubuntu's n-body and raytrace (1.04x, 1.07x), where Gust's baseline
+is a tenth of a megabyte above Rust's, and on Windows' hashmap (1.03x). The compare program's
+executable is 74 KB against Rust's 2.15 MB on Ubuntu and 188 KB on Windows (65 KB with
+MSVC), a hello world 23 to 25 KB against Rust's 4.5 MB and 131 KB and Go's 2.2 MB, and a
+rebuild of it takes 0.7 to 0.9 s against rustc's 3.1 s on Ubuntu and 28 s on Windows. No
+soundness bug is known with the Windows commit fix, but the review has not happened
 (`docs/gust/soundness_review.md` keeps the list), and 1.0 is not tagged.)**
 
 ## Upstream policy
