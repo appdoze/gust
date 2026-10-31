@@ -79,7 +79,11 @@ struct Builder {
         #if defined(__APPLE__)
             return { "-Wl,-dead_strip" };
         #elif defined(_WIN32)
-            if (tc.name == "clang" && tc.target.find("windows-gnu") == string::npos) return {};
+            // Against the DLL runtime (DllCrt), clang before 21 still has the
+            // link take the static one (libcmt) by default, which clashes
+            // with the objects' msvcrt: left out by name.
+            if (tc.name == "clang" && tc.target.find("windows-gnu") == string::npos)
+                return dllcrt ? vector<string> { "-Wl,/NODEFAULTLIB:libcmt" } : vector<string> {};
             return { "-Wl,--gc-sections" };
         #else
             return { "-Wl,--gc-sections" };
