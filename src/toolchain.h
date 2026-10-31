@@ -536,7 +536,7 @@ inline string ToolsReport(const Tools &t, bool json, const vector<string> &built
             Append(s, "  \"cc\": {\"name\": ", q(c.name), ", \"style\": ", q(c.style),
                    ", \"path\": ", q(c.cc), ", \"cxx\": ", q(c.cxx),
                    ", \"version\": ", q(c.version), ", \"desc\": ", q(c.desc),
-                   ", \"id\": ", q(c.id), ", \"how\": ", q(c.how), "},\n");
+                   ", \"id\": ", q(c.id), ", \"how\": ", q(c.how), ", \"target\": ", q(c.target), "},\n");
         } else {
             Append(s, "  \"cc\": null,\n  \"cc_error\": ", q(t.ccwhy), ",\n");
         }
@@ -550,6 +550,7 @@ inline string ToolsReport(const Tools &t, bool json, const vector<string> &built
         Append(s, "C compiler:   ", t.cc.desc, ", found ", t.cc.how, "\n              ", t.cc.cc, "\n");
         Append(s, "C++ compiler: ", t.cc.cxx.empty() ? "none" : t.cc.cxx, "\n");
         Append(s, "style:        ", t.cc.style, "\nid:           ", t.cc.id, "\n");
+        if (!t.cc.target.empty()) Append(s, "target:       ", t.cc.target, "\n");   // Gust
     } else {
         Append(s, "C compiler:   ", t.ccwhy, "\n");
     }

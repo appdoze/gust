@@ -777,10 +777,9 @@ R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
                         the runtime object built once per C compiler.
   --static-crt          On Windows, link the C runtime into the executable.
                         By default a release build that links no C package
-                        takes it as a DLL (vcruntime140.dll and the universal
-                        CRT, as Rust does), which makes the executable a
-                        quarter of the size; a machine without the Visual C++
-                        runtime then cannot start it.
+                        takes the universal CRT from the DLL Windows 10 and
+                        later ship, which makes the executable a third of
+                        the size; it still needs no Visual C++ runtime.
   -v                    Print each command the build runs and what it prints.
   --dry-run             Print the commands the build would run, and run none.
 )");
