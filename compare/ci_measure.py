@@ -7,12 +7,14 @@ neighbours slow least. A runner's absolute times mean little; the ratios
 between programs run on it, alternately, are what this is for.
 
 Each run's peak memory is kept too (the least of its runs), and each
-executable's size, beside those of a hello world in Gust, Rust and Go where
-the runner has them, each built as its toolchain does by default.
+executable's size and build time, beside those of a hello world in Gust,
+Rust and Go where the runner has them, each built as its toolchain does by
+default. A Gust build's first time includes compiling the runtime object,
+which later builds with the same toolchain reuse.
 
     python compare/ci_measure.py --gust build/gust --out dir [--runs 7]
 """
-import argparse, math, os, shutil, subprocess, sys
+import argparse, math, os, shutil, subprocess, sys, time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 BENCHES = ["nbody", "raytrace", "interp", "sort", "astar", "bintrees", "hashmap", "strings"]
@@ -82,21 +84,31 @@ def timed(argv):
     sys.exit(f"no bench line from {' '.join(map(str, argv))}")
 
 
-def hello_sizes(gust, out, exe):
-    """A hello world's executable in each language at hand, its default build."""
+def build(argv, **kw):
+    """Whether argv built, and its wall time in seconds."""
+    t0 = time.perf_counter()
+    r = subprocess.run(argv, capture_output=True, **kw)
+    return r.returncode == 0, time.perf_counter() - t0
+
+
+def hello_builds(gust, out, exe):
+    """A hello world's executable in each language at hand, its default
+    build: {name: (size, seconds)}. Gust's runtime objects are built already."""
     sizes = {}
     g = os.path.join(out, "hello.goose")
     open(g, "w").write('fn main() { print("hello"); }\n')
     for cc in ("clang", "gcc") + (("msvc",) if os.name == "nt" else ()):
         path = os.path.join(out, f"hello-gust-{cc}{exe}")
-        if subprocess.run([gust, "build", "-q", "--cc", cc, g, "-o", path], capture_output=True).returncode == 0:
-            sizes[f"gust/{cc}"] = os.path.getsize(path)
+        ok, t = build([gust, "build", "-q", "--cc", cc, g, "-o", path])
+        if ok:
+            sizes[f"gust/{cc}"] = (os.path.getsize(path), t)
     if shutil.which("rustc"):
         r = os.path.join(out, "hello.rs")
         open(r, "w").write('fn main() { println!("hello"); }\n')
         path = os.path.join(out, f"hello-rust{exe}")
-        if subprocess.run(["rustc", "-C", "opt-level=3", "-o", path, r], capture_output=True).returncode == 0:
-            sizes["rust"] = os.path.getsize(path)
+        ok, t = build(["rustc", "-C", "opt-level=3", "-o", path, r])
+        if ok:
+            sizes["rust"] = (os.path.getsize(path), t)
     if shutil.which("go"):
         d = os.path.join(out, "hello-go-src")
         os.makedirs(d, exist_ok=True)
@@ -104,8 +116,9 @@ def hello_sizes(gust, out, exe):
             'package main\n\nimport "fmt"\n\nfunc main() { fmt.Println("hello") }\n')
         open(os.path.join(d, "go.mod"), "w").write("module hello\n\ngo 1.21\n")
         path = os.path.join(out, f"hello-go{exe}")
-        if subprocess.run(["go", "build", "-o", path, "."], cwd=d, capture_output=True).returncode == 0:
-            sizes["go"] = os.path.getsize(path)
+        ok, t = build(["go", "build", "-o", path, "."], cwd=d)
+        if ok:
+            sizes["go"] = (os.path.getsize(path), t)
     return sizes
 
 
@@ -122,23 +135,29 @@ def main():
     exe = ".exe" if os.name == "nt" else ""
     src = os.path.join(HERE, "gust", "main.goose")
 
-    builds, sizes = {}, {}
+    builds, sizes, btimes = {}, {}, {}
     for cc in ("clang", "gcc") + (("msvc",) if os.name == "nt" else ()):
         path = os.path.join(out, f"gust-{cc}{exe}")
-        r = subprocess.run([gust, "build", "-q", "--cc", cc, src, "-o", path], capture_output=True, text=True)
+        argv = [gust, "build", "-q", "--cc", cc, src, "-o", path]
+        t0 = time.perf_counter()
+        r = subprocess.run(argv, capture_output=True, text=True)
+        first = time.perf_counter() - t0
         if r.returncode == 0:
             builds[f"gust/{cc}"] = [path]
             sizes[f"gust/{cc}"] = os.path.getsize(path)
+            btimes[f"gust/{cc}"] = (first, build(argv)[1])
         else:
             print(f"no gust/{cc} build:\n{r.stdout}{r.stderr}")
             for log in __import__("glob").glob(os.path.expanduser("~/.gust/build/prog/main-*/cc.log")):
                 print(open(log, errors="replace").read()[-2000:])
     if shutil.which("rustc"):
         path = os.path.join(out, f"rust-o3-lto{exe}")
+        t0 = time.perf_counter()
         sh(["rustc", "-C", "debuginfo=0", "-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1",
             "-o", path, os.path.join(HERE, "rust", "main.rs")])
         builds["rust"] = [path]
         sizes["rust"] = os.path.getsize(path)
+        btimes["rust"] = (time.perf_counter() - t0, None)
     if not args.no_mir:
         builds["gust/mir"] = [gust, "run", "--mir", "-q", src, "--"]
 
@@ -187,12 +206,14 @@ def main():
         if n != "rust":
             ratios(n, "rust", peak, "peak memory", "smaller")
 
-    print("\nexecutable size, bytes: the compare program")
+    print("\nexecutable size, bytes, and build time: the compare program")
+    print("(a Gust build's first time includes its runtime object, the second reuses it)")
     for n, s in sizes.items():
-        print(f"  {n:<12}{s:>10}")
-    print("executable size, bytes: hello world, each toolchain's default build")
-    for n, s in hello_sizes(gust, out, exe).items():
-        print(f"  {n:<12}{s:>10}")
+        first, again = btimes[n]
+        print(f"  {n:<12}{s:>10}  {first:6.2f} s" + (f"  {again:6.2f} s" if again is not None else ""))
+    print("executable size, bytes, and build time: hello world, each toolchain's default build")
+    for n, (s, t) in hello_builds(gust, out, exe).items():
+        print(f"  {n:<12}{s:>10}  {t:6.2f} s")
 
 
 if __name__ == "__main__":
