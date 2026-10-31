@@ -841,7 +841,15 @@ struct LaneGen {
                 return t;
             }
             case NK_AsCast: return LX(static_cast<AsCast *>(n)->child);
-            case NK_Call: return cat("gs_l4d_sqrt(", LX(static_cast<Call *>(n)->args[0]), ")");
+            case NK_Call: {
+                auto a = LX(static_cast<Call *>(n)->args[0]);
+                // Under a mask, the lanes outside it take the root of zero:
+                // what they compute is never used, and a negative argument
+                // takes the C library's errno path where sqrt is not a
+                // builtin of the compiler's (runtime_ext.h, GS_SQRT_NO_ERRNO).
+                if (!mask.empty()) return cat("gs_l4d_sqrt(", Blend(mask, a, "gs_l4d_splat(0.0)"), ")");
+                return cat("gs_l4d_sqrt(", a, ")");
+            }
             case NK_Index: {
                 auto x = static_cast<Index *>(n);
                 return Gather(ViewOf(ArrayVar(x), x->obj), x->exprtype);
