@@ -51,6 +51,13 @@ jobs:
       - name: Print the results
         run: python examples/api/tables.py build/api-bench/linux-quick.json || cat build/api-bench/linux-quick.json
 
+      # Gust: each server's executable, as bench.py built it (release builds,
+      # each language's defaults).
+      - name: Executable sizes
+        run: |
+          ls -l build/api-bench/api_gust build/api-bench/*_go build/api-bench/rust/release/rawserver_rust \
+            | awk '{ printf "%12d  %s\n", $5, $9 }'
+
       - uses: actions/upload-artifact@v7
         with:
           name: api-bench-linux
