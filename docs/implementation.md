@@ -117,11 +117,13 @@ which nothing in the executable sets.
   the msvc style), and the link leaves out what nothing reaches
   (`--gc-sections`, `-dead_strip`, or the msvc-style linkers' default
   `/OPT:REF`). On Windows a release build that links no C of a package's
-  or its own takes the C runtime as a DLL, as Rust's msvc target does
-  (`/MD`, `-fms-runtime-lib=dll` from clang 16; `--static-crt` links it in),
-  against a runtime object of its own (`release-gc-md`). compare/'s program
-  goes from 268 KB to 64 KB under clang and to 51 KB under MSVC, against
-  189 KB for Rust's with fat LTO.
+  or its own takes the universal CRT from the DLL Windows 10 and later ship
+  and links vcruntime in, Microsoft's hybrid CRT: objects compiled for the
+  static runtime, linked with `/NODEFAULTLIB:libucrt.lib ucrt.lib`
+  (`--static-crt` links all of it in). The executable needs no Visual C++
+  redistributable, as one importing vcruntime's DLL does (Rust's msvc
+  target's). compare/'s program goes from 268 KB to 65 KB under MSVC and
+  clang, against 189 KB for Rust's with fat LTO.
 * `goose check file.goose` typechecks it (`--check`).
 * `goose fetch file.goose` fetches the packages the root declares and stops
   (`--parse`; `--update` fetches tags and branches again).
