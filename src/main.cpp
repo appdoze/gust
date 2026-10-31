@@ -775,6 +775,11 @@ R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
                         path (or GOOSE_CC; by default the first one found).
   --standalone          Compile the runtime into the program rather than link
                         the runtime object built once per C compiler.
+  --static-crt          On Windows, link the C runtime into the executable.
+                        By default a release build that links no C package
+                        takes the universal CRT from the DLL Windows 10 and
+                        later ship, which makes the executable a third of
+                        the size; it still needs no Visual C++ runtime.
   -v                    Print each command the build runs and what it prints.
   --dry-run             Print the commands the build would run, and run none.
 )");
@@ -1387,7 +1392,7 @@ int Main(int argc, char **argv) {
     auto nobce = false, bcetest = false, bcelines = false, norfcheck = false;
     auto stacks = false;
     auto quiet = false;
-    auto forcejit = false, standalone = false, usemir = false;
+    auto forcejit = false, standalone = false, usemir = false, staticcrt = false;
     auto json = false, refresh = false, debug = false, verbose = false, dryrun = false;
     auto jsondiag = false;
     string ccrequest;
@@ -1438,6 +1443,7 @@ int Main(int argc, char **argv) {
         else if (arg == "--jit") forcejit = true;
         else if (arg == "--mir") usemir = true;
         else if (arg == "--standalone") standalone = true;
+        else if (arg == "--static-crt") staticcrt = true;
         else if (arg == "--multi-test") multitest = true;
         else if (arg == "--gen-runtime-header") {
             try {
@@ -1560,7 +1566,7 @@ int Main(int argc, char **argv) {
                             "(-o out.c) writes the C for a C host\n");
             return 1;
         }
-        buildopts = BuildOptions { debug, verbose, dryrun, standalone, outname };
+        buildopts = BuildOptions { debug, verbose, dryrun, standalone, outname, staticcrt };
         outname.clear();
     }
     if (files.size() > 1 && !multitest) {

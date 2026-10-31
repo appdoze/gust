@@ -39,6 +39,7 @@ struct Toolchain {
     string desc;      // For people: "MSVC 19.44.35207 (toolset 14.44.35207)".
     string id;        // For the cache: name-version-hash of the path and style.
     string how;       // Where it was found: on PATH, in Visual Studio, --cc, ...
+    string target;    // Gust: the triple clang's --version names, "" for the others.
 };
 
 struct ToolInfo {
@@ -310,8 +311,15 @@ inline Toolchain DescribeToolchain(const string &name, const string &style, cons
         auto toolset = getenv("VCToolsVersion");
         t.desc = cat("MSVC ", t.version, toolset ? cat(" (toolset ", toolset, ")") : string());
     } else {
-        t.version = ToolVersion(cc, { "--version" });
+        auto r = RunProcess({ cc, "--version" });
+        t.version = r.started ? VersionIn(FirstLine(r.output)) : "";
         t.desc = cat(name, " ", t.version);
+        // Gust: what clang builds for (`Target: x86_64-pc-windows-msvc`),
+        // which decides how a Windows build links (build.h).
+        if (auto at = r.started ? r.output.find("Target: ") : string::npos; at != string::npos) {
+            auto end = r.output.find_first_of("\r\n", at);
+            t.target = r.output.substr(at + 8, end == string::npos ? string::npos : end - at - 8);
+        }
     }
     t.id = cat(name, "-", t.version, "-", Hex8(cat(cc, "|", style)));
     return t;
@@ -528,7 +536,7 @@ inline string ToolsReport(const Tools &t, bool json, const vector<string> &built
             Append(s, "  \"cc\": {\"name\": ", q(c.name), ", \"style\": ", q(c.style),
                    ", \"path\": ", q(c.cc), ", \"cxx\": ", q(c.cxx),
                    ", \"version\": ", q(c.version), ", \"desc\": ", q(c.desc),
-                   ", \"id\": ", q(c.id), ", \"how\": ", q(c.how), "},\n");
+                   ", \"id\": ", q(c.id), ", \"how\": ", q(c.how), ", \"target\": ", q(c.target), "},\n");
         } else {
             Append(s, "  \"cc\": null,\n  \"cc_error\": ", q(t.ccwhy), ",\n");
         }
@@ -542,6 +550,7 @@ inline string ToolsReport(const Tools &t, bool json, const vector<string> &built
         Append(s, "C compiler:   ", t.cc.desc, ", found ", t.cc.how, "\n              ", t.cc.cc, "\n");
         Append(s, "C++ compiler: ", t.cc.cxx.empty() ? "none" : t.cc.cxx, "\n");
         Append(s, "style:        ", t.cc.style, "\nid:           ", t.cc.id, "\n");
+        if (!t.cc.target.empty()) Append(s, "target:       ", t.cc.target, "\n");   // Gust
     } else {
         Append(s, "C compiler:   ", t.ccwhy, "\n");
     }

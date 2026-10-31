@@ -407,6 +407,16 @@ git log upstream/master..main
   `test/codegen/lanes.goose`, `test/codegen/lanes_short.goose` and
   `test/codegen/lanes_if.goose` (new): the same output, and the same
   abort, one iteration at a time and in lanes.
+- Smaller executables (`src/build.h`, `Builder::CFlags`, `LinkFlags`,
+  `UcrtDll`): a release build compiles with a section per function and
+  datum and links with the unreferenced ones left out (the runtime object's
+  cache directory says so, `release-gc`); on Windows one that links no C
+  package takes the universal CRT from Windows' own DLL and links vcruntime
+  in (the hybrid CRT), unless `--static-crt` (`src/main.cpp`), so that it
+  needs no Visual C++ redistributable. compare/'s program: 268 KB to 65 KB
+  under clang and MSVC, with a working set 0.1 MB below that of vcruntime
+  and the universal CRT both as DLLs. `test/run_tests.py` checks the
+  universal CRT's import library and `--static-crt` in a dry run.
 - Bounds-check elimination's loop invariants against a variable's own
   lifetime (`src/bce.h`, the candidates of `RunSpecOnce`): a candidate the
   whole body's kills rule out is judged again against the shrinks and
@@ -431,6 +441,15 @@ git log upstream/master..main
   `gs_l4m_any` (`src/runtime/runtime_ext.h`). `compare/`'s raytrace runs
   27% faster under clang with the same checksum.
   `test/codegen/lanes_filter.goose` (new).
+- Lanes under MSVC and gcc (`src/codegen_lanes.h`,
+  `src/runtime/runtime_ext.h`): the block of lanes operates on `gs_l4d` and
+  `gs_l4m` only through macros (`gs_l4d_add`, `gs_l4d_lt`, `gs_l4m_and`,
+  `gs_l4d_blend`, `gs_l4d_get`, ...), which under clang are its vector
+  types' operators, as before, and under MSVC and gcc on x86-64 inlined
+  functions on a pair of SSE2 registers each, the same operation per lane.
+  `compare/`'s n-body runs 44% faster under MSVC (0.11 s, against Rust's
+  0.17) and 31% under gcc, with the same checksums; the lanes tests give
+  their output under all three at -O0 and -O2.
 
 ## Safety checks
 
@@ -476,6 +495,14 @@ git log upstream/master..main
   `examples/api/tables.py` names the Rust twin, and
   `.github/workflows/api-bench.yml` (new, run by hand) checks and measures
   the servers on a Linux runner.
+
+- `stdlib/dictionary.goose`: a slot's tag is one byte, the top seven bits
+  of the key's hash, where it was the low 31 with the home slot in them, so
+  growth and removal hash the keys they move again. A slot of `i64` keys and
+  values takes 17 bytes, as in Rust's hashbrown, against 20: `compare/`'s
+  hashmap peaks at 9.4 MB where it took 10.6 (Rust 9.1) and runs as fast.
+  Growing a table of slice keys from empty costs a third more time than
+  before, still less than Rust's.
 
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
   over a `reusable` pool: a handle names one allocation by index and serial

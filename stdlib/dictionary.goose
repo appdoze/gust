@@ -8,11 +8,13 @@
 // A reference value is an optional one, plain or `in pool`: new slots hold
 // default<V>(), which a non-optional reference has none of.
 //
-// Each slot keeps a tag: 0 when the slot is unused, else the low 31 bits of
-// the key's hash with bit 31 set. A probe compares keys only where the tags
-// agree, and while the table has at most 2^31 slots the tag holds the home
-// slot, so growth and removal never hash a key again (a larger table hashes
-// the keys it moves). The table doubles in place at 2/3 load.
+// Each slot keeps a tag byte: 0 when the slot is unused, else the top seven
+// bits of the key's hash with bit 7 set, independent of the low bits that
+// place it. A probe compares keys only where the tags agree, one in 128 of
+// the others. Growth and removal hash the keys they move again, which keeps
+// a slot to its key, its value and one byte (Gust: it was four, which made
+// compare/'s hashmap take 12% more memory than Rust's). The table doubles
+// in place at 2/3 load.
 //
 // The slot array is grow-shrink so that growth can resize it in place
 // through a reference (spec §5.2); as a consequence a reference obtained
@@ -21,10 +23,10 @@
 
 import std;
 
-struct dictionary_slot<K, V> { key: K, val: V, tag: u32 }
+struct dictionary_slot<K, V> { key: K, val: V, tag: u8 }
 struct dictionary<K, V> { count: i64 = 0, slots: dictionary_slot<K, V>[>..<] = [] }
 
-fn dict_tag(h: u64) -> u32 { (h as! u32) | 2147483648 }
+fn dict_tag(h: u64) -> u8 { ((h >> 57) as! u8) | 128 }
 
 // The slot holding key, or -1.
 fn dict_probe<K, V>(d: dictionary<K, V>&, key: K) -> i64 {
@@ -97,8 +99,7 @@ fn dict_grow<K, V>(d: dictionary<K, V>&, cap: i64) {
         if p >= old { p -= old; }
         let t = d.slots[p].tag;
         if t != 0 {
-            var q = (t as i64) & mask;
-            if mask >= 2147483648 { q = (d.slots[p].key.hash() & (mask as u64)) as i64; }
+            var q = (d.slots[p].key.hash() & (mask as u64)) as i64;
             let e = d.slots[p];
             d.slots[p].tag = 0;
             while d.slots[q].tag != 0 { q = (q + 1) & mask; }
@@ -168,8 +169,7 @@ fn remove<K, V>(d: dictionary<K, V>&, key: K) -> bool {
         j = (j + 1) & mask;
         let t = d.slots[j].tag;
         if t == 0 { break; }
-        var h = (t as i64) & mask;
-        if mask >= 2147483648 { h = (d.slots[j].key.hash() & (mask as u64)) as i64; }
+        let h = (d.slots[j].key.hash() & (mask as u64)) as i64;
         // An entry whose home is not in the cyclic range (i, j] can move up
         // into the hole without leaving its probe sequence.
         if ((j - h) & mask) >= ((j - i) & mask) {

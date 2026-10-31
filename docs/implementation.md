@@ -111,7 +111,19 @@ which nothing in the executable sets.
   under `GOOSE_HOME`, and compiles and links it into an executable beside
   the source (`build.h`: the runtime object compiled once per toolchain and
   configuration, the native modules' response files, `-o`, `--debug`,
-  `--standalone`, `-v`, `--dry-run`; `-O2` by default).
+  `--standalone`, `-v`, `--dry-run`; `-O2` by default). Gust: a release
+  build puts each function and datum in a section of its own
+  (`-ffunction-sections -fdata-sections` for clang and gcc, `/Gy /Gw` for
+  the msvc style), and the link leaves out what nothing reaches
+  (`--gc-sections`, `-dead_strip`, or the msvc-style linkers' default
+  `/OPT:REF`). On Windows a release build that links no C of a package's
+  or its own takes the universal CRT from the DLL Windows 10 and later ship
+  and links vcruntime in, Microsoft's hybrid CRT: objects compiled for the
+  static runtime, linked with `/NODEFAULTLIB:libucrt.lib ucrt.lib`
+  (`--static-crt` links all of it in). The executable needs no Visual C++
+  redistributable, as one importing vcruntime's DLL does (Rust's msvc
+  target's). compare/'s program goes from 268 KB to 65 KB under MSVC and
+  clang, against 189 KB for Rust's with fat LTO.
 * `goose check file.goose` typechecks it (`--check`).
 * `goose fetch file.goose` fetches the packages the root declares and stops
   (`--parse`; `--update` fetches tags and branches again).
@@ -5986,8 +5998,12 @@ up-counting induction variable is the form clang compiles best.
 **Lanes** (Gust, `codegen_lanes.h`, ROADMAP Phase 5): a loop over an
 array's elements by value whose iterations are independent runs four of
 them at once, one per lane of a vector of doubles (`gs_l4d`, runtime_ext.h's
-`GS_LANES`), in a block `#if defined(GS_LANES)` keeps from MSVC, TinyCC and
-MIR. The rest then runs one iteration at a time in the loop as it is. Each
+`GS_LANES`), in a block `#if defined(GS_LANES)` keeps from TinyCC and MIR.
+The block operates on lanes only through runtime_ext.h's macros
+(`gs_l4d_add`, `gs_l4d_lt`, `gs_l4d_blend`, ...): clang's vector types'
+own operators, and under MSVC and gcc on x86-64 functions on a pair of SSE2
+registers, inlined. The rest then runs one iteration at a time in the loop
+as it is. Each
 lane does exactly what its iteration does, operation by operation, with
 contraction off (§6.13's pragma), so every result is the scalar loop's to
 the bit. `LaneGen::Plan` decides, before anything is emitted. The body may
@@ -6023,10 +6039,12 @@ C compiler's own to vectorize. A function with a loop in lanes is emitted as
 a `simd fn` is (§6.13), but its versions keep math's `mul_add` as the
 baseline does: its AVX2 and AVX-512 versions run a lane vector in one
 instruction, the baseline in two SSE2 ones. Covered by
-`test/codegen/lanes.goose`, whose output TinyCC, MSVC and gcc give one
-iteration at a time and clang in lanes. gcc 15 compiles the lanes into
-code several times slower than the loop as it is, so only clang builds
-them.
+`test/codegen/lanes.goose`, whose output TinyCC and MIR give one iteration
+at a time and clang, gcc and MSVC in lanes. gcc 15 compiles the vector
+types into code several times slower than the loop as it is, hence the
+SSE2 pairs; only clang builds the AVX2 and AVX-512 versions, so the pairs
+gain where the lanes save work at any width (n-body) and little where they
+gain by width alone (raytrace's filter form).
 
 The filter form (`LaneGen::PlanFilter`, `CodeGen::GenLaneFilter`) takes a
 search instead: a body of pure statements ending in `if c1 && c2 ... { S }`
