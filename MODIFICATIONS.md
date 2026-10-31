@@ -431,6 +431,15 @@ git log upstream/master..main
   `gs_l4m_any` (`src/runtime/runtime_ext.h`). `compare/`'s raytrace runs
   27% faster under clang with the same checksum.
   `test/codegen/lanes_filter.goose` (new).
+- Lanes under MSVC and gcc (`src/codegen_lanes.h`,
+  `src/runtime/runtime_ext.h`): the block of lanes operates on `gs_l4d` and
+  `gs_l4m` only through macros (`gs_l4d_add`, `gs_l4d_lt`, `gs_l4m_and`,
+  `gs_l4d_blend`, `gs_l4d_get`, ...), which under clang are its vector
+  types' operators, as before, and under MSVC and gcc on x86-64 inlined
+  functions on a pair of SSE2 registers each, the same operation per lane.
+  `compare/`'s n-body runs 44% faster under MSVC (0.11 s, against Rust's
+  0.17) and 31% under gcc, with the same checksums; the lanes tests give
+  their output under all three at -O0 and -O2.
 
 ## Safety checks
 

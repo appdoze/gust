@@ -297,6 +297,8 @@ the same checksum. That is 0.13 s with SSE2's lanes alone and 0.22 s one iterati
 time. `test/codegen/lanes.goose` gives the same output to the last digit under TinyCC,
 MSVC, MIR, clang and gcc, and `test/codegen/lanes_short.goose` the same abort. Only clang
 builds the lanes: gcc 15's code for them ran n-body ten times slower than its own loop.
+Since 31 October MSVC and gcc build them too, as pairs of SSE2 registers behind the same
+macros (runtime_ext.h): n-body 0.20 s to 0.11 s under MSVC, 0.14 s to 0.09 s under gcc.
 
 **Exit:** unmodified `compare/gust/main.goose` nbody at least 2x faster than Rust with an
 identical checksum (the hand prototype reached 2.1x); `simd fn` copies never slower than

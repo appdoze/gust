@@ -73,16 +73,21 @@ static float gs_sqrtf(float x) { return sqrtf(x); }
 #endif
 
 /* Gust: four doubles side by side, one per lane of a loop the compiler runs
-   four iterations at a time (src/codegen_lanes.h). Each lane's operations
-   are its iteration's, rounded as they are. clang alone builds them: gcc
-   15 compiles the same vectors into code several times slower than the
-   loop one iteration at a time (n-body 1.78 s against 0.17 s, 0.58 s with
-   -mavx2), and MSVC, TinyCC and MIR have no vector types. Elsewhere
-   GS_LANES stays undefined and the loops run one iteration at a time;
-   -DGS_NO_LANES asks for that anywhere. */
+   four iterations at a time (src/codegen_lanes.h), and a condition per lane
+   (gs_l4m), all ones where it holds and none where not: which lanes a
+   branch stores into. The lanes' C only ever operates on them through the
+   macros below, so that each compiler gets its own: clang's vector types,
+   or under MSVC and gcc on x86-64 a pair of SSE2 registers each and
+   functions inlined into the block of lanes (gcc 15 compiles the vector
+   types into code several times slower than the loop one iteration at a
+   time: n-body 1.78 s against 0.17 s). Each lane's operations are its
+   iteration's, rounded as they are. TinyCC and MIR have neither, and
+   there GS_LANES stays undefined and the loops run one iteration at a
+   time; -DGS_NO_LANES asks for that anywhere. */
 #if defined(__clang__) && !defined(__MIRC__) && !defined(GS_NO_LANES)
 #define GS_LANES 4
 typedef double gs_l4d __attribute__((vector_size(32)));
+typedef long long gs_l4m __attribute__((vector_size(32)));
 /* Macros, not functions: a function that takes or returns a vector has an
    ABI that differs with AVX on x86-64 SysV, which clang refuses between a
    function's AVX2 version and the baseline (an error, not just gcc's note),
@@ -92,14 +97,31 @@ typedef double gs_l4d __attribute__((vector_size(32)));
         double gs_l4d_s_ = (x);                                               \
         (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
     })
-/* A condition per lane, all ones where it holds and none where not, as a
-   comparison of two gs_l4d gives it: which lanes a branch stores into. */
-typedef long long gs_l4m __attribute__((vector_size(32)));
 #define gs_l4m_splat(x)                                                       \
     __extension__({                                                           \
         long long gs_l4m_s_ = (x);                                            \
         (gs_l4m){ gs_l4m_s_, gs_l4m_s_, gs_l4m_s_, gs_l4m_s_ };               \
     })
+/* A uniform double as an operand: the vector types spread it themselves. */
+#define gs_l4d_uni(x) ((double)(x))
+#define gs_l4d_make(a, b, c, d) ((gs_l4d){ (a), (b), (c), (d) })
+#define gs_l4d_get(v, l) ((v)[l])
+#define gs_l4d_add(a, b) ((a) + (b))
+#define gs_l4d_sub(a, b) ((a) - (b))
+#define gs_l4d_mul(a, b) ((a) * (b))
+#define gs_l4d_div(a, b) ((a) / (b))
+#define gs_l4d_neg(a) (-(a))
+#define gs_l4d_lt(a, b) ((gs_l4m)((a) < (b)))
+#define gs_l4d_gt(a, b) ((gs_l4m)((a) > (b)))
+#define gs_l4d_le(a, b) ((gs_l4m)((a) <= (b)))
+#define gs_l4d_ge(a, b) ((gs_l4m)((a) >= (b)))
+#define gs_l4d_eq(a, b) ((gs_l4m)((a) == (b)))
+#define gs_l4d_ne(a, b) ((gs_l4m)((a) != (b)))
+#define gs_l4m_and(a, b) ((a) & (b))
+#define gs_l4m_or(a, b) ((a) | (b))
+#define gs_l4m_not(a) (~(a))
+/* Each lane's a where m holds there, its b where not. */
+#define gs_l4d_blend(m, a, b) ((gs_l4d)(((gs_l4m)(a) & (m)) | ((gs_l4m)(b) & ~(m))))
 /* Whether a condition holds in any lane. */
 #define gs_l4m_any(m)                                                         \
     __extension__({                                                           \
@@ -116,6 +138,89 @@ typedef long long gs_l4m __attribute__((vector_size(32)));
                   gs_sqrt(gs_l4d_v_[3]) };                                               \
     })
 #endif
+#elif ((defined(_MSC_VER) && defined(_M_X64)) || (defined(__GNUC__) && defined(__SSE2__))) && \
+    !defined(__clang__) && !defined(__TINYC__) && !defined(__MIRC__) && !defined(GS_NO_LANES)
+#define GS_LANES 4
+#include <emmintrin.h>
+#ifdef _MSC_VER
+#define GS_L4_INLINE static __forceinline
+#else
+#define GS_L4_INLINE static inline __attribute__((always_inline))
+#endif
+/* Lanes 0 and 1 in lo, 2 and 3 in hi. Every operation is SSE2's, which
+   rounds each lane as the scalar instruction does; a comparison's
+   unordered lanes are false but for !=, as in C. */
+typedef struct { __m128d lo, hi; } gs_l4d;
+typedef struct { __m128d lo, hi; } gs_l4m;
+GS_L4_INLINE gs_l4d gs_l4d_splat(double x) {
+    gs_l4d r;
+    r.lo = r.hi = _mm_set1_pd(x);
+    return r;
+}
+GS_L4_INLINE gs_l4m gs_l4m_splat(long long x) {
+    gs_l4m r;
+    r.lo = r.hi = _mm_castsi128_pd(_mm_set1_epi64x(x));
+    return r;
+}
+#define gs_l4d_uni(x) gs_l4d_splat((double)(x))
+GS_L4_INLINE gs_l4d gs_l4d_make(double a, double b, double c, double d) {
+    gs_l4d r;
+    r.lo = _mm_setr_pd(a, b);
+    r.hi = _mm_setr_pd(c, d);
+    return r;
+}
+GS_L4_INLINE double gs_l4d_get(gs_l4d v, int l) {
+    __m128d h = l < 2 ? v.lo : v.hi;
+    return _mm_cvtsd_f64(l & 1 ? _mm_unpackhi_pd(h, h) : h);
+}
+#define GS_L4_OP(name, t, u, op)                                              \
+    GS_L4_INLINE t name(u a, u b) {                                           \
+        t r;                                                                  \
+        r.lo = op(a.lo, b.lo);                                                \
+        r.hi = op(a.hi, b.hi);                                                \
+        return r;                                                             \
+    }
+GS_L4_OP(gs_l4d_add, gs_l4d, gs_l4d, _mm_add_pd)
+GS_L4_OP(gs_l4d_sub, gs_l4d, gs_l4d, _mm_sub_pd)
+GS_L4_OP(gs_l4d_mul, gs_l4d, gs_l4d, _mm_mul_pd)
+GS_L4_OP(gs_l4d_div, gs_l4d, gs_l4d, _mm_div_pd)
+GS_L4_OP(gs_l4d_lt, gs_l4m, gs_l4d, _mm_cmplt_pd)
+GS_L4_OP(gs_l4d_gt, gs_l4m, gs_l4d, _mm_cmpgt_pd)
+GS_L4_OP(gs_l4d_le, gs_l4m, gs_l4d, _mm_cmple_pd)
+GS_L4_OP(gs_l4d_ge, gs_l4m, gs_l4d, _mm_cmpge_pd)
+GS_L4_OP(gs_l4d_eq, gs_l4m, gs_l4d, _mm_cmpeq_pd)
+GS_L4_OP(gs_l4d_ne, gs_l4m, gs_l4d, _mm_cmpneq_pd)
+GS_L4_OP(gs_l4m_and, gs_l4m, gs_l4m, _mm_and_pd)
+GS_L4_OP(gs_l4m_or, gs_l4m, gs_l4m, _mm_or_pd)
+GS_L4_INLINE gs_l4d gs_l4d_neg(gs_l4d a) {
+    __m128d s = _mm_set1_pd(-0.0);
+    gs_l4d r;
+    r.lo = _mm_xor_pd(a.lo, s);
+    r.hi = _mm_xor_pd(a.hi, s);
+    return r;
+}
+GS_L4_INLINE gs_l4m gs_l4m_not(gs_l4m a) {
+    __m128d s = _mm_castsi128_pd(_mm_set1_epi64x(-1));
+    gs_l4m r;
+    r.lo = _mm_xor_pd(a.lo, s);
+    r.hi = _mm_xor_pd(a.hi, s);
+    return r;
+}
+GS_L4_INLINE gs_l4d gs_l4d_blend(gs_l4m m, gs_l4d a, gs_l4d b) {
+    gs_l4d r;
+    r.lo = _mm_or_pd(_mm_and_pd(m.lo, a.lo), _mm_andnot_pd(m.lo, b.lo));
+    r.hi = _mm_or_pd(_mm_and_pd(m.hi, a.hi), _mm_andnot_pd(m.hi, b.hi));
+    return r;
+}
+GS_L4_INLINE int gs_l4m_any(gs_l4m m) { return _mm_movemask_pd(_mm_or_pd(m.lo, m.hi)) != 0; }
+/* SSE2's square root, without errno: the correctly rounded root, and NaN
+   for a negative argument, as gs_sqrt's. */
+GS_L4_INLINE gs_l4d gs_l4d_sqrt(gs_l4d a) {
+    gs_l4d r;
+    r.lo = _mm_sqrt_pd(a.lo);
+    r.hi = _mm_sqrt_pd(a.hi);
+    return r;
+}
 #endif
 
 /* math's mul_add (stdlib/math.goose): x * y + z, fused into one rounding
