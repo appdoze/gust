@@ -12,7 +12,7 @@ inline string CodeGen::QueueFor(TypeExpr *t) {
     auto it = queues.find(m);
     if (it != queues.end()) return it->second;
     auto name = Unique(cat("gs_q_", m));
-    Append(data, "static gs_queue ", name, " = GS_QUEUE_INIT;\n");
+    Append(data, "GS_DATA gs_queue ", name, ";\n");
     return queues[m] = name;
 }
 

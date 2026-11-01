@@ -196,7 +196,8 @@ typedef long long gs_l4m __attribute__((vector_size(32)));
 #endif
 /* Each macro names the implementation GS_L4_ISA says: SSE2's (_sse), and
    under gcc AVX's (_avx) in a simd version's AVX2 and AVX-512 bodies, which
-   CodeGen::EmitSimdVersions brackets with GS_L4_WIDE and GS_L4_BASE. */
+   CodeGen::EmitSimdVersions brackets with GS_L4_WIDE and GS_L4_BASE; under
+   MSVC in the AVX2 versions of the unit built for them (GS_TU_AVX2). */
 #define GS_L4_CAT2(a, b) a##b
 #define GS_L4_CAT(a, b) GS_L4_CAT2(a, b)
 #define GS_L4_BASE _sse
@@ -298,15 +299,45 @@ GS_L4_INLINE gs_l4x_d_sse gs_l4x_sqrt_sse(gs_l4x_d_sse a) {
     r.hi = _mm_sqrt_pd(a.hi);
     return r;
 }
-#if defined(__GNUC__) && GS_SIMD >= 1
+#if (defined(__GNUC__) && GS_SIMD >= 1) || defined(GS_TU_AVX2)
 /* AVX: one 256-bit register per lane vector, for gcc's simd versions,
-   whose targets include the helpers' own (AVX2). The same operations lane
-   by lane, left unfused by the contraction pragma (runtime.h). */
+   whose targets include the helpers' own (AVX2), and for MSVC's, in a unit
+   built for AVX2 as a whole (runtime.h, GS_TU_AVX2). The same operations
+   lane by lane, left unfused by the contraction pragma (runtime.h). */
 #include <immintrin.h>
 #define GS_L4_WIDE _avx
-#define GS_L4A_INLINE static inline __attribute__((always_inline, target("avx2")))
 typedef __m256d gs_l4x_d_avx;
 typedef __m256d gs_l4x_m_avx;
+#ifdef _MSC_VER
+/* Under MSVC macros, not functions: MSVC 19.50 at /O2, inlining
+   gs_l4x_get_avx as a __forceinline function, read lanes 0 to 3 of a lane
+   vector in the second or third member of a lane struct wrongly
+   (test/codegen/lanes.goose's sum of y * z), and right at /Od, at /Ob0,
+   and as the macro. A lane's index is always a constant, which vpermpd
+   takes as its immediate, moving that lane to the bottom. */
+#define gs_l4x_splat_avx(x) _mm256_set1_pd(x)
+#define gs_l4x_msplat_avx(x) _mm256_castsi256_pd(_mm256_set1_epi64x(x))
+#define gs_l4x_make_avx(a, b, c, d) _mm256_setr_pd((a), (b), (c), (d))
+#define gs_l4x_get_avx(v, l) _mm_cvtsd_f64(_mm256_castpd256_pd128(_mm256_permute4x64_pd((v), (l))))
+#define gs_l4x_add_avx(a, b) _mm256_add_pd((a), (b))
+#define gs_l4x_sub_avx(a, b) _mm256_sub_pd((a), (b))
+#define gs_l4x_mul_avx(a, b) _mm256_mul_pd((a), (b))
+#define gs_l4x_div_avx(a, b) _mm256_div_pd((a), (b))
+#define gs_l4x_lt_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_LT_OQ)
+#define gs_l4x_gt_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_GT_OQ)
+#define gs_l4x_le_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_LE_OQ)
+#define gs_l4x_ge_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_GE_OQ)
+#define gs_l4x_eq_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_EQ_OQ)
+#define gs_l4x_ne_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_NEQ_UQ)
+#define gs_l4x_and_avx(a, b) _mm256_and_pd((a), (b))
+#define gs_l4x_or_avx(a, b) _mm256_or_pd((a), (b))
+#define gs_l4x_neg_avx(a) _mm256_xor_pd((a), _mm256_set1_pd(-0.0))
+#define gs_l4x_not_avx(a) _mm256_xor_pd((a), _mm256_castsi256_pd(_mm256_set1_epi64x(-1)))
+#define gs_l4x_blend_avx(m, a, b) _mm256_or_pd(_mm256_and_pd((m), (a)), _mm256_andnot_pd((m), (b)))
+#define gs_l4x_any_avx(m) (_mm256_movemask_pd(m) != 0)
+#define gs_l4x_sqrt_avx(a) _mm256_sqrt_pd(a)
+#else
+#define GS_L4A_INLINE static inline __attribute__((always_inline, target("avx2")))
 GS_L4A_INLINE gs_l4x_d_avx gs_l4x_splat_avx(double x) { return _mm256_set1_pd(x); }
 GS_L4A_INLINE gs_l4x_m_avx gs_l4x_msplat_avx(long long x) { return _mm256_castsi256_pd(_mm256_set1_epi64x(x)); }
 GS_L4A_INLINE gs_l4x_d_avx gs_l4x_make_avx(double a, double b, double c, double d) {
@@ -337,6 +368,7 @@ GS_L4A_INLINE gs_l4x_d_avx gs_l4x_blend_avx(gs_l4x_m_avx m, gs_l4x_d_avx a, gs_l
 }
 GS_L4A_INLINE int gs_l4x_any_avx(gs_l4x_m_avx m) { return _mm256_movemask_pd(m) != 0; }
 GS_L4A_INLINE gs_l4x_d_avx gs_l4x_sqrt_avx(gs_l4x_d_avx a) { return _mm256_sqrt_pd(a); }
+#endif
 #else
 #define GS_L4_WIDE _sse
 #endif

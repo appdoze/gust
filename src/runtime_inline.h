@@ -222,6 +222,31 @@ R"GSRT(#if GS_STACK_RESERVE > (1ull << 48)
 #define GS_TLS
 #endif
 
+/* Gust: MSVC has no per-function target, so `gust build` compiles a
+   program with simd versions twice (src/build.h): once as ever, with
+   GS_TU_BASE, and once with /arch:AVX2 and GS_TU_AVX2, a unit that keeps
+   only the AVX2 versions, with external linkage, for the first one's
+   dispatch to call (GS_SIMD, below). Every datum the program's C defines
+   and changes is declared GS_DATA: in the first unit defined, in the second
+   declared extern, so that both units share one of each. Code and constant
+   data are each unit's own copy. A unit built alone has its data static. */
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64) && \
+    (defined(GS_TU_BASE) || defined(GS_TU_AVX2))
+#define GS_TU_SPLIT 1
+#endif
+#if defined(GS_TU_AVX2) && !defined(__AVX2__)
+/* The unit is the versions' target: its AVX intrinsics and the rest of
+   their code are built for AVX2 together. */
+#error "GS_TU_AVX2 needs /arch:AVX2"
+#endif
+#if !defined(GS_TU_SPLIT)
+#define GS_DATA static
+#elif defined(GS_TU_AVX2)
+#define GS_DATA extern
+#else
+#define GS_DATA
+#endif
+
 /* The linkage of everything the runtime defines outside this file. Gust:
    the runtime compiled into the compiler for gust run --mir
    (src/runtime_native.c) exports it too, for MIR to find by name. */
@@ -341,38 +366,67 @@ GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
    baseline calls the highest version the CPU supports. GS_SIMD is the
    highest level built: 0 just the baseline, 1 adds an AVX2 version (with
    FMA, BMI1, BMI2, LZCNT and POPCNT, which the check below asks for one by
-   one), 2 an AVX-512 one as well (F, BW, CD, DQ and VL: x86-64-v4). The
+)GSRT"
+R"GSRT(   one), 2 an AVX-512 one as well (F, BW, CD, DQ and VL: x86-64-v4). The
    versions are built by clang on x86-64, through its target attribute and
    inline assembly for cpuid; the contraction pragma above keeps their float
    results the baseline's, though both have FMA: only math's mul_add uses
    it (GS_MUL_ADD_MODE, below). Gust: gcc builds them too, but on Windows,
    where its spills of AVX registers assume a 32-byte stack alignment that
-   the Windows ABI does not give (gcc bug 54412). Elsewhere the versions are
-   left out, and so is the choice. -DGS_SIMD=0 or 1 lowers the level;
-   nothing raises it. */
+   the Windows ABI does not give (gcc bug 54412). MSVC builds the AVX2
+   version in a unit of its own (GS_TU_SPLIT, above): GS_SIMD_BODIES says
+   whether this unit holds the versions' bodies, and GS_SIMD_STATIC is
+   their linkage. Elsewhere the versions are left out, and so is the
+   choice. -DGS_SIMD=0 or 1 lowers the level; nothing raises it. */
 #if (defined(__clang__) || (defined(__GNUC__) && !defined(_WIN32))) && \
     (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__) && !defined(__MIRC__)
 #ifndef GS_SIMD
 #define GS_SIMD 2
 #endif
+#elif defined(GS_TU_SPLIT)
+#if !defined(GS_SIMD) || GS_SIMD > 1
+#undef GS_SIMD
+#define GS_SIMD 1
+#endif
 #else
 #undef GS_SIMD
 #define GS_SIMD 0
 #endif
-#if GS_SIMD >= 1
+#if GS_SIMD >= 1 && defined(GS_TU_SPLIT)
+#include <intrin.h>
+#define GS_SIMD_TARGET1
+#define GS_SIMD_STATIC
+#ifdef GS_TU_AVX2
+#define GS_SIMD_BODIES 1
+#else
+#define GS_SIMD_BODIES 0
+#endif
+
+static inline void gs_cpuid(uint32_t leaf, uint32_t r[4]) { __cpuidex((int *)r, (int)leaf, 0); }
+static inline uint32_t gs_xcr0(void) { return (uint32_t)_xgetbv(0); }
+#elif GS_SIMD >= 1
 #define GS_SIMD_TARGET1 __attribute__((target("avx2,fma,bmi,bmi2,lzcnt,popcnt")))
 #define GS_SIMD_TARGET2 \
-)GSRT"
-R"GSRT(    __attribute__((target("avx512f,avx512bw,avx512cd,avx512dq,avx512vl,avx2,fma,bmi,bmi2,lzcnt,popcnt")))
+    __attribute__((target("avx512f,avx512bw,avx512cd,avx512dq,avx512vl,avx2,fma,bmi,bmi2,lzcnt,popcnt")))
+#define GS_SIMD_STATIC static
+#define GS_SIMD_BODIES 1
 
 static inline void gs_cpuid(uint32_t leaf, uint32_t r[4]) {
     __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(0));
 }
+static inline uint32_t gs_xcr0(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    (void)hi;
+    return lo;
+}
+#endif
+#if GS_SIMD >= 1
 
 /* The highest level both the CPU and the operating system support (the OS
    has to save the wider registers: XGETBV's XCR0), capped at GS_SIMD. */
 static inline int gs_simd_detect(void) {
-    uint32_t r[4], b7, xcr0, xhi;
+    uint32_t r[4], b7, xcr0;
     gs_cpuid(0, r);
     if (r[0] < 7) return 0;
     gs_cpuid(1, r);
@@ -380,8 +434,7 @@ static inline int gs_simd_detect(void) {
     if ((r[2] & (1u << 27 | 1u << 28 | 1u << 23 | 1u << 12)) !=
         (1u << 27 | 1u << 28 | 1u << 23 | 1u << 12))
         return 0;
-    __asm__ volatile("xgetbv" : "=a"(xcr0), "=d"(xhi) : "c"(0));
-    (void)xhi;
+    xcr0 = gs_xcr0();
     if ((xcr0 & 0x6) != 0x6) return 0;                  /* XMM and YMM state. */
     gs_cpuid(7, r);
     b7 = r[1];
@@ -400,14 +453,25 @@ static inline int gs_simd_detect(void) {
 }
 
 /* Detected at the first call and kept. Every thread computes the same
-   level, so a relaxed atomic is all a race between two first calls needs. */
+   level, so a relaxed atomic is all a race between two first calls needs:
+   under MSVC, which has no __atomic builtins, a volatile int, which x86-64
+   loads and stores whole. Each of MSVC's two units keeps its own, as it
+   would the same constant. */
 static inline int gs_simd_level(void) {
     static int level = -1;
+#ifdef GS_TU_SPLIT
+    int l = *(volatile int *)&level;
+    if (l < 0) {
+        l = gs_simd_detect();
+        *(volatile int *)&level = l;
+    }
+#else
     int l = __atomic_load_n(&level, __ATOMIC_RELAXED);
     if (l < 0) {
         l = gs_simd_detect();
         __atomic_store_n(&level, l, __ATOMIC_RELAXED);
     }
+#endif
     return l;
 }
 #endif
@@ -419,9 +483,11 @@ static inline int gs_simd_level(void) {
    past it (-march=x86-64-v3, /arch:AVX2), separate everywhere else and
    under TinyCC. A simd function's AVX2 and AVX-512 versions have FMA
    whatever the target, so the compiler sets GS_MUL_ADD_MODE to fused around
-   them, and back to the base after (EmitSimdVersions). */
+   them, and back to the base after (EmitSimdVersions). Gust: MSVC's AVX2
+   unit (GS_TU_AVX2) is built for AVX2 for its versions alone, and its copy
+   of every other function rounds as the first unit's does. */
 #if !defined(__TINYC__) && (defined(__FMA__) || defined(__aarch64__) || defined(_M_ARM64) || \
-                            (defined(_MSC_VER) && defined(__AVX2__)))
+                            (defined(_MSC_VER) && defined(__AVX2__) && !defined(GS_TU_AVX2)))
 #define GS_MUL_ADD_BASE fused
 #else
 #define GS_MUL_ADD_BASE separate
@@ -479,7 +545,8 @@ static void gs_first_touch(void *d, size_t n) {
      : GS_KSZ(n, 4, 4) ? (void)GS_CP(uint32_t, d, s, 0) \
      : GS_KSZ(n, 1, 1) ? (void)GS_CP(uint8_t, d, s, 0) \
      : GS_KSZ(n, 2, 2) ? (void)GS_CP(uint16_t, d, s, 0) \
-     : GS_KSZ(n, 3, 3) ? (void)(GS_CP(uint16_t, d, s, 0), GS_CP(uint8_t, d, s, 2)) \
+)GSRT"
+R"GSRT(     : GS_KSZ(n, 3, 3) ? (void)(GS_CP(uint16_t, d, s, 0), GS_CP(uint8_t, d, s, 2)) \
      : GS_KSZ(n, 5, 7) ? (void)(GS_CP(uint32_t, d, s, 0), GS_CP(uint32_t, d, s, (n) - 4)) \
      : GS_KSZ(n, 9, 16) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, (n) - 8)) \
      : GS_KSZ(n, 17, 32) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, 8), \
@@ -520,8 +587,7 @@ static uint64_t gs_bytemask(int64_t k) {
    pointer is NULL where the slice was zero-filled (default<T>(), a default
    element), and C leaves all three undefined on a null pointer even for
    zero bytes. A copy of up to 16 bytes loads both overlapping halves before
-)GSRT"
-R"GSRT(   it stores them, and one of up to 256 bytes moves 16 at a time, the last 16
+   it stores them, and one of up to 256 bytes moves 16 at a time, the last 16
    overlapping, where the library's memcpy would take a call and a dispatch
    on the length; as the C library's memcpy, it takes runs that do not
    overlap. */
@@ -642,7 +708,8 @@ GS_MEMEQ_STATIC int gs_memeq(const void *a, const void *b, size_t n) {
 #define gs_div_u8(a, b, f, l)  GS_DIVU(uint8_t, a, b, f, l)
 #define gs_div_u16(a, b, f, l) GS_DIVU(uint16_t, a, b, f, l)
 #define gs_div_u32(a, b, f, l) GS_DIVU(uint32_t, a, b, f, l)
-#define gs_div_u64(a, b, f, l) GS_DIVU(uint64_t, a, b, f, l)
+)GSRT"
+R"GSRT(#define gs_div_u64(a, b, f, l) GS_DIVU(uint64_t, a, b, f, l)
 #define gs_mod_u8(a, b, f, l)  GS_MODU(uint8_t, a, b, f, l)
 #define gs_mod_u16(a, b, f, l) GS_MODU(uint16_t, a, b, f, l)
 #define gs_mod_u32(a, b, f, l) GS_MODU(uint32_t, a, b, f, l)
@@ -691,8 +758,7 @@ static T gs_add_##SFX(T a, T b, const char *file, int line) { \
     return (T)r; } \
 static T gs_sub_##SFX(T a, T b, const char *file, int line) { \
     int64_t r = (int64_t)a - (int64_t)b; \
-)GSRT"
-R"GSRT(    if (r < MIN || r > MAX) gs_ovf(a, "-", b, #SFX, file, line); \
+    if (r < MIN || r > MAX) gs_ovf(a, "-", b, #SFX, file, line); \
     return (T)r; } \
 static T gs_mul_##SFX(T a, T b, const char *file, int line) { \
     int64_t r = (int64_t)a * (int64_t)b; \
@@ -807,7 +873,8 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 
 #define gs_add_u64(a, b) ((uint64_t)((a) + (b)))
 #define gs_sub_u64(a, b) ((uint64_t)((a) - (b)))
-#define gs_mul_u64(a, b) ((uint64_t)((a) * (b)))
+)GSRT"
+R"GSRT(#define gs_mul_u64(a, b) ((uint64_t)((a) * (b)))
 #define gs_shl_u64(a, n) ((uint64_t)((a) << ((n) & 63)))
 #define gs_shr_u64(a, n) ((uint64_t)((a) >> ((n) & 63)))
 
@@ -870,8 +937,7 @@ static uint64_t gs_divu_gen(uint64_t d, uint8_t *more) {
     } else {
         uint64_t twice = rem + rem;
         m += m;
-)GSRT"
-R"GSRT(        if (twice >= d || twice < rem) m++;
+        if (twice >= d || twice < rem) m++;
         *more = (uint8_t)(k | GS_DIVU_ADD);
     }
     return m + 1;
@@ -1011,7 +1077,8 @@ static int64_t gs_f2ichk(double d, int f32, int64_t lo, int64_t hi, const char *
 static uint64_t gs_f2uchk(double d, int f32, const char *file, int line) {
     if (!(d >= 0 && d < 18446744073709551616.0))
         gs_asfail_f("out of range", d, f32, "u64", file, line);
-    uint64_t v = (uint64_t)d;
+)GSRT"
+R"GSRT(    uint64_t v = (uint64_t)d;
     if ((double)v != d) gs_asfail_f("changes the value", d, f32, "u64", file, line);
     return v;
 }
@@ -1059,8 +1126,7 @@ GS_API uint8_t *gs_reserve_region(gs_stack *stack);
 /* The calling thread program's stack use, on stderr (GS_STACK_STATS):
    `stacks` is how many of its indexed data stacks exist. */
 GS_API void gs_stack_stats(int64_t stacks);
-)GSRT"
-R"GSRT(/* Releases every region of the calling thread program, and what else the
+/* Releases every region of the calling thread program, and what else the
    runtime keeps for its thread. */
 GS_API void gs_release_regions(void);
 
@@ -1131,11 +1197,11 @@ GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_
 GS_API void gs_pfor_wait(gs_pfor_job *j);
 
 /* One queue per flat element type the program uses (the compiler emits a
-   gs_queue global per type, which main sets up before anything can use it).
-   Values are contiguous byte images: gs_qget, gs_qwait and gs_qpoll return a
-   malloc'd node the caller copies from and frees, gs_qwait and gs_qpoll NULL
-   when nothing came. gs_qput returns 0, queueing nothing, when the queue is
-   at its limit. */
+   gs_queue global per type, null as static data starts, which main sets up
+   before anything can use it). Values are contiguous byte images: gs_qget,
+   gs_qwait and gs_qpoll return a malloc'd node the caller copies from and
+   frees, gs_qwait and gs_qpoll NULL when nothing came. gs_qput returns 0,
+   queueing nothing, when the queue is at its limit. */
 typedef struct gs_qnode {
     struct gs_qnode *next;
     int64_t size;
@@ -1143,7 +1209,6 @@ typedef struct gs_qnode {
 } gs_qnode;
 
 typedef struct gs_qstate *gs_queue;
-#define GS_QUEUE_INIT NULL
 
 GS_API void gs_qinit(gs_queue *q);
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
@@ -1161,21 +1226,35 @@ GS_API int64_t gs_thread_self(void);
 /* The current thread program's stack block: every stack the compiler
    counted for it, reserved as the program starts (gs_stack_block).
    gs_sp-relative indices resolve through it. */
-static GS_TLS gs_stack *gs_stks;
-static GS_TLS int64_t gs_nstks;
+GS_DATA GS_TLS gs_stack *gs_stks;
+GS_DATA GS_TLS int64_t gs_nstks;
 /* Gust: where an export fn's wrapper starts its stacks (§7.11): 0, unless
    it runs as a callback while an extern call is under way, which sets it to
    the first index its caller does not hold. */
-static GS_TLS int64_t gs_cb_base;
+GS_DATA GS_TLS int64_t gs_cb_base;
 
 /* The current program instance's globals (goose_spec.md 11.1), a struct the
    compiler lays out: main's is its one static instance, a worker's a fresh
    copy of the globals its program uses, taken from the spawning instance
    at spawn like the arguments (11.2). No global is shared between program
    instances; the only C statics a program shares are read-only ones. */
-static GS_TLS void *gs_gl;
+GS_DATA GS_TLS void *gs_gl;
 
+/* Gust: under MSVC's two units (GS_TU_SPLIT) gs_stks has external linkage,
+   and MSVC, which then cannot rule out that a store through some pointer
+)GSRT"
+R"GSRT(   changes it, reloaded it before nearly every stack access, where the
+   static one stayed in a register (compare/'s astar ran 5% slower). A
+   thread's block does not change while Goose code runs on it, so there a
+   function that indexes it first takes it into a local, GS_STKS_LOCAL,
+   which no store reaches. */
+#ifdef GS_TU_SPLIT
+#define GS_STKS_LOCAL gs_stack *const gs_stkl = gs_stks;
+#define GS(i) (&gs_stkl[i])
+#else
+#define GS_STKS_LOCAL
 #define GS(i) (&gs_stks[i])
+#endif
 
 static void gs_stack_init(gs_stack *s) {
     s->top = gs_reserve_region(s);
@@ -1243,8 +1322,7 @@ static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
 }
 
 /* The next chunk's first iteration, or -1 once none is left. The program's
-)GSRT"
-R"GSRT(   own C need not include windows.h, so MSVC's is its intrinsic. */
+   own C need not include windows.h, so MSVC's is its intrinsic. */
 #if GS_NEED_THREADS && defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
 #endif
@@ -1385,7 +1463,8 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
    a malformed encoding instead of running past it. */
 
 /* The ULEB128 at p, or 0 if it runs past `end`, past ten bytes, or carries
-   payload bits above the 64th, or is not shortest. The result is the byte count. */
+)GSRT"
+R"GSRT(   payload bits above the 64th, or is not shortest. The result is the byte count. */
 static int64_t gs_uleb_check(const uint8_t *p, const uint8_t *end, uint64_t *out) {
     uint64_t v = 0;
     int shift = 0;
@@ -1453,8 +1532,7 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
-)GSRT"
-R"GSRT(   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
+   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
    (i + d < n); -1 if there is none. A set is std's ByteSet. */
 GS_API int64_t gs_scan_any(const uint8_t *p, int64_t n, const void *set);
 GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t d,
@@ -4226,7 +4304,8 @@ R"GSRT(        (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };          
 #endif
 /* Each macro names the implementation GS_L4_ISA says: SSE2's (_sse), and
    under gcc AVX's (_avx) in a simd version's AVX2 and AVX-512 bodies, which
-   CodeGen::EmitSimdVersions brackets with GS_L4_WIDE and GS_L4_BASE. */
+   CodeGen::EmitSimdVersions brackets with GS_L4_WIDE and GS_L4_BASE; under
+   MSVC in the AVX2 versions of the unit built for them (GS_TU_AVX2). */
 #define GS_L4_CAT2(a, b) a##b
 #define GS_L4_CAT(a, b) GS_L4_CAT2(a, b)
 #define GS_L4_BASE _sse
@@ -4328,18 +4407,48 @@ GS_L4_INLINE gs_l4x_d_sse gs_l4x_sqrt_sse(gs_l4x_d_sse a) {
     r.hi = _mm_sqrt_pd(a.hi);
     return r;
 }
-#if defined(__GNUC__) && GS_SIMD >= 1
+#if (defined(__GNUC__) && GS_SIMD >= 1) || defined(GS_TU_AVX2)
 /* AVX: one 256-bit register per lane vector, for gcc's simd versions,
-   whose targets include the helpers' own (AVX2). The same operations lane
-   by lane, left unfused by the contraction pragma (runtime.h). */
+   whose targets include the helpers' own (AVX2), and for MSVC's, in a unit
+   built for AVX2 as a whole (runtime.h, GS_TU_AVX2). The same operations
+   lane by lane, left unfused by the contraction pragma (runtime.h). */
 #include <immintrin.h>
 #define GS_L4_WIDE _avx
-#define GS_L4A_INLINE static inline __attribute__((always_inline, target("avx2")))
 typedef __m256d gs_l4x_d_avx;
 typedef __m256d gs_l4x_m_avx;
-GS_L4A_INLINE gs_l4x_d_avx gs_l4x_splat_avx(double x) { return _mm256_set1_pd(x); }
 )GSRT"
-R"GSRT(GS_L4A_INLINE gs_l4x_m_avx gs_l4x_msplat_avx(long long x) { return _mm256_castsi256_pd(_mm256_set1_epi64x(x)); }
+R"GSRT(#ifdef _MSC_VER
+/* Under MSVC macros, not functions: MSVC 19.50 at /O2, inlining
+   gs_l4x_get_avx as a __forceinline function, read lanes 0 to 3 of a lane
+   vector in the second or third member of a lane struct wrongly
+   (test/codegen/lanes.goose's sum of y * z), and right at /Od, at /Ob0,
+   and as the macro. A lane's index is always a constant, which vpermpd
+   takes as its immediate, moving that lane to the bottom. */
+#define gs_l4x_splat_avx(x) _mm256_set1_pd(x)
+#define gs_l4x_msplat_avx(x) _mm256_castsi256_pd(_mm256_set1_epi64x(x))
+#define gs_l4x_make_avx(a, b, c, d) _mm256_setr_pd((a), (b), (c), (d))
+#define gs_l4x_get_avx(v, l) _mm_cvtsd_f64(_mm256_castpd256_pd128(_mm256_permute4x64_pd((v), (l))))
+#define gs_l4x_add_avx(a, b) _mm256_add_pd((a), (b))
+#define gs_l4x_sub_avx(a, b) _mm256_sub_pd((a), (b))
+#define gs_l4x_mul_avx(a, b) _mm256_mul_pd((a), (b))
+#define gs_l4x_div_avx(a, b) _mm256_div_pd((a), (b))
+#define gs_l4x_lt_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_LT_OQ)
+#define gs_l4x_gt_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_GT_OQ)
+#define gs_l4x_le_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_LE_OQ)
+#define gs_l4x_ge_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_GE_OQ)
+#define gs_l4x_eq_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_EQ_OQ)
+#define gs_l4x_ne_avx(a, b) _mm256_cmp_pd((a), (b), _CMP_NEQ_UQ)
+#define gs_l4x_and_avx(a, b) _mm256_and_pd((a), (b))
+#define gs_l4x_or_avx(a, b) _mm256_or_pd((a), (b))
+#define gs_l4x_neg_avx(a) _mm256_xor_pd((a), _mm256_set1_pd(-0.0))
+#define gs_l4x_not_avx(a) _mm256_xor_pd((a), _mm256_castsi256_pd(_mm256_set1_epi64x(-1)))
+#define gs_l4x_blend_avx(m, a, b) _mm256_or_pd(_mm256_and_pd((m), (a)), _mm256_andnot_pd((m), (b)))
+#define gs_l4x_any_avx(m) (_mm256_movemask_pd(m) != 0)
+#define gs_l4x_sqrt_avx(a) _mm256_sqrt_pd(a)
+#else
+#define GS_L4A_INLINE static inline __attribute__((always_inline, target("avx2")))
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_splat_avx(double x) { return _mm256_set1_pd(x); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_msplat_avx(long long x) { return _mm256_castsi256_pd(_mm256_set1_epi64x(x)); }
 GS_L4A_INLINE gs_l4x_d_avx gs_l4x_make_avx(double a, double b, double c, double d) {
     return _mm256_setr_pd(a, b, c, d);
 }
@@ -4368,6 +4477,7 @@ GS_L4A_INLINE gs_l4x_d_avx gs_l4x_blend_avx(gs_l4x_m_avx m, gs_l4x_d_avx a, gs_l
 }
 GS_L4A_INLINE int gs_l4x_any_avx(gs_l4x_m_avx m) { return _mm256_movemask_pd(m) != 0; }
 GS_L4A_INLINE gs_l4x_d_avx gs_l4x_sqrt_avx(gs_l4x_d_avx a) { return _mm256_sqrt_pd(a); }
+#endif
 #else
 #define GS_L4_WIDE _sse
 #endif
@@ -4443,7 +4553,8 @@ GS_LIBM float gs_asinf(float x) GS_LIBM1(asinf)
 GS_LIBM float gs_acosf(float x) GS_LIBM1(acosf)
 GS_LIBM float gs_atanf(float x) GS_LIBM1(atanf)
 GS_LIBM float gs_atan2f(float x, float y) GS_LIBM2(atan2f)
-GS_LIBM float gs_expf(float x) GS_LIBM1(expf)
+)GSRT"
+R"GSRT(GS_LIBM float gs_expf(float x) GS_LIBM1(expf)
 GS_LIBM float gs_logf(float x) GS_LIBM1(logf)
 GS_LIBM float gs_log2f(float x) GS_LIBM1(log2f)
 GS_LIBM float gs_log10f(float x) GS_LIBM1(log10f)
@@ -4499,8 +4610,7 @@ static int64_t gs_ctz(uint64_t x) {
     unsigned long i;
     return _BitScanForward64(&i, x) ? (int64_t)i : 64;
 #else
-)GSRT"
-R"GSRT(    int64_t n = 0;
+    int64_t n = 0;
     if (!x) return 64;
     while (!(x & 1)) {
         x >>= 1;

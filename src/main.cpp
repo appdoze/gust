@@ -1621,6 +1621,10 @@ int Main(int argc, char **argv) {
     // its packages, for the native parts the program needs (native.h).
     unique_ptr<Ast> astp;
     vector<int> nativepkgs;
+    // Gust: whether an MSVC build compiles the program's C a second time,
+    // for its simd versions' AVX2 bodies (build.h): it has some, and no C
+    // header, whose static data that unit would hold a copy of.
+    bool simdunit = false;
     // The compile's diagnostics as data (--diagnostics json): the warnings
     // as they come, then the error's.
     vector<Diagnostic> found;
@@ -1800,6 +1804,7 @@ int Main(int argc, char **argv) {
         // each before the packages it requires, which is the order a
         // linker resolves their archives in.
         nativepkgs = NativePackagesUsed(ast, cg.usedexterns);
+        simdunit = cg.simdversions && progincludes.empty();
         // Assemble: compiler-set feature defines, the embedded runtime, then
         // the generated program. A program built with a separate runtime
         // holds what runtime.h has of it and the extern support's
@@ -1897,6 +1902,7 @@ int Main(int argc, char **argv) {
         program.clear();
         astp.reset();
         nativepkgs.clear();
+        simdunit = false;
         found.clear();
         auto attempt = [&]() -> int {
             // The compile has a thread of its own. The program a JIT run
@@ -1926,7 +1932,7 @@ int Main(int argc, char **argv) {
                     rsps.push_back(nb.rsp);
                 }
                 return BuildExecutable(filename, outfile, builddir, tc, buildopts, msgs, rsps,
-                                       astp->packages[0].output);
+                                       astp->packages[0].output, simdunit);
             }
             if (program.empty()) return code;
             // The native parts the program reaches hand the run their

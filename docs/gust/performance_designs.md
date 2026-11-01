@@ -2,7 +2,7 @@
 
 Two designs that the comparison against Rust, Go and Goose points to, with
 the measurements behind each, and the tools the measurements came from.
-Neither is built yet.
+MSVC's AVX versions are built; the dictionary in groups is not yet.
 
 ## A dictionary in groups (Swiss table)
 
@@ -52,22 +52,45 @@ per-function target, so the lanes run as pairs of SSE2 registers, and
 0.83x with its AVX versions). `compare/sample_profile.py` shows the time
 90% in the two sphere loops (`nearest`, `any_hit`).
 
-**What does not work.** AVX intrinsics in a translation unit compiled
-without `/arch:AVX`: built that way, `test/codegen/lanes.goose` printed a
-wrong sum of the y and z components (the x components, and the body left to
-the scalar loop, right), the mark of 256-bit registers spilled through
-128-bit moves.
+**What did not work, and why.** AVX intrinsics in a translation unit
+compiled without `/arch:AVX`: built that way, `test/codegen/lanes.goose`
+printed a wrong sum of the y and z components (the x components, and the
+body left to the scalar loop, right). The same wrong sum came back in the
+unit built with `/arch:AVX2`, at `/O2` and `/O1` but not at `/Od`, `/Og` or
+`/Ob0`: MSVC 19.50, inlining `gs_l4x_get_avx` (a lane out of a vector) as
+a `__forceinline` function, read the lanes of a lane struct's second and
+third members wrongly. Under MSVC the AVX lane operations are therefore
+macros (`src/runtime/runtime_ext.h`), the extraction AVX2's `vpermpd` with
+the lane as its immediate, and the sum is right.
 
-**The design.** The program's C compiled twice: once as now, and once
-with `/arch:AVX2 /DGS_TU_AVX2`, keeping only the AVX2 versions, with
-external linkage, which the first one's dispatch calls (`__cpuidex`,
-`_xgetbv`). Every mutable datum the generated C defines (the globals
-`gs_globals_main`, the data stacks' counters, channel queues, the init flag,
-the thread-local pointers) is emitted through one macro that defines it in
-the first unit and declares it `extern` in the second, so both units share
-one of each; code and constant data may be duplicated freely. The build
-(`src/build.h`) compiles the second unit only for MSVC with a function in
-lanes.
+**The design, as built.** The program's C compiled twice: once as now
+(`/DGS_TU_BASE`), and once with `/arch:AVX2 /DGS_TU_AVX2`, keeping only
+the AVX2 versions, with external linkage, which the first one's dispatch
+calls (`__cpuidex`, `_xgetbv`). Every mutable datum the generated C defines
+(the globals `gs_globals_main`, the data stacks' thread-locals, the
+long-distance return's channels, the queues, the dynamic externs'
+pointers, the init flag) is declared `GS_DATA`, which defines it in the
+first unit and declares it `extern` in the second, so both units share one
+of each; code and constant data are each unit's own copy. The build
+(`src/build.h`) compiles the second unit only for MSVC on x86-64, for a
+program with simd versions and no C header (whose static data the second
+unit would copy), and not `--standalone`.
+
+**What that cost, and the fix.** An external `gs_stks` is one MSVC reloads
+after every store that might have changed it: `compare/`'s A* search
+(`solve`), whose code is in the first unit and unchanged, took 25 more
+instructions and ran 6% slower. A thread's block of stacks does not move
+while Goose code runs on it, so in the two units a function that indexes
+the block takes it into a local first (`GS_STKS_LOCAL`, `runtime.h`), and
+`solve` is back to its old code (1.02x, within the spread).
+
+**Measured** (`compare/quiet_bench.py`, 15 rounds, CPU cycles against
+Rust's `compare/build/rust-o3-lto.exe`, MSVC 19.50, the same checksums for
+all eight benchmarks): raytrace from 1.20x to 1.00x, n-body from 0.67x to
+0.49x; the other six within their spread. "Before" is the same C compiled
+as one unit, as `gust build` did. `compare/sample_profile.py` puts
+raytrace's time 84% in `nearest_g_simd1` and `any_hit_g_simd1`, and 3.5% in
+their dispatch, and n-body's 99.8% in `run_g_5_simd1`.
 
 ## Tools
 

@@ -210,12 +210,15 @@ struct Builder {
         return Run(argv, what, logfile);
     }
 
-    // Compiles `src` and links it with `objects` and the response files
-    // `rsps` into `exe`, with `builddir` taking the intermediates.
+    // Compiles `src`, with `extra` flags after the usual ones, and links it
+    // with `objects` and the response files `rsps` into `exe`, with
+    // `builddir` taking the intermediates.
     bool Link(const string &src, const vector<string> &objects, const vector<string> &rsps,
-              const string &exe, const string &builddir, const string &logfile) const {
+              const string &exe, const string &builddir, const string &logfile,
+              const vector<string> &extra = {}) const {
         vector<string> argv = { tc.cc };
         for (auto &f : CFlags()) argv.push_back(f);
+        for (auto &f : extra) argv.push_back(f);
         if (tc.style == "msvc") {
             argv.push_back(cat("/Fe:", exe));
             argv.push_back(cat("/Fo:", builddir, "\\"));
@@ -282,9 +285,18 @@ inline string RuntimeObject(const Builder &b) {
 // before the packages it requires and the program's own C first of all, and
 // links the executable, named by -o, the program's sidecar (`output`) or the
 // root file. The exit code.
+// Gust: `simdunit` says the program's simd versions may be built in a unit
+// of their own (main.cpp), which MSVC, with no per-function target, needs
+// for their AVX2 bodies: the C compiled once more, for AVX2 and with
+// GS_TU_AVX2, holding them alone, and the first unit with GS_TU_BASE, which
+// links its dispatch to them (runtime.h). Not on another target than
+// x86-64, nor --standalone, whose C holds the runtime's own data. The
+// defines are the units' and not the program's, so they go on the command
+// line, as no other define does.
 inline int BuildExecutable(const string &rootfile, const string &cfile, const string &builddir,
                            const Toolchain &tc, const BuildOptions &opts, FILE *msgs,
-                           const vector<string> &nativersps, const string &output) {
+                           const vector<string> &nativersps, const string &output,
+                           bool simdunit = false) {
     Builder b { tc, opts, msgs };
     b.ucrtdll = b.UcrtDll(!nativersps.empty());
     vector<string> objects;
@@ -292,6 +304,17 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
         auto obj = RuntimeObject(b);
         if (obj.empty()) return 1;
         objects.push_back(obj);
+    }
+    vector<string> unitflags;
+    auto ccdir = filesystem::path(tc.cc).parent_path().filename().string();
+    for (auto &c : ccdir) c = (char)tolower((unsigned char)c);
+    if (simdunit && tc.name == "msvc" && ccdir == "x64" && !opts.standalone) {
+        auto obj = cat(builddir, "/", PathStem(cfile), "-avx2.obj");
+        if (!b.CompileObject(cfile, obj, "compiling the AVX2 versions", cat(builddir, "/cc-avx2.log"),
+                             { "/arch:AVX2", "/DGS_TU_AVX2" }))
+            return 1;
+        objects.push_back(obj);
+        unitflags.push_back("/DGS_TU_BASE");
     }
     auto exe = opts.exe;
     if (exe.empty()) {
@@ -305,7 +328,8 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
         auto exedirpath = filesystem::path(exe).parent_path();
         if (!exedirpath.empty()) filesystem::create_directories(exedirpath, ec);
     }
-    if (!b.Link(cfile, objects, nativersps, exe, builddir, cat(builddir, "/cc.log"))) return 1;
+    if (!b.Link(cfile, objects, nativersps, exe, builddir, cat(builddir, "/cc.log"), unitflags))
+        return 1;
     if (!opts.dryrun) fprintf(msgs, "built %s\n", exe.c_str());
     return 0;
 }

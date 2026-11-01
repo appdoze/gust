@@ -122,6 +122,31 @@ jobs:
             done
           done
 
+      # Gust: the same tests as MSVC builds them: SSE2's register pairs in the
+      # program's unit, and the simd versions' AVX2 bodies in a second unit
+      # built with /arch:AVX2, which `gust build` compiles and links
+      # (src/build.h), optimized and --debug. Each build has to have
+      # compiled that unit; the suite above compiles the C alone.
+      - name: Lanes and simd versions under MSVC
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          set -e
+          for t in codegen/lanes codegen/lanes_filter codegen/lanes_if codegen/lanes_short \
+                   codegen/simd_mul_add codegen/simd_versions; do
+            n=$(basename $t)
+            for m in "" --debug; do
+              build/Debug/gust.exe build -v $m --cc msvc test/$t.goose -o build/msvc-$n.exe > build/msvc-$n.build.log 2>&1 \
+                || { cat build/msvc-$n.build.log; exit 1; }
+              grep -q "GS_TU_AVX2" build/msvc-$n.build.log || { echo "no AVX2 unit for $n"; exit 1; }
+              code=0
+              (cd test/$(dirname $t) && ../../build/msvc-$n.exe > ../../build/msvc-$n.out 2> ../../build/msvc-$n.err) || code=$?
+              if [ $code -ne 0 ] && [ ! -f test/expected/$n.aborts ]; then cat build/msvc-$n.err; exit 1; fi
+              diff --strip-trailing-cr build/msvc-$n.out test/expected/$n.out
+              echo "ok $n ${m:-optimized}"
+            done
+          done
+
       - uses: actions/setup-node@v7
         with:
           node-version: '22'
