@@ -640,7 +640,8 @@ flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
   its `b`, a quote after `\xC3` went with it, and overlong encodings, surrogates
   and values past U+10FFFF came through as code points. It now passes a byte that
   starts no well-formed sequence alone, as 0xFFFD, as Go does. `push_utf8` writes
-  0xFFFD for what is not a code point, so it never writes malformed text.
+  0xFFFD for what is not a code point, so it never writes malformed text, and
+  `json` decodes a lone surrogate to that rather than to its own three bytes.
   `format_int` puts the sign after padding that is not zeros (`   -42`, not
   `-   42`). `abs(-0.0)` is `0.0`. `rand_int` draws again past the last whole
   multiple of a range above 2^32, where a remainder gave 56% of its values to the

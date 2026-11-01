@@ -494,7 +494,7 @@ fn decode_string(text: u8[:], at: i64, end: i64, out: u8[>..]&) -> const u8[:], 
             }
             pos += 4;
             // A surrogate pair is two escapes that make one code point; a
-            // lone half is kept as the three bytes of its own code.
+            // lone half is none, and push_utf8 writes 0xFFFD for it.
             if cp >= 0xD800 && cp < 0xDC00 && pos + 6 <= end && text[pos] == '\\' && text[pos + 1] == 'u' {
                 var lo = 0;
                 for i in 4 {

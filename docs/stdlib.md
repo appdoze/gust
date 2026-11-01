@@ -1300,8 +1300,8 @@ decoded text, which is pushed onto `decoded`; nothing else is copied. A
 number without a fraction or an exponent that fits an `i64` becomes an
 `Int`. Any other number becomes a `Num`, correctly rounded, and infinite if
 it is too large for an `f64`. Escapes decode to UTF-8: a surrogate pair
-becomes one code point, and a lone surrogate becomes the three bytes that
-encode its own code point. Strings are not checked to be valid UTF-8.
+becomes one code point, and a lone surrogate, which is no code point, becomes
+U+FFFD, as in Go. Strings are not checked to be valid UTF-8.
 
 On
 malformed text, `parse` returns null and a message naming the byte at which
