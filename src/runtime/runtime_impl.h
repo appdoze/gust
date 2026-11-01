@@ -476,6 +476,7 @@ static GS_NORETURN void gs_park(void) {
 
 #include <sys/mman.h>
 #include <unistd.h>
+#include <errno.h>
 #include <signal.h>
 #include <pthread.h>
 
@@ -1912,5 +1913,30 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
     return (int64_t)(d - dst);
 }
 
-/* stdout is unbuffered (gs_rt_start): each print is this one write. */
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
+/* stdout is unbuffered (gs_rt_start): each print is this one write. Gust:
+   made directly, where fwrite on an unbuffered stream takes stdio's lock and,
+   on Windows, a second write for a text of odd length (the C runtime takes
+   the stream for one with a 2-byte buffer). A partial write goes on from where
+   it stopped; a failed one is dropped, as fwrite's result was. No descriptor,
+   in a process started without a stdout, is such a failure. */
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
+    #ifdef _WIN32
+        int fd = _fileno(stdout);
+        if (fd < 0) return;
+        while (len > 0) {
+            int n = _write(fd, p, len > 0x40000000 ? 0x40000000u : (unsigned)len);
+            if (n <= 0) return;
+            p += n;
+            len -= n;
+        }
+    #else
+        int fd = fileno(stdout);
+        while (len > 0) {
+            ssize_t n = write(fd, p, (size_t)len);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) return;
+            p += n;
+            len -= n;
+        }
+    #endif
+}

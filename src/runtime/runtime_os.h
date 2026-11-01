@@ -401,7 +401,7 @@ GS_API uint8_t gs_os_list_dir(sl_u8 path, gs_rref out) {
 }
 
 GS_API void gs_os_write_stdout(sl_u8 s) {
-    if (s.len > 0) fwrite(s.data, 1, (size_t)s.len, stdout);
+    gs_out_bytes(s.data, s.len);
 }
 
 GS_API void gs_os_write_stderr(sl_u8 s) {
