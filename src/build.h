@@ -65,6 +65,13 @@ struct Builder {
         vector<string> f = { "-O2" };
         if (tc.name == "clang" || tc.name == "gcc")
             f.push_back("-ffunction-sections"), f.push_back("-fdata-sections");
+        // Gust: at -O2 gcc 12 to 14 vectorize only a loop whose count is known
+        // to be a multiple of the vector's (the very-cheap model), which rules
+        // out nearly all of them: to_lower over a slice ran 11 times slower
+        // under Ubuntu's gcc 13 than under gcc 15. Older ones do not vectorize
+        // at -O2 at all. This one leaves out loops needing checks at run time.
+        if (tc.name == "gcc" && atoi(tc.version.c_str()) >= 8)
+            f.push_back("-ftree-vectorize"), f.push_back("-fvect-cost-model=cheap");
         #ifdef __linux__
             // Gust: not what a distribution's compiler turns on by default
             // for C (Ubuntu's gcc all of it): stack protectors, CET's landing

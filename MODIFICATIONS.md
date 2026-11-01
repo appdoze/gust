@@ -660,6 +660,9 @@ flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
   longer overflows on a chunk size near 2^63, which ended the program, and takes a
   reply to HEAD as having no body. `test/stdlib/http_strict_head.goose`,
   `test/threads/http_protocol.goose`.
+- `to_lower` and `to_upper` work 16 bytes at a time on x86-64 in SSE2 under any
+  compiler, where MSVC's and gcc's vectorizers would not take the loop: 11 times
+  faster there, and level with clang.
 - `dictionary` defends itself against keys chosen to collide. Whoever knows a
   hash can make every insert walk past all the keys before it: 16,000 crafted
   24-byte keys took a second, and four times as many twenty times as long. An

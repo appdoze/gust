@@ -56,6 +56,33 @@ static uint8_t gs_ffi_bytes(uint64_t p, int64_t n, gs_rref out) {
 #define GS_SQRT_NO_ERRNO 1
 #endif
 #endif
+/* Gust: ASCII case: bytes from lo through lo + 25 have bit 5 flipped, which
+   turns upper case to lower and lower to upper. In SSE2 where a C compiler
+   may not vectorize the loop, as MSVC does not, and gcc before 15 at -O2 did
+   not. Adding 127 - (lo + 25) moves that range to the top of the signed bytes,
+   where nothing else lands. */
+#if defined(__x86_64__) || defined(_M_X64)
+#if !defined(__TINYC__) && !defined(__MIRC__)
+#include <emmintrin.h>
+#define GS_ASCII_SSE2 1
+#endif
+#endif
+static void gs_ascii_flip(sl_u8 s, int64_t lo) {
+    uint8_t *p = (uint8_t *)s.data;
+    int64_t n = s.len, i = 0;
+    #ifdef GS_ASCII_SSE2
+        __m128i shift = _mm_set1_epi8((char)(127 - (lo + 25)));
+        __m128i floor = _mm_set1_epi8((char)(127 - 26));
+        __m128i bit = _mm_set1_epi8(0x20);
+        for (; i + 16 <= n; i += 16) {
+            __m128i v = _mm_loadu_si128((const __m128i *)(p + i));
+            __m128i in = _mm_cmpgt_epi8(_mm_add_epi8(v, shift), floor);
+            _mm_storeu_si128((__m128i *)(p + i), _mm_xor_si128(v, _mm_and_si128(in, bit)));
+        }
+    #endif
+    for (; i < n; i++) p[i] ^= (uint8_t)((uint8_t)(p[i] - (uint8_t)lo) < 26 ? 0x20 : 0);
+}
+
 #ifdef GS_SQRT_NO_ERRNO
 static double gs_sqrt(double x) { return __builtin_elementwise_sqrt(x); }
 static float gs_sqrtf(float x) { return __builtin_elementwise_sqrt(x); }
