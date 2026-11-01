@@ -496,6 +496,19 @@ git log upstream/master..main
   `.github/workflows/api-bench.yml` (new, run by hand) checks and measures
   the servers on a Linux runner.
 
+- No libm unless a program calls into it (`src/runtime/runtime.h`
+  `gs_fmod`, `src/runtime/runtime_ext.h`, `stdlib/math.goose`,
+  `src/codegen_values.h`, `src/build.h`): float `%` is the runtime's exact
+  remainder, a long division of the significands; math's floor, ceil,
+  trunc and round are the runtime's, an integer conversion below 2^52 (the
+  instruction where SSE4.1 or arm64 has one); sqrt under gcc and MSVC on
+  x86-64 is SSE2's, with no errno; and Linux links libm `--as-needed`.
+  Each gives libm's result to the bit (`test/stdlib/math_rounding.goose`,
+  new: signed zeros, halfway cases, 2^52, subnormals, infinities and NaN,
+  under clang, gcc, MSVC, TinyCC and MIR). A program then does not load
+  libm.so, a third of a megabyte resident on Linux, where `compare/`'s
+  baseline was a tenth of a megabyte above Rust's.
+
 - `stdlib/dictionary.goose`: a slot's tag is one byte, the top seven bits
   of the key's hash, where it was the low 31 with the home slot in them, so
   growth and removal hash the keys they move again. A slot of `i64` keys and

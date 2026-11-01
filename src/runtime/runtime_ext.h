@@ -67,9 +67,56 @@ static float gs_sqrtf(float x) { return __builtin_elementwise_sqrt(x); }
    inner loop then stored and reloaded each live double around every one. */
 #define gs_sqrt sqrt
 #define gs_sqrtf sqrtf
+#elif (defined(__GNUC__) || defined(_MSC_VER)) && (defined(__x86_64__) || defined(_M_X64)) && \
+    !defined(__TINYC__)
+/* Gust: gcc and MSVC on x86-64 have SSE2's square root, which sets no
+   errno: the instruction alone, and no call into libm, which Linux then
+   need not load (gs_fmod, runtime.h). */
+#include <emmintrin.h>
+static double gs_sqrt(double x) { return _mm_cvtsd_f64(_mm_sqrt_sd(_mm_set_sd(x), _mm_set_sd(x))); }
+static float gs_sqrtf(float x) { return _mm_cvtss_f32(_mm_sqrt_ss(_mm_set_ss(x))); }
 #else
 static double gs_sqrt(double x) { return sqrt(x); }
 static float gs_sqrtf(float x) { return sqrtf(x); }
+#endif
+
+/* Gust: math's floor, ceil, trunc and round (stdlib/math.goose) without
+   libm, for the same reason. Where the target rounds to an integer in one
+   instruction (SSE4.1, arm64) the compiler's builtin is that instruction.
+   Elsewhere, below 2^52 in magnitude (2^23 for f32) a float's truncation is
+   one conversion to an integer and back, adjusted by one for floor, ceil
+   and round; from there on every float is an integer already, and NaN and
+   the infinities are their own results. A zero result has x's sign, as C's
+   does. round takes halfway cases away from zero, x - trunc(x) being exact. */
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__) && !defined(__MIRC__) && \
+    (defined(__SSE4_1__) || defined(__aarch64__))
+static double gs_floor(double x) { return __builtin_floor(x); }
+static double gs_ceil(double x) { return __builtin_ceil(x); }
+static double gs_trunc(double x) { return __builtin_trunc(x); }
+static double gs_round(double x) { return __builtin_round(x); }
+static float gs_floorf(float x) { return __builtin_floorf(x); }
+static float gs_ceilf(float x) { return __builtin_ceilf(x); }
+static float gs_truncf(float x) { return __builtin_truncf(x); }
+static float gs_roundf(float x) { return __builtin_roundf(x); }
+#else
+#define GS_ROUNDING(name, T, I, LIMIT, ADJUST)                                \
+    static T name(T x) {                                                      \
+        if (!(x > -(LIMIT) && x < (LIMIT))) return x;                         \
+        T t = (T)(I)x;                                                        \
+        ADJUST                                                                \
+        return t == 0 ? x * (T)0 : t;                                         \
+    }
+#define GS_FLOOR_ADJ if (t > x) t -= 1;
+#define GS_CEIL_ADJ if (t < x) t += 1;
+#define GS_ROUND_ADJ if (x - t >= 0.5) t += 1; else if (x - t <= -0.5) t -= 1;
+GS_ROUNDING(gs_floor, double, int64_t, 4503599627370496.0, GS_FLOOR_ADJ)
+GS_ROUNDING(gs_ceil, double, int64_t, 4503599627370496.0, GS_CEIL_ADJ)
+GS_ROUNDING(gs_trunc, double, int64_t, 4503599627370496.0, )
+GS_ROUNDING(gs_round, double, int64_t, 4503599627370496.0, GS_ROUND_ADJ)
+GS_ROUNDING(gs_floorf, float, int32_t, 8388608.0f, GS_FLOOR_ADJ)
+GS_ROUNDING(gs_ceilf, float, int32_t, 8388608.0f, GS_CEIL_ADJ)
+GS_ROUNDING(gs_truncf, float, int32_t, 8388608.0f, )
+GS_ROUNDING(gs_roundf, float, int32_t, 8388608.0f, GS_ROUND_ADJ)
 #endif
 
 /* Gust: four doubles side by side, one per lane of a loop the compiler runs

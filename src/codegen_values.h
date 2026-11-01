@@ -602,7 +602,7 @@ inline string CodeGen::ArithX(TType op, TypeExpr *t, const string &l, const stri
             case T_MUL:   return cat("(", lx, " * ", rx, ")");
             case T_DIV:   return cat("(", lx, " / ", rx, ")");
             case T_MOD:
-                return cat(t->fltstorage == FS_F32 ? "fmodf(" : "fmod(", lx, ", ", rx, ")");
+                return cat(t->fltstorage == FS_F32 ? "gs_fmodf(" : "gs_fmod(", lx, ", ", rx, ")");
             default: assert(false); return l;
         }
     }

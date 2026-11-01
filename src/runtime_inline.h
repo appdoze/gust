@@ -924,15 +924,51 @@ static uint32_t gs_divu32_q(uint32_t x, uint32_t magic, uint8_t more) {
     return q >> more;
 }
 
+/* Gust: float `%` (§6.1), C's fmod, without libm. A remainder is always
+   exact, so this long division of the significands, a bit at a time, gives
+   libm's result to the bit; the C library then need not be asked, nor on
+   Linux libm.so loaded (a third of a megabyte resident) for a program that
+   uses nothing else of it (Builder::SystemLibs links it as needed). */
+static double gs_fmod(double x, double y) {
+    union { double d; uint64_t u; } a, b, r;
+    a.d = x;
+    b.d = y;
+    uint64_t sign = a.u & 0x8000000000000000ull;
+    uint64_t ux = a.u ^ sign, uy = b.u & 0x7fffffffffffffffull;
+    /* x infinite, y zero, or either NaN: NaN. */
+    if (ux >= 0x7ff0000000000000ull || uy > 0x7ff0000000000000ull || uy == 0) return (x * y) / (x * y);
+    if (ux < uy) return x;
+    int ex = (int)(ux >> 52), ey = (int)(uy >> 52);
+    uint64_t mx = ux & 0xfffffffffffffull, my = uy & 0xfffffffffffffull;
+    /* The significands with their leading one, a subnormal's shifted up to it. */
+    if (ex) mx |= 1ull << 52;
+    else for (ex = 1; !(mx >> 52); ex--) mx <<= 1;
+    if (ey) my |= 1ull << 52;
+    else for (ey = 1; !(my >> 52); ey--) my <<= 1;
+    for (; ex > ey; ex--) {
+        if (mx >= my) mx -= my;
+        mx <<= 1;
+    }
+    if (mx >= my) mx -= my;
+    if (!mx) {
+        r.u = sign;   /* a zero of x's sign */
+        return r.d;
+    }
+    for (; !(mx >> 52); ey--) mx <<= 1;
+    r.u = (ey > 0 ? (mx & 0xfffffffffffffull) | (uint64_t)ey << 52 : mx >> (1 - ey)) | sign;
+    return r.d;
+}
+static float gs_fmodf(float x, float y) { return (float)gs_fmod(x, y); }   /* exact as a float too */
+
 /* `as!` float-to-int: truncate toward zero, wrap modulo 2^64 (§6.3). Defined
    the same on every platform, unlike a raw C cast of an out-of-range value.
    A value lies in the i64 range exactly when its truncation does, and there
    the C cast truncates by itself (one hardware conversion, where trunc() is
    a libm call on baseline x86-64), so only NaN and the values beyond the
-   range take the wrap, out of line. */
+   range take the wrap, out of line: integers already, being past 2^53. */
 static GS_NOINLINE int64_t gs_f2iwrap_slow(double d) {
     if (d != d) return 0;
-    d = fmod(trunc(d), 18446744073709551616.0);
+    d = gs_fmod(d, 18446744073709551616.0);
     if (d < 0) d += 18446744073709551616.0;
     return (int64_t)(uint64_t)d;
 }
@@ -1025,7 +1061,8 @@ GS_API void gs_release_regions(void);
 
 /* ---------------------------------------------------------------------------
    Dynamic externs (§7.10): the shared libraries the program's extern blocks
-   name, and the functions it calls through them, bound by name as the
+)GSRT"
+R"GSRT(   name, and the functions it calls through them, bound by name as the
    program starts (docs/design/dynamic_externs.md). */
 
 /* A library: the name its block gives and, where the sidecar spells it for
@@ -1058,8 +1095,7 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
                                void (*release)(void), void (*entry)(uint8_t *),
                                const void *args, int64_t argsize, int contained);
 /* Whether the worker returned rather than aborted, once it has ended. Where
-)GSRT"
-R"GSRT(   `msg` is not NULL, the first such wait for a worker that aborted takes its
+   `msg` is not NULL, the first such wait for a worker that aborted takes its
    message: `msg` and `len` are set to it, which the caller frees with
    gs_free_msg, or to NULL and no bytes. */
 GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
@@ -1210,7 +1246,8 @@ static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
 static int64_t gs_pfor_take(gs_pfor_job *j) {
 #if GS_NEED_THREADS
 #if defined(_MSC_VER) && !defined(__clang__)
-    int64_t a = _InterlockedExchangeAdd64((volatile __int64 *)&j->next, j->chunk);
+)GSRT"
+R"GSRT(    int64_t a = _InterlockedExchangeAdd64((volatile __int64 *)&j->next, j->chunk);
 #else
     int64_t a = __atomic_fetch_add(&j->next, j->chunk, __ATOMIC_SEQ_CST);
 #endif
@@ -1267,8 +1304,7 @@ static void gs_pfor_finish(gs_pfor_job *j, const char *file, int line) {
 /* Where a run of cnt elements goes in a pool of len elements, taken off the
    freelist: for alloc_slice, and for a slice realloc_slice moves. */
 GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t len,
-)GSRT"
-R"GSRT(                              int64_t cnt);
+                              int64_t cnt);
 /* realloc_slice growing the non-empty slice [idx, idx + ol), which does not
    end the array, to cnt elements: where it starts now. The caller copies
    the elements where that moved. */
@@ -1417,7 +1453,8 @@ GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
    (i + d < n); -1 if there is none. A set is std's ByteSet. */
 GS_API int64_t gs_scan_any(const uint8_t *p, int64_t n, const void *set);
 GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t d,
-                            const void *b);
+)GSRT"
+R"GSRT(                            const void *b);
 )GSRT"
     ) },
     { "runtime_impl.h", string_view(
@@ -4055,9 +4092,56 @@ static float gs_sqrtf(float x) { return __builtin_elementwise_sqrt(x); }
    inner loop then stored and reloaded each live double around every one. */
 #define gs_sqrt sqrt
 #define gs_sqrtf sqrtf
+#elif (defined(__GNUC__) || defined(_MSC_VER)) && (defined(__x86_64__) || defined(_M_X64)) && \
+    !defined(__TINYC__)
+/* Gust: gcc and MSVC on x86-64 have SSE2's square root, which sets no
+   errno: the instruction alone, and no call into libm, which Linux then
+   need not load (gs_fmod, runtime.h). */
+#include <emmintrin.h>
+static double gs_sqrt(double x) { return _mm_cvtsd_f64(_mm_sqrt_sd(_mm_set_sd(x), _mm_set_sd(x))); }
+static float gs_sqrtf(float x) { return _mm_cvtss_f32(_mm_sqrt_ss(_mm_set_ss(x))); }
 #else
 static double gs_sqrt(double x) { return sqrt(x); }
 static float gs_sqrtf(float x) { return sqrtf(x); }
+#endif
+
+/* Gust: math's floor, ceil, trunc and round (stdlib/math.goose) without
+   libm, for the same reason. Where the target rounds to an integer in one
+   instruction (SSE4.1, arm64) the compiler's builtin is that instruction.
+   Elsewhere, below 2^52 in magnitude (2^23 for f32) a float's truncation is
+   one conversion to an integer and back, adjusted by one for floor, ceil
+   and round; from there on every float is an integer already, and NaN and
+   the infinities are their own results. A zero result has x's sign, as C's
+   does. round takes halfway cases away from zero, x - trunc(x) being exact. */
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__) && !defined(__MIRC__) && \
+    (defined(__SSE4_1__) || defined(__aarch64__))
+static double gs_floor(double x) { return __builtin_floor(x); }
+static double gs_ceil(double x) { return __builtin_ceil(x); }
+static double gs_trunc(double x) { return __builtin_trunc(x); }
+static double gs_round(double x) { return __builtin_round(x); }
+static float gs_floorf(float x) { return __builtin_floorf(x); }
+static float gs_ceilf(float x) { return __builtin_ceilf(x); }
+static float gs_truncf(float x) { return __builtin_truncf(x); }
+static float gs_roundf(float x) { return __builtin_roundf(x); }
+#else
+#define GS_ROUNDING(name, T, I, LIMIT, ADJUST)                                \
+    static T name(T x) {                                                      \
+        if (!(x > -(LIMIT) && x < (LIMIT))) return x;                         \
+        T t = (T)(I)x;                                                        \
+        ADJUST                                                                \
+        return t == 0 ? x * (T)0 : t;                                         \
+    }
+#define GS_FLOOR_ADJ if (t > x) t -= 1;
+#define GS_CEIL_ADJ if (t < x) t += 1;
+#define GS_ROUND_ADJ if (x - t >= 0.5) t += 1; else if (x - t <= -0.5) t -= 1;
+GS_ROUNDING(gs_floor, double, int64_t, 4503599627370496.0, GS_FLOOR_ADJ)
+GS_ROUNDING(gs_ceil, double, int64_t, 4503599627370496.0, GS_CEIL_ADJ)
+GS_ROUNDING(gs_trunc, double, int64_t, 4503599627370496.0, )
+GS_ROUNDING(gs_round, double, int64_t, 4503599627370496.0, GS_ROUND_ADJ)
+GS_ROUNDING(gs_floorf, float, int32_t, 8388608.0f, GS_FLOOR_ADJ)
+GS_ROUNDING(gs_ceilf, float, int32_t, 8388608.0f, GS_CEIL_ADJ)
+GS_ROUNDING(gs_truncf, float, int32_t, 8388608.0f, )
+GS_ROUNDING(gs_roundf, float, int32_t, 8388608.0f, GS_ROUND_ADJ)
 #endif
 
 /* Gust: four doubles side by side, one per lane of a loop the compiler runs
@@ -4083,7 +4167,8 @@ typedef long long gs_l4m __attribute__((vector_size(32)));
 #define gs_l4d_splat(x)                                                       \
     __extension__({                                                           \
         double gs_l4d_s_ = (x);                                               \
-        (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
+)GSRT"
+R"GSRT(        (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
     })
 #define gs_l4m_splat(x)                                                       \
     __extension__({                                                           \
@@ -4145,8 +4230,7 @@ GS_L4_INLINE gs_l4d gs_l4d_splat(double x) {
     r.lo = r.hi = _mm_set1_pd(x);
     return r;
 }
-)GSRT"
-R"GSRT(GS_L4_INLINE gs_l4m gs_l4m_splat(long long x) {
+GS_L4_INLINE gs_l4m gs_l4m_splat(long long x) {
     gs_l4m r;
     r.lo = r.hi = _mm_castsi128_pd(_mm_set1_epi64x(x));
     return r;
@@ -4255,7 +4339,8 @@ static float gs_mul_addf(float x, float y, float z) {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
 #define GS_LIBM_SYM2(p, f) #p #f
 #define GS_LIBM_SYM(p, f) GS_LIBM_SYM2(p, f)
-#define GS_LIBM
+)GSRT"
+R"GSRT(#define GS_LIBM
 #define GS_LIBM1(f) __asm__(GS_LIBM_SYM(__USER_LABEL_PREFIX__, f)) __attribute__((const));
 #define GS_LIBM2(f) GS_LIBM1(f)
 #else
@@ -4334,8 +4419,7 @@ static int64_t gs_clz(uint64_t x) {
 static int64_t gs_ctz(uint64_t x) {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
     return x ? __builtin_ctzll(x) : 64;
-)GSRT"
-R"GSRT(#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
     unsigned long i;
     return _BitScanForward64(&i, x) ? (int64_t)i : 64;
 #else

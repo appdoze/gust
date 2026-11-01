@@ -25,10 +25,11 @@ extern fn pow(x: f64, y: f64) -> f64 = "gs_pow";      extern fn pow(x: f32, y: f
 // machines (§7.12). A simd fn's versions past the baseline round once.
 extern fn mul_add(x: f64, y: f64, z: f64) -> f64 = "gs_mul_add";
 extern fn mul_add(x: f32, y: f32, z: f32) -> f32 = "gs_mul_addf";
-extern fn floor(x: f64) -> f64;                       extern fn floor(x: f32) -> f32 = "floorf";
-extern fn ceil(x: f64) -> f64;                        extern fn ceil(x: f32) -> f32 = "ceilf";
-extern fn round(x: f64) -> f64;                       extern fn round(x: f32) -> f32 = "roundf";
-extern fn trunc(x: f64) -> f64;                       extern fn trunc(x: f32) -> f32 = "truncf";
+// Gust: the runtime's, which need no libm either (runtime_ext.h).
+extern fn floor(x: f64) -> f64 = "gs_floor";          extern fn floor(x: f32) -> f32 = "gs_floorf";
+extern fn ceil(x: f64) -> f64 = "gs_ceil";            extern fn ceil(x: f32) -> f32 = "gs_ceilf";
+extern fn round(x: f64) -> f64 = "gs_round";          extern fn round(x: f32) -> f32 = "gs_roundf";
+extern fn trunc(x: f64) -> f64 = "gs_trunc";          extern fn trunc(x: f32) -> f32 = "gs_truncf";
 
 let PI = 3.141592653589793;
 let TAU = 6.283185307179586;
