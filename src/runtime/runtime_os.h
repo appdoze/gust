@@ -410,6 +410,110 @@ GS_API void gs_os_write_stderr(sl_u8 s) {
 
 GS_API void gs_os_flush_stdout(void) { fflush(stdout); }
 
+GS_API double gs_parse_f64(sl_u8 s, uint64_t mant, int64_t exp10, uint8_t truncated) {
+    return gs_dec_to_f64(s.data, s.len, mant, exp10, truncated);
+}
+
+/* Gust: std's format_flt: a finite v to exactly `decimals` places, from its
+   own bits, so that every digit is the exact value's and any size fits. The
+   value is f * 2^e. Below 2^-60 the remainder after the integer part stays
+   in integers; above, in 64 bits. What is left after the last place rounds it,
+   half up. A double has at most 1074 places: any more are zeros. */
+GS_API void gs_fmt_fixed(gs_rref out, double v, int64_t decimals) {
+    union { double d; uint64_t u; } b;
+    char buf[1400];
+    char *start = buf + 1, *p = start;
+    int64_t keep = decimals < 0 ? 0 : decimals > 1074 ? 1074 : decimals;
+    int up = 0;
+    b.d = v;
+    int be = (int)(b.u >> 52) & 0x7FF;
+    uint64_t f = b.u & (((uint64_t)1 << 52) - 1);
+    if (be) f |= (uint64_t)1 << 52;
+    int e = (be ? be : 1) - 1075;
+    if (v < 0) gs_bld_append(out, "-", 1);
+    if (e >= 0 && f) {
+        /* A whole number: its digits, nine at a time from the low end. */
+        gs_big n;
+        char tmp[320];
+        int m = 0;
+        gs_big_set(&n, f, e);
+        while (n.n) {
+            uint64_t rem = 0;
+            for (int i = n.n - 1; i >= 0; i--) {
+                uint64_t cur = rem << 32 | n.d[i];
+                n.d[i] = (uint32_t)(cur / 1000000000u);
+                rem = cur % 1000000000u;
+            }
+            while (n.n && !n.d[n.n - 1]) n.n--;
+            for (int j = 0; j < 9; j++) {
+                tmp[m++] = (char)('0' + rem % 10);
+                rem /= 10;
+            }
+        }
+        while (m > 1 && tmp[m - 1] == '0') m--;
+        while (m) *p++ = tmp[--m];
+        if (keep) {
+            *p++ = '.';
+            memset(p, '0', (size_t)keep);
+            p += keep;
+        }
+    } else {
+        int k = e < 0 ? -e : 0;
+        p += gs_fmt_u64((uint8_t *)p, k < 64 ? f >> k : 0);
+        if (keep) *p++ = '.';
+        if (k && k <= 60) {
+            uint64_t mask = ((uint64_t)1 << k) - 1, r = f & mask;
+            for (int64_t i = 0; i < keep; i++) {
+                r *= 10;
+                *p++ = (char)('0' + (r >> k));
+                r &= mask;
+            }
+            up = r >= (uint64_t)1 << (k - 1);
+        } else if (k && f) {
+            gs_big r, s, t;
+            int64_t i = 0;
+            gs_big_set(&r, k < 64 ? f & (((uint64_t)1 << k) - 1) : f, 0);
+            gs_big_set(&s, 1, k);
+            for (; i < keep && r.n; i++) {
+                int d = 0;
+                gs_big_mul(&r, 10);
+                while (gs_big_cmp(&r, &s) >= 0) {
+                    gs_big_sub(&r, &s);
+                    d++;
+                }
+                *p++ = (char)('0' + d);
+            }
+            for (; i < keep; i++) *p++ = '0';
+            if (r.n) {
+                gs_big_add(&t, &r, &r);
+                up = gs_big_cmp(&t, &s) >= 0;
+            }
+        } else {
+            memset(p, '0', (size_t)keep);
+            p += keep;
+        }
+    }
+    if (up) {
+        char *q = p;
+        for (;;) {
+            if (q == start) {
+                *--start = '1';
+                break;
+            }
+            q--;
+            if (*q == '.') continue;
+            if (*q != '9') {
+                ++*q;
+                break;
+            }
+            *q = '0';
+        }
+    }
+    gs_bld_append(out, start, p - start);
+    for (int64_t z = decimals - keep; z > 0; z -= 64)
+        gs_bld_append(out, "0000000000000000000000000000000000000000000000000000000000000000", z < 64 ? z : 64);
+}
+
 /* One line of stdin, without its newline or a carriage return before it;
    false at end of input. */
 GS_API uint8_t gs_os_read_line(gs_rref out) {

@@ -83,12 +83,14 @@ fn swap<T>(a: T&, b: T&) {
 // One overload per scalar type: a u8 widens equally well into i64 and u64,
 // so a single generic would be ambiguous. Integers get a multiply-xorshift
 // mix (the low bits pick a `dictionary` group, the top seven are its tag). A
-// negative integer mixes as its two's-complement bits, and a float as its
-// count of 1/65536ths, truncated and wrapped to 64 bits: `as!`, since those
-// conversions change the value on purpose.
+// negative integer mixes as its two's-complement bits, a float as its bits
+// (Gust: its count of 1/65536ths had given every small float one hash). Gust:
+// the high half is folded down first, as multiplying moves bits only up, and
+// keys that differ only above bit 32 had left a dictionary's low bits alike.
+extern fn flt_bits(x: f64) -> u64 = "gs_flt_bits";
 
 fn hash_mix(x: u64) -> u64 {
-    var h = x * 11400714819323198485;
+    var h = (x ^ (x >> 32)) * 11400714819323198485;
     h = h ^ (h >> 32);
     return h;
 }
@@ -102,8 +104,8 @@ fn hash(x: u16) -> u64 { hash_mix(x) }
 fn hash(x: u32) -> u64 { hash_mix(x) }
 fn hash(x: u64) -> u64 { hash_mix(x) }
 fn hash(x: bool) -> u64 { if x { return hash_mix(1); } return hash_mix(2); }
-fn hash(x: f32) -> u64 { hash_mix((x * 65536.0) as! u64) }
-fn hash(x: f64) -> u64 { hash_mix((x * 65536.0) as! u64) }
+fn hash(x: f32) -> u64 { hash_mix(flt_bits(x)) }
+fn hash(x: f64) -> u64 { hash_mix(flt_bits(x)) }
 
 // The 8 bytes of s from i, and the 4 bytes, little-endian; C compilers turn
 // each into one load.
@@ -1057,29 +1059,16 @@ fn parse_uleb(s: u8[:]) -> i64, i64 {
     return 0, 0;
 }
 
-// v with a fixed number of decimals, rounded half up; infinities and NaN
-// in their text form (§3.7).
+// v with a fixed number of decimals: its exact value rounded there, half up,
+// at any size; infinities and NaN in their text form (§3.7).
+extern fn format_flt_exact(out: u8[>..]&, v: f64, decimals: i64) = "gs_fmt_fixed";
+
 fn format_flt(out: u8[>..]&, v: f64, decimals: i64) {
     if v != v || v - v != 0.0 {
         format(out, v);
         return;
     }
-    var x = v;
-    if x < 0.0 {
-        out.push('-');
-        x = -x;
-    }
-    var scale = 1.0;
-    for i in decimals { scale *= 10.0; }
-    // x is not negative, so truncation is floor and adding 0.5 first rounds
-    // half up: `as!`, since dropping the fraction is the point.
-    let scaled = (x * scale + 0.5) as! i64;
-    let iscale = scale as i64;
-    format_uint(out, (scaled / iscale) as u64, 10, 0, ' ');
-    if decimals > 0 {
-        out.push('.');
-        format_uint(out, (scaled % iscale) as u64, 10, decimals, '0');
-    }
+    format_flt_exact(out, v, decimals);
 }
 
 // An optionally signed whole-string integer; false on anything else, including a value outside i64.
@@ -1121,7 +1110,13 @@ fn parse_int(s: u8[:], base: i64 = 10) -> i64, bool {
 const parse_flt_pow10: f64[23] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
                                   1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22];
 
+// Gust: mant * 10^exp10 (with more digits after, if truncated), the float
+// nearest the text s, for what one exact operation below does not settle.
+extern fn parse_flt_exact(s: const u8[:], mant: u64, exp10: i64, truncated: bool) -> f64 = "gs_parse_f64";
+
 // A decimal float with optional sign, fraction and exponent; false otherwise.
+// The nearest float to it, a tie going to the even significand, so that a
+// float's text reads back as that float.
 fn parse_flt(s: u8[:]) -> f64, bool {
     var i = 0;
     var neg = false;
@@ -1156,17 +1151,17 @@ fn parse_flt(s: u8[:]) -> f64, bool {
         digits -= exp10;
     }
     if digits == 0 { return 0.0, false; }
-    // Up to 19 digits fit a u64 exactly. With no exponent either, the value
-    // is that integer over an exact power of ten, the scaling below in one
-    // step. Up to 18 they fit an i64 too, which converts to f64 in one
-    // instruction where a u64 takes several on x86-64, to the same value.
-    if digits <= 19 && i == s.len {
-        var v = 0.0;
-        if digits <= 18 { v = mant as! i64; } else { v = mant; }
+    // Up to 19 digits fit a u64 exactly. With no exponent either, and up to
+    // 2^53, the value is that integer, which an f64 holds exactly, over an
+    // exact power of ten: one correctly rounded division (Clinger's fast
+    // path), the integer converted as an i64 in one instruction.
+    if digits <= 19 && i == s.len && mant <= 9007199254740992 {
+        var v: f64 = mant as! i64;
         if exp10 < 0 { v /= parse_flt_pow10[-exp10]; }
         if neg { v = -v; }
         return v, true;
     }
+    var truncated = false;
     if digits > 19 {
         // mant may have wrapped above: read the digits again keeping the
         // first 19 significant digits, with the exponent counting integer
@@ -1174,6 +1169,7 @@ fn parse_flt(s: u8[:]) -> f64, bool {
         // the exponent. These loops stop where those did, at i.
         mant = 0;
         exp10 = 0;
+        truncated = true;
         var mdigits = 0;
         var j = start;
         while j < s.len && s[j] == '0' { j += 1; }
@@ -1210,17 +1206,18 @@ fn parse_flt(s: u8[:]) -> f64, bool {
         if edigits == 0 { return 0.0, false; }
         exp10 += if eneg { -e } else { e };
     }
-    // A mantissa below 2^53 converts exactly and a power of ten up to 10^22
-    // is exact in binary64, so one multiply or divide is correctly rounded
-    // (Clinger's fast path); longer inputs and larger exponents scale in
-    // steps and may be off by an ulp. A longer mantissa rounds as it
-    // converts.
-    var v: f64 = mant;
-    var e = exp10;
-    while e > 22 { v *= 1e22; e -= 22; }
-    while e < -22 { v /= 1e22; e += 22; }
-    if e > 0 { v *= parse_flt_pow10[e]; } else if e < 0 { v /= parse_flt_pow10[-e]; }
     if i != s.len { return 0.0, false; }
+    var v = 0.0;
+    if mant != 0 {
+        // As above, for a power of ten up to 10^22 either way. The rest take
+        // the runtime's reader.
+        if !truncated && mant <= 9007199254740992 && exp10 >= -22 && exp10 <= 22 {
+            v = mant as! i64;
+            if exp10 > 0 { v *= parse_flt_pow10[exp10]; } else if exp10 < 0 { v /= parse_flt_pow10[-exp10]; }
+        } else {
+            v = parse_flt_exact(s, mant, exp10, truncated);
+        }
+    }
     if neg { v = -v; }
     return v, true;
 }
