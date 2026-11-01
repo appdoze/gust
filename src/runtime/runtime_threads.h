@@ -278,14 +278,14 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
    thread, but for its native stack's pages and the start of a few of its data
    stacks (gs_keep_regions). One that aborted is not kept, as its stack may
    have overflowed. */
-#define GS_THREAD_KEEP 64
+#define GS_THREAD_KEEP 256
 #define GS_THREAD_KEEP_MS 50
 #define GS_THREAD_SPIN 2000
+#define GS_THREAD_SPINNERS 2
 static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; under the mutex */
 static int64_t gs_threads_idle;     /* threads that will take one; under the mutex */
 static int64_t gs_threads_sleeping; /* those of them on gs_threads_more; under the mutex */
 static int64_t gs_threads_ended;    /* workers ended; written under the mutex */
-static int64_t gs_threads_waiting;  /* threads on gs_threads_done; under the mutex */
 static gs_cond gs_threads_more;     /* made by the first gs_thread_start */
 
 #ifdef _WIN32
@@ -324,16 +324,20 @@ static void *gs_thread_main(void *p)
         if (aborted) gs_aborted_add(t->id, contain.msg, contain.len);
         free(t);
         GS_SPIN_STORE64(&gs_threads_ended, gs_threads_ended + 1);
-        if (gs_threads_waiting) gs_cond_broadcast(&gs_threads_done);
+        gs_cond_broadcast(&gs_threads_done);
         t = NULL;
         if (!aborted && gs_threads_idle < GS_THREAD_KEEP) {
+            int spinner = gs_threads_idle < GS_THREAD_SPINNERS;
             gs_threads_idle++;
-            gs_mutex_unlock(&gs_threads_mutex);
             /* A worker started right after this one ended, as in a loop of
                them, finds this thread awake: a wakeup costs both of them a
-               trip through the kernel. */
-            for (int s = 0; s < GS_THREAD_SPIN && !GS_SPIN_LOAD(&gs_thread_next); s++) gs_pf_relax();
-            gs_mutex_lock(&gs_threads_mutex);
+               trip through the kernel. Only a few look, or the end of a burst
+               of workers would keep the cores from whoever starts the next. */
+            if (spinner) {
+                gs_mutex_unlock(&gs_threads_mutex);
+                for (int s = 0; s < GS_THREAD_SPIN && !GS_SPIN_LOAD(&gs_thread_next); s++) gs_pf_relax();
+                gs_mutex_lock(&gs_threads_mutex);
+            }
             int64_t deadline = gs_qclock_ns() + GS_THREAD_KEEP_MS * 1000000;
             gs_threads_sleeping++;
             while (!gs_thread_next && gs_cond_wait_until(&gs_threads_more, &gs_threads_mutex, deadline)) {}
@@ -443,9 +447,7 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
             gs_mutex_lock(&gs_threads_mutex);
             continue;
         }
-        gs_threads_waiting++;
         gs_cond_wait(&gs_threads_done, &gs_threads_mutex);
-        gs_threads_waiting--;
     }
     uint8_t returned = 1;
     if (msg) {
@@ -625,8 +627,7 @@ static GS_TLS struct {
 /* How long a receiver looks for a message before sleeping: about what a
    sleep and a wakeup would cost the two threads, as most waits between a
    busy sender's messages are shorter. */
-#define GS_QSPIN 64
-#define GS_QTRIES 4
+#define GS_QSPIN 2000
 
 /* count outside the lock, for that look alone; it is written under the lock. */
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -646,7 +647,9 @@ static void gs_qlock(struct gs_qstate *s) {
     #ifndef _WIN32
         for (int i = 0; i < GS_QLOCK_SPIN; i++) {
             if (!pthread_mutex_trylock(&s->mutex)) return;
-            gs_pf_relax();
+            /* Longer each time, as each try takes the lock's line from the
+               others, the holder among them. */
+            for (int r = 0; r <= i && r < 16; r++) gs_pf_relax();
         }
     #endif
     gs_mutex_lock(&s->mutex);
@@ -783,10 +786,11 @@ GS_API void gs_qfree(gs_qnode *n) {
 GS_API gs_qnode *gs_qget(gs_queue *q) {
     struct gs_qstate *s = *q;
     /* The lock only once there is a message, so that receivers waiting
-       for one leave it to whoever is using it; and several receivers
-       going for one message lose to each other a few times before sleeping. */
-    for (int tries = 0; tries < GS_QTRIES; tries++) {
-        gs_qspin(s);
+       for one leave it to whoever is using it. They give up after a time and
+       not after losing a few races for a message: several receivers of a
+       busy queue lose often, and one asleep makes every send a wakeup, a trip
+       through the kernel for a message another receiver takes anyway. */
+    for (int spins = GS_QSPIN; spins > 0; spins--) {
         if (GS_QCOUNT_LOAD(s)) {
             gs_qlock(s);
             if (s->count) {
@@ -796,6 +800,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
             }
             gs_mutex_unlock(&s->mutex);
         }
+        gs_pf_relax();
     }
     gs_qlock(s);
     while (!s->count) {
