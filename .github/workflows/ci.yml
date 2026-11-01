@@ -101,6 +101,27 @@ jobs:
           python compare/run_parallel.py --check
           python compare/safety/run_safety.py --check
 
+      # Gust: the lanes and simd versions as gcc builds them (runtime_ext.h:
+      # SSE2's register pairs in the baseline, AVX's in the AVX2 and AVX-512
+      # versions), optimized and --debug, and the runtime's floats; the suite
+      # above builds with clang. An abort is expected where the test says so.
+      - name: Lanes, simd versions and floats under gcc
+        if: runner.os == 'Linux'
+        run: |
+          set -e
+          for t in codegen/lanes codegen/lanes_filter codegen/lanes_if codegen/lanes_short \
+                   codegen/simd_mul_add codegen/simd_versions stdlib/math_rounding stdlib/stdlib_math; do
+            n=$(basename $t)
+            for m in "" --debug; do
+              build/gust build -q $m --cc gcc test/$t.goose -o build/gcc-$n
+              code=0
+              (cd test/$(dirname $t) && ../../build/gcc-$n > ../../build/gcc-$n.out 2> ../../build/gcc-$n.err) || code=$?
+              if [ $code -ne 0 ] && [ ! -f test/expected/$n.aborts ]; then cat build/gcc-$n.err; exit 1; fi
+              diff build/gcc-$n.out test/expected/$n.out
+              echo "ok $n ${m:-optimized}"
+            done
+          done
+
       - uses: actions/setup-node@v7
         with:
           node-version: '22'

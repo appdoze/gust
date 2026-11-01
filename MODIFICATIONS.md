@@ -450,6 +450,15 @@ git log upstream/master..main
   `compare/`'s n-body runs 44% faster under MSVC (0.11 s, against Rust's
   0.17) and 31% under gcc, with the same checksums; the lanes tests give
   their output under all three at -O0 and -O2.
+- simd versions under gcc (`src/runtime/runtime.h`, `GS_SIMD`), but on
+  Windows, where gcc's AVX spills misalign (gcc bug 54412), and in them
+  lanes on AVX's 256-bit registers (`src/runtime/runtime_ext.h`, the
+  `_avx` implementations, selected by `GS_L4_ISA`, which
+  `CodeGen::EmitSimdVersions` in `src/codegen_emit.h` switches around each
+  version). Under gcc `compare/`'s raytrace went from 1.07x Rust's cycles to
+  0.89x and n-body from 0.57x to 0.50x (`compare/quiet_bench.py`), with the
+  same checksums. `.github/workflows/ci.yml` builds the lanes, simd and
+  float tests with gcc on Linux, optimized and `--debug`.
 
 ## Safety checks
 

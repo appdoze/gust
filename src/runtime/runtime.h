@@ -331,9 +331,13 @@ GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
    versions are built by clang on x86-64, through its target attribute and
    inline assembly for cpuid; the contraction pragma above keeps their float
    results the baseline's, though both have FMA: only math's mul_add uses
-   it (GS_MUL_ADD_MODE, below). Elsewhere the versions are left out, and so
-   is the choice. -DGS_SIMD=0 or 1 lowers the level; nothing raises it. */
-#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__)
+   it (GS_MUL_ADD_MODE, below). Gust: gcc builds them too, but on Windows,
+   where its spills of AVX registers assume a 32-byte stack alignment that
+   the Windows ABI does not give (gcc bug 54412). Elsewhere the versions are
+   left out, and so is the choice. -DGS_SIMD=0 or 1 lowers the level;
+   nothing raises it. */
+#if (defined(__clang__) || (defined(__GNUC__) && !defined(_WIN32))) && \
+    (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__) && !defined(__MIRC__)
 #ifndef GS_SIMD
 #define GS_SIMD 2
 #endif

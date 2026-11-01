@@ -345,9 +345,13 @@ GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
    versions are built by clang on x86-64, through its target attribute and
    inline assembly for cpuid; the contraction pragma above keeps their float
    results the baseline's, though both have FMA: only math's mul_add uses
-   it (GS_MUL_ADD_MODE, below). Elsewhere the versions are left out, and so
-   is the choice. -DGS_SIMD=0 or 1 lowers the level; nothing raises it. */
-#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__)
+   it (GS_MUL_ADD_MODE, below). Gust: gcc builds them too, but on Windows,
+   where its spills of AVX registers assume a 32-byte stack alignment that
+   the Windows ABI does not give (gcc bug 54412). Elsewhere the versions are
+   left out, and so is the choice. -DGS_SIMD=0 or 1 lowers the level;
+   nothing raises it. */
+#if (defined(__clang__) || (defined(__GNUC__) && !defined(_WIN32))) && \
+    (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__) && !defined(__MIRC__)
 #ifndef GS_SIMD
 #define GS_SIMD 2
 #endif
@@ -358,14 +362,14 @@ GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
 #if GS_SIMD >= 1
 #define GS_SIMD_TARGET1 __attribute__((target("avx2,fma,bmi,bmi2,lzcnt,popcnt")))
 #define GS_SIMD_TARGET2 \
-    __attribute__((target("avx512f,avx512bw,avx512cd,avx512dq,avx512vl,avx2,fma,bmi,bmi2,lzcnt,popcnt")))
+)GSRT"
+R"GSRT(    __attribute__((target("avx512f,avx512bw,avx512cd,avx512dq,avx512vl,avx2,fma,bmi,bmi2,lzcnt,popcnt")))
 
 static inline void gs_cpuid(uint32_t leaf, uint32_t r[4]) {
     __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(0));
 }
 
-)GSRT"
-R"GSRT(/* The highest level both the CPU and the operating system support (the OS
+/* The highest level both the CPU and the operating system support (the OS
    has to save the wider registers: XGETBV's XCR0), capped at GS_SIMD. */
 static inline int gs_simd_detect(void) {
     uint32_t r[4], b7, xcr0, xhi;
@@ -516,12 +520,12 @@ static uint64_t gs_bytemask(int64_t k) {
    pointer is NULL where the slice was zero-filled (default<T>(), a default
    element), and C leaves all three undefined on a null pointer even for
    zero bytes. A copy of up to 16 bytes loads both overlapping halves before
-   it stores them, and one of up to 256 bytes moves 16 at a time, the last 16
+)GSRT"
+R"GSRT(   it stores them, and one of up to 256 bytes moves 16 at a time, the last 16
    overlapping, where the library's memcpy would take a call and a dispatch
    on the length; as the C library's memcpy, it takes runs that do not
    overlap. */
-)GSRT"
-R"GSRT(static void gs_memcpy(void *dst, const void *src, size_t n) {
+static void gs_memcpy(void *dst, const void *src, size_t n) {
     uint8_t *d = (uint8_t *)dst;
     const uint8_t *s = (const uint8_t *)src;
     if (n <= 16) {
@@ -687,13 +691,13 @@ static T gs_add_##SFX(T a, T b, const char *file, int line) { \
     return (T)r; } \
 static T gs_sub_##SFX(T a, T b, const char *file, int line) { \
     int64_t r = (int64_t)a - (int64_t)b; \
-    if (r < MIN || r > MAX) gs_ovf(a, "-", b, #SFX, file, line); \
+)GSRT"
+R"GSRT(    if (r < MIN || r > MAX) gs_ovf(a, "-", b, #SFX, file, line); \
     return (T)r; } \
 static T gs_mul_##SFX(T a, T b, const char *file, int line) { \
     int64_t r = (int64_t)a * (int64_t)b; \
     if (r < MIN || r > MAX) gs_ovf(a, "*", b, #SFX, file, line); \
-)GSRT"
-R"GSRT(    return (T)r; } \
+    return (T)r; } \
 static T gs_neg_##SFX(T a, const char *file, int line) { \
     int64_t r = -(int64_t)a; \
     if (r < MIN || r > MAX) gs_ovf_neg(a, #SFX, file, line); \
@@ -866,7 +870,8 @@ static uint64_t gs_divu_gen(uint64_t d, uint8_t *more) {
     } else {
         uint64_t twice = rem + rem;
         m += m;
-        if (twice >= d || twice < rem) m++;
+)GSRT"
+R"GSRT(        if (twice >= d || twice < rem) m++;
         *more = (uint8_t)(k | GS_DIVU_ADD);
     }
     return m + 1;
@@ -880,8 +885,7 @@ static uint64_t gs_divu_gen(uint64_t d, uint8_t *more) {
 static uint64_t gs_divu_q(uint64_t x, uint64_t magic, uint8_t more) {
 #if GS_HAVE_U128
     uint64_t q;
-)GSRT"
-R"GSRT(    if (!magic) return x >> more;
+    if (!magic) return x >> more;
     q = gs_mulhi_u64(magic, x);
     if (more & GS_DIVU_ADD) return (((x - q) >> 1) + q) >> (more & GS_DIVU_SHIFT);
     return q >> more;
@@ -1055,14 +1059,14 @@ GS_API uint8_t *gs_reserve_region(gs_stack *stack);
 /* The calling thread program's stack use, on stderr (GS_STACK_STATS):
    `stacks` is how many of its indexed data stacks exist. */
 GS_API void gs_stack_stats(int64_t stacks);
-/* Releases every region of the calling thread program, and what else the
+)GSRT"
+R"GSRT(/* Releases every region of the calling thread program, and what else the
    runtime keeps for its thread. */
 GS_API void gs_release_regions(void);
 
 /* ---------------------------------------------------------------------------
    Dynamic externs (§7.10): the shared libraries the program's extern blocks
-)GSRT"
-R"GSRT(   name, and the functions it calls through them, bound by name as the
+   name, and the functions it calls through them, bound by name as the
    program starts (docs/design/dynamic_externs.md). */
 
 /* A library: the name its block gives and, where the sidecar spells it for
@@ -1239,15 +1243,15 @@ static int64_t gs_pfor_chunk(int64_t lo, int64_t hi) {
 }
 
 /* The next chunk's first iteration, or -1 once none is left. The program's
-   own C need not include windows.h, so MSVC's is its intrinsic. */
+)GSRT"
+R"GSRT(   own C need not include windows.h, so MSVC's is its intrinsic. */
 #if GS_NEED_THREADS && defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
 #endif
 static int64_t gs_pfor_take(gs_pfor_job *j) {
 #if GS_NEED_THREADS
 #if defined(_MSC_VER) && !defined(__clang__)
-)GSRT"
-R"GSRT(    int64_t a = _InterlockedExchangeAdd64((volatile __int64 *)&j->next, j->chunk);
+    int64_t a = _InterlockedExchangeAdd64((volatile __int64 *)&j->next, j->chunk);
 #else
     int64_t a = __atomic_fetch_add(&j->next, j->chunk, __ATOMIC_SEQ_CST);
 #endif
@@ -1449,12 +1453,12 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
-   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
+)GSRT"
+R"GSRT(   first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
    (i + d < n); -1 if there is none. A set is std's ByteSet. */
 GS_API int64_t gs_scan_any(const uint8_t *p, int64_t n, const void *set);
 GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t d,
-)GSRT"
-R"GSRT(                            const void *b);
+                            const void *b);
 )GSRT"
     ) },
     { "runtime_impl.h", string_view(
@@ -4220,29 +4224,59 @@ R"GSRT(        (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };          
 #else
 #define GS_L4_INLINE static inline __attribute__((always_inline))
 #endif
-/* Lanes 0 and 1 in lo, 2 and 3 in hi. Every operation is SSE2's, which
-   rounds each lane as the scalar instruction does; a comparison's
+/* Each macro names the implementation GS_L4_ISA says: SSE2's (_sse), and
+   under gcc AVX's (_avx) in a simd version's AVX2 and AVX-512 bodies, which
+   CodeGen::EmitSimdVersions brackets with GS_L4_WIDE and GS_L4_BASE. */
+#define GS_L4_CAT2(a, b) a##b
+#define GS_L4_CAT(a, b) GS_L4_CAT2(a, b)
+#define GS_L4_BASE _sse
+#define GS_L4_ISA GS_L4_BASE
+#define gs_l4d GS_L4_CAT(gs_l4x_d, GS_L4_ISA)
+#define gs_l4m GS_L4_CAT(gs_l4x_m, GS_L4_ISA)
+#define gs_l4d_splat GS_L4_CAT(gs_l4x_splat, GS_L4_ISA)
+#define gs_l4m_splat GS_L4_CAT(gs_l4x_msplat, GS_L4_ISA)
+#define gs_l4d_uni(x) gs_l4d_splat((double)(x))
+#define gs_l4d_make GS_L4_CAT(gs_l4x_make, GS_L4_ISA)
+#define gs_l4d_get GS_L4_CAT(gs_l4x_get, GS_L4_ISA)
+#define gs_l4d_add GS_L4_CAT(gs_l4x_add, GS_L4_ISA)
+#define gs_l4d_sub GS_L4_CAT(gs_l4x_sub, GS_L4_ISA)
+#define gs_l4d_mul GS_L4_CAT(gs_l4x_mul, GS_L4_ISA)
+#define gs_l4d_div GS_L4_CAT(gs_l4x_div, GS_L4_ISA)
+#define gs_l4d_neg GS_L4_CAT(gs_l4x_neg, GS_L4_ISA)
+#define gs_l4d_lt GS_L4_CAT(gs_l4x_lt, GS_L4_ISA)
+#define gs_l4d_gt GS_L4_CAT(gs_l4x_gt, GS_L4_ISA)
+#define gs_l4d_le GS_L4_CAT(gs_l4x_le, GS_L4_ISA)
+#define gs_l4d_ge GS_L4_CAT(gs_l4x_ge, GS_L4_ISA)
+#define gs_l4d_eq GS_L4_CAT(gs_l4x_eq, GS_L4_ISA)
+#define gs_l4d_ne GS_L4_CAT(gs_l4x_ne, GS_L4_ISA)
+#define gs_l4m_and GS_L4_CAT(gs_l4x_and, GS_L4_ISA)
+#define gs_l4m_or GS_L4_CAT(gs_l4x_or, GS_L4_ISA)
+#define gs_l4m_not GS_L4_CAT(gs_l4x_not, GS_L4_ISA)
+#define gs_l4d_blend GS_L4_CAT(gs_l4x_blend, GS_L4_ISA)
+#define gs_l4m_any GS_L4_CAT(gs_l4x_any, GS_L4_ISA)
+#define gs_l4d_sqrt GS_L4_CAT(gs_l4x_sqrt, GS_L4_ISA)
+/* SSE2: lanes 0 and 1 in lo, 2 and 3 in hi. Every operation is SSE2's,
+   which rounds each lane as the scalar instruction does; a comparison's
    unordered lanes are false but for !=, as in C. */
-typedef struct { __m128d lo, hi; } gs_l4d;
-typedef struct { __m128d lo, hi; } gs_l4m;
-GS_L4_INLINE gs_l4d gs_l4d_splat(double x) {
-    gs_l4d r;
+typedef struct { __m128d lo, hi; } gs_l4x_d_sse;
+typedef struct { __m128d lo, hi; } gs_l4x_m_sse;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_splat_sse(double x) {
+    gs_l4x_d_sse r;
     r.lo = r.hi = _mm_set1_pd(x);
     return r;
 }
-GS_L4_INLINE gs_l4m gs_l4m_splat(long long x) {
-    gs_l4m r;
+GS_L4_INLINE gs_l4x_m_sse gs_l4x_msplat_sse(long long x) {
+    gs_l4x_m_sse r;
     r.lo = r.hi = _mm_castsi128_pd(_mm_set1_epi64x(x));
     return r;
 }
-#define gs_l4d_uni(x) gs_l4d_splat((double)(x))
-GS_L4_INLINE gs_l4d gs_l4d_make(double a, double b, double c, double d) {
-    gs_l4d r;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_make_sse(double a, double b, double c, double d) {
+    gs_l4x_d_sse r;
     r.lo = _mm_setr_pd(a, b);
     r.hi = _mm_setr_pd(c, d);
     return r;
 }
-GS_L4_INLINE double gs_l4d_get(gs_l4d v, int l) {
+GS_L4_INLINE double gs_l4x_get_sse(gs_l4x_d_sse v, int l) {
     __m128d h = l < 2 ? v.lo : v.hi;
     return _mm_cvtsd_f64(l & 1 ? _mm_unpackhi_pd(h, h) : h);
 }
@@ -4253,47 +4287,90 @@ GS_L4_INLINE double gs_l4d_get(gs_l4d v, int l) {
         r.hi = op(a.hi, b.hi);                                                \
         return r;                                                             \
     }
-GS_L4_OP(gs_l4d_add, gs_l4d, gs_l4d, _mm_add_pd)
-GS_L4_OP(gs_l4d_sub, gs_l4d, gs_l4d, _mm_sub_pd)
-GS_L4_OP(gs_l4d_mul, gs_l4d, gs_l4d, _mm_mul_pd)
-GS_L4_OP(gs_l4d_div, gs_l4d, gs_l4d, _mm_div_pd)
-GS_L4_OP(gs_l4d_lt, gs_l4m, gs_l4d, _mm_cmplt_pd)
-GS_L4_OP(gs_l4d_gt, gs_l4m, gs_l4d, _mm_cmpgt_pd)
-GS_L4_OP(gs_l4d_le, gs_l4m, gs_l4d, _mm_cmple_pd)
-GS_L4_OP(gs_l4d_ge, gs_l4m, gs_l4d, _mm_cmpge_pd)
-GS_L4_OP(gs_l4d_eq, gs_l4m, gs_l4d, _mm_cmpeq_pd)
-GS_L4_OP(gs_l4d_ne, gs_l4m, gs_l4d, _mm_cmpneq_pd)
-GS_L4_OP(gs_l4m_and, gs_l4m, gs_l4m, _mm_and_pd)
-GS_L4_OP(gs_l4m_or, gs_l4m, gs_l4m, _mm_or_pd)
-GS_L4_INLINE gs_l4d gs_l4d_neg(gs_l4d a) {
+GS_L4_OP(gs_l4x_add_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_add_pd)
+GS_L4_OP(gs_l4x_sub_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_sub_pd)
+GS_L4_OP(gs_l4x_mul_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_mul_pd)
+GS_L4_OP(gs_l4x_div_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_div_pd)
+GS_L4_OP(gs_l4x_lt_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmplt_pd)
+GS_L4_OP(gs_l4x_gt_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpgt_pd)
+GS_L4_OP(gs_l4x_le_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmple_pd)
+GS_L4_OP(gs_l4x_ge_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpge_pd)
+GS_L4_OP(gs_l4x_eq_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpeq_pd)
+GS_L4_OP(gs_l4x_ne_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpneq_pd)
+GS_L4_OP(gs_l4x_and_sse, gs_l4x_m_sse, gs_l4x_m_sse, _mm_and_pd)
+GS_L4_OP(gs_l4x_or_sse, gs_l4x_m_sse, gs_l4x_m_sse, _mm_or_pd)
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_neg_sse(gs_l4x_d_sse a) {
     __m128d s = _mm_set1_pd(-0.0);
-    gs_l4d r;
+    gs_l4x_d_sse r;
     r.lo = _mm_xor_pd(a.lo, s);
     r.hi = _mm_xor_pd(a.hi, s);
     return r;
 }
-GS_L4_INLINE gs_l4m gs_l4m_not(gs_l4m a) {
+GS_L4_INLINE gs_l4x_m_sse gs_l4x_not_sse(gs_l4x_m_sse a) {
     __m128d s = _mm_castsi128_pd(_mm_set1_epi64x(-1));
-    gs_l4m r;
+    gs_l4x_m_sse r;
     r.lo = _mm_xor_pd(a.lo, s);
     r.hi = _mm_xor_pd(a.hi, s);
     return r;
 }
-GS_L4_INLINE gs_l4d gs_l4d_blend(gs_l4m m, gs_l4d a, gs_l4d b) {
-    gs_l4d r;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_blend_sse(gs_l4x_m_sse m, gs_l4x_d_sse a, gs_l4x_d_sse b) {
+    gs_l4x_d_sse r;
     r.lo = _mm_or_pd(_mm_and_pd(m.lo, a.lo), _mm_andnot_pd(m.lo, b.lo));
     r.hi = _mm_or_pd(_mm_and_pd(m.hi, a.hi), _mm_andnot_pd(m.hi, b.hi));
     return r;
 }
-GS_L4_INLINE int gs_l4m_any(gs_l4m m) { return _mm_movemask_pd(_mm_or_pd(m.lo, m.hi)) != 0; }
+GS_L4_INLINE int gs_l4x_any_sse(gs_l4x_m_sse m) { return _mm_movemask_pd(_mm_or_pd(m.lo, m.hi)) != 0; }
 /* SSE2's square root, without errno: the correctly rounded root, and NaN
    for a negative argument, as gs_sqrt's. */
-GS_L4_INLINE gs_l4d gs_l4d_sqrt(gs_l4d a) {
-    gs_l4d r;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_sqrt_sse(gs_l4x_d_sse a) {
+    gs_l4x_d_sse r;
     r.lo = _mm_sqrt_pd(a.lo);
     r.hi = _mm_sqrt_pd(a.hi);
     return r;
 }
+#if defined(__GNUC__) && GS_SIMD >= 1
+/* AVX: one 256-bit register per lane vector, for gcc's simd versions,
+   whose targets include the helpers' own (AVX2). The same operations lane
+   by lane, left unfused by the contraction pragma (runtime.h). */
+#include <immintrin.h>
+#define GS_L4_WIDE _avx
+#define GS_L4A_INLINE static inline __attribute__((always_inline, target("avx2")))
+typedef __m256d gs_l4x_d_avx;
+typedef __m256d gs_l4x_m_avx;
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_splat_avx(double x) { return _mm256_set1_pd(x); }
+)GSRT"
+R"GSRT(GS_L4A_INLINE gs_l4x_m_avx gs_l4x_msplat_avx(long long x) { return _mm256_castsi256_pd(_mm256_set1_epi64x(x)); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_make_avx(double a, double b, double c, double d) {
+    return _mm256_setr_pd(a, b, c, d);
+}
+GS_L4A_INLINE double gs_l4x_get_avx(gs_l4x_d_avx v, int l) {
+    __m128d h = l < 2 ? _mm256_castpd256_pd128(v) : _mm256_extractf128_pd(v, 1);
+    return _mm_cvtsd_f64(l & 1 ? _mm_unpackhi_pd(h, h) : h);
+}
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_add_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_add_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_sub_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_sub_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_mul_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_mul_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_div_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_div_pd(a, b); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_lt_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_LT_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_gt_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_GT_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_le_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_LE_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_ge_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_GE_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_eq_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_EQ_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_ne_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_NEQ_UQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_and_avx(gs_l4x_m_avx a, gs_l4x_m_avx b) { return _mm256_and_pd(a, b); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_or_avx(gs_l4x_m_avx a, gs_l4x_m_avx b) { return _mm256_or_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_neg_avx(gs_l4x_d_avx a) { return _mm256_xor_pd(a, _mm256_set1_pd(-0.0)); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_not_avx(gs_l4x_m_avx a) {
+    return _mm256_xor_pd(a, _mm256_castsi256_pd(_mm256_set1_epi64x(-1)));
+}
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_blend_avx(gs_l4x_m_avx m, gs_l4x_d_avx a, gs_l4x_d_avx b) {
+    return _mm256_or_pd(_mm256_and_pd(m, a), _mm256_andnot_pd(m, b));
+}
+GS_L4A_INLINE int gs_l4x_any_avx(gs_l4x_m_avx m) { return _mm256_movemask_pd(m) != 0; }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_sqrt_avx(gs_l4x_d_avx a) { return _mm256_sqrt_pd(a); }
+#else
+#define GS_L4_WIDE _sse
+#endif
 #endif
 
 /* math's mul_add (stdlib/math.goose): x * y + z, fused into one rounding
@@ -4339,8 +4416,7 @@ static float gs_mul_addf(float x, float y, float z) {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
 #define GS_LIBM_SYM2(p, f) #p #f
 #define GS_LIBM_SYM(p, f) GS_LIBM_SYM2(p, f)
-)GSRT"
-R"GSRT(#define GS_LIBM
+#define GS_LIBM
 #define GS_LIBM1(f) __asm__(GS_LIBM_SYM(__USER_LABEL_PREFIX__, f)) __attribute__((const));
 #define GS_LIBM2(f) GS_LIBM1(f)
 #else
@@ -4423,7 +4499,8 @@ static int64_t gs_ctz(uint64_t x) {
     unsigned long i;
     return _BitScanForward64(&i, x) ? (int64_t)i : 64;
 #else
-    int64_t n = 0;
+)GSRT"
+R"GSRT(    int64_t n = 0;
     if (!x) return 64;
     while (!(x & 1)) {
         x >>= 1;
