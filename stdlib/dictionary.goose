@@ -26,6 +26,13 @@
 // both clear the tombstones. `left` counts the empty slots that may still
 // be filled before that.
 //
+// A sender who knows the hash can choose keys that all collide, and with
+// them make each insert walk past every one before it. So a probe that has
+// seen too much, by DICT_FLOOD's measure, marks the table as under attack:
+// it gets a random seed (nonzero from then on) and rehashes keyed by it. Until
+// then a table costs what it would without this, and its order is the same
+// from run to run; Rust and Go pay for a keyed hash on every key instead.
+//
 // The group array is grow-shrink so that growth can resize it in place
 // through a reference (spec §5.2); as a consequence a reference obtained
 // from get/get_or_insert, or a binder inside each, may not be in scope at
@@ -40,7 +47,47 @@ const DICT_DELETED = 0xFE;
 
 struct dictionary_slot<K, V> { key: K, val: V }
 struct dictionary_group<K, V> { ctrl: u64, slots: dictionary_slot<K, V>[8] }
-struct dictionary<K, V> { count: i64 = 0, left: i64 = 0, groups: dictionary_group<K, V>[>..<] = [] }
+struct dictionary<K, V> { count: i64 = 0, left: i64 = 0, seed: u64 = 0, groups: dictionary_group<K, V>[>..<] = [] }
+
+// How much of a probe it takes for an insert to call it an attack. A group
+// passed counts 1 and a key compared in vain DICT_FLOOD_MISS. Ordinary keys
+// stay well short of it: in 40 million probes of tables at their fullest the
+// longest passed 36 groups, and a compare fails for one tag in 128. Keys that
+// collide outright reach it by the sixteenth, and a table wrong about ordinary
+// keys only hashes more slowly from then on.
+const DICT_FLOOD = 64;
+const DICT_FLOOD_MISS = 4;
+
+// key's hash for a table of this seed. The hash of a key type made of an
+// integer can't collide, so the seed mixed in at the end is enough for those;
+// the hashes that can, of bytes and of combinations, take it as a key too.
+inline fn dict_hash<K>(seed: u64, key: K) -> u64 {
+    if (seed | hash_flood_key) != 0 { return dict_hash_keyed(seed, key); }
+    return key.hash();
+}
+
+// The key is put back after, and cleared for a table of no seed, as a key
+// type's hash may itself look something up in another table.
+cold fn dict_hash_keyed<K>(seed: u64, key: K) -> u64 {
+    let outer = hash_flood_key;
+    hash_flood_key = seed;
+    let h = key.hash();
+    hash_flood_key = outer;
+    if seed == 0 { return h; }
+    var st = hash_sip_start(seed);
+    hash_sip_word(st, h);
+    return hash_sip_end(st);
+}
+
+// The table is under attack: from now on it is keyed, and every key in it
+// goes where that seed puts it. Returns the slot that key has moved to.
+cold fn dict_protect<K, V>(d: dictionary<K, V>&, key: K) -> dictionary_slot<K, V>& {
+    d.seed = hash_flood_seed() | 1;
+    dict_grow(d, d.groups.len);
+    let s = dict_find(d, key);
+    if s { return s; }
+    abort("dictionary: lost a key");
+}
 
 // The bytes of control word c that equal the tag t8 holds in each byte,
 // each as its high bit: the SWAR zero-byte test on c ^ t8. A byte just above
@@ -76,12 +123,12 @@ fn dict_set(c: u64, j: i64, b: u64) -> u64 {
 // The slot holding key, or null. Like dict_put and remove, it hands back
 // the slot where the probe found it, whose group bounds-check elimination
 // knows to be one, rather than an index that the caller would check again.
-fn dict_find<K, V>(d: dictionary<K, V>&, key: K) -> dictionary_slot<K, V>? {
+inline fn dict_find<K, V>(d: dictionary<K, V>&, key: K) -> dictionary_slot<K, V>? {
     // An empty table has no groups, which also tells bounds-check
     // elimination that every `& mask` below is a group.
     if d.count == 0 { return null; }
     if d.groups.len == 0 { return null; }
-    let h = key.hash();
+    let h = dict_hash(d.seed, key);
     let t8 = (h >> 57) * DICT_LSB;
     let mask = d.groups.len - 1;
     var g = (h & (mask as u64)) as i64;
@@ -108,11 +155,12 @@ fn dict_put<K, V>(d: dictionary<K, V>&, key: K, val: V) -> dictionary_slot<K, V>
     // Never taken (dict_room comes first), and with it every `& mask` below
     // is a group that needs no bounds check.
     if d.groups.len == 0 { abort("dictionary: no room"); }
-    let h = key.hash();
+    let h = dict_hash(d.seed, key);
     let t8 = (h >> 57) * DICT_LSB;
     let mask = d.groups.len - 1;
     var g = (h & (mask as u64)) as i64;
     var step = 0;
+    var misses = 0;
     // The first slot free on the way, by group and slot.
     var fg = -1;
     var fj = 0;
@@ -123,6 +171,7 @@ fn dict_put<K, V>(d: dictionary<K, V>&, key: K, val: V) -> dictionary_slot<K, V>
             let j = dict_first(m);
             if d.groups[g].slots[j].key == key { return d.groups[g].slots[j]; }
             m &= m - 1;
+            misses += 1;
         }
         let free = c & DICT_MSB;
         if free != 0 {
@@ -143,6 +192,7 @@ fn dict_put<K, V>(d: dictionary<K, V>&, key: K, val: V) -> dictionary_slot<K, V>
     d.groups[g].ctrl = dict_set(c, j, h >> 57);
     d.count += 1;
     d.groups[g].slots[j] = dictionary_slot<K, V> { key, val };
+    if step + misses * DICT_FLOOD_MISS >= DICT_FLOOD && d.seed == 0 { return dict_protect(d, key); }
     return d.groups[g].slots[j];
 }
 
@@ -191,7 +241,7 @@ fn dict_grow<K, V>(d: dictionary<K, V>&, n: i64) {
     for i in old {
         for j in 8 {
             while dict_byte(d.groups[i].ctrl, j) == DICT_DELETED {
-                let h = d.groups[i].slots[j].key.hash();
+                let h = dict_hash(d.seed, d.groups[i].slots[j].key);
                 var g = (h & (mask as u64)) as i64;
                 var step = 0;
                 var free = d.groups[g].ctrl & DICT_MSB;
@@ -262,7 +312,7 @@ fn update<K, V, F>(d: dictionary<K, V>&, key: K, v0: V) {
 fn remove<K, V>(d: dictionary<K, V>&, key: K) -> bool {
     if d.count == 0 { return false; }
     if d.groups.len == 0 { return false; }
-    let h = key.hash();
+    let h = dict_hash(d.seed, key);
     let t8 = (h >> 57) * DICT_LSB;
     let mask = d.groups.len - 1;
     var g = (h & (mask as u64)) as i64;

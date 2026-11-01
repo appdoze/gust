@@ -202,6 +202,13 @@ R"GSRT(#if GS_STACK_RESERVE > (1ull << 48)
 #define GS_NORETURN __attribute__((noreturn))
 #define GS_NOINLINE __attribute__((noinline))
 #endif
+/* Gust: a cold fn (spec §7.15). To gcc and clang a branch to one is unlikely,
+   so what it needs saved is saved on that branch, not on the way past it. */
+#if defined(__GNUC__) || defined(__clang__)
+#define GS_COLD __attribute__((noinline, cold))
+#else
+#define GS_COLD GS_NOINLINE
+#endif
 /* Inlined at every call: the byte search's helpers (runtime_impl.h), and a
    function Goose wanted to inline but could not (FnSpec::cinline). */
 #if defined(__GNUC__) || defined(__clang__)
@@ -362,12 +369,12 @@ GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
 #endif
 
 /* simd functions (§7.12): the compiler writes each one's body once per
-   instruction-set level, the baseline under the function's name, and the
+)GSRT"
+R"GSRT(   instruction-set level, the baseline under the function's name, and the
    baseline calls the highest version the CPU supports. GS_SIMD is the
    highest level built: 0 just the baseline, 1 adds an AVX2 version (with
    FMA, BMI1, BMI2, LZCNT and POPCNT, which the check below asks for one by
-)GSRT"
-R"GSRT(   one), 2 an AVX-512 one as well (F, BW, CD, DQ and VL: x86-64-v4). The
+   one), 2 an AVX-512 one as well (F, BW, CD, DQ and VL: x86-64-v4). The
    versions are built by clang on x86-64, through its target attribute and
    inline assembly for cpuid; the contraction pragma above keeps their float
    results the baseline's, though both have FMA: only math's mul_add uses
@@ -539,14 +546,14 @@ static void gs_first_touch(void *d, size_t n) {
 #ifdef __TINYC__
 #define GS_KSZ(n, lo, hi) (__builtin_constant_p(n) && (n) >= (lo) && (n) <= (hi))
 #define GS_AT(T, p, k) (*(T *)((uint8_t *)(p) + (k)))
-#define GS_CP(T, d, s, k) (GS_AT(T, d, k) = GS_AT(const T, s, k))
+)GSRT"
+R"GSRT(#define GS_CP(T, d, s, k) (GS_AT(T, d, k) = GS_AT(const T, s, k))
 #define GS_MEMCPY(d, s, n) \
     (GS_KSZ(n, 8, 8) ? (void)GS_CP(uint64_t, d, s, 0) \
      : GS_KSZ(n, 4, 4) ? (void)GS_CP(uint32_t, d, s, 0) \
      : GS_KSZ(n, 1, 1) ? (void)GS_CP(uint8_t, d, s, 0) \
      : GS_KSZ(n, 2, 2) ? (void)GS_CP(uint16_t, d, s, 0) \
-)GSRT"
-R"GSRT(     : GS_KSZ(n, 3, 3) ? (void)(GS_CP(uint16_t, d, s, 0), GS_CP(uint8_t, d, s, 2)) \
+     : GS_KSZ(n, 3, 3) ? (void)(GS_CP(uint16_t, d, s, 0), GS_CP(uint8_t, d, s, 2)) \
      : GS_KSZ(n, 5, 7) ? (void)(GS_CP(uint32_t, d, s, 0), GS_CP(uint32_t, d, s, (n) - 4)) \
      : GS_KSZ(n, 9, 16) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, (n) - 8)) \
      : GS_KSZ(n, 17, 32) ? (void)(GS_CP(uint64_t, d, s, 0), GS_CP(uint64_t, d, s, 8), \
@@ -702,14 +709,14 @@ GS_MEMEQ_STATIC int gs_memeq(const void *a, const void *b, size_t n) {
     ((T)(b) ? (T)((int64_t)(T)(a) / (int64_t)(T)(b)) : (gs_divfail((f), (l)), (T)0))
 #define GS_MODS(T, t, a, b, f, l) \
     ((T)(b) == 0 ? (gs_divfail((f), (l)), (T)0) \
-     : (T)(((t) = (int64_t)(T)(a) % (int64_t)(T)(b)) < 0 \
+)GSRT"
+R"GSRT(     : (T)(((t) = (int64_t)(T)(a) % (int64_t)(T)(b)) < 0 \
                ? (t) + ((T)(b) < 0 ? -(int64_t)(T)(b) : (int64_t)(T)(b)) : (t)))
 
 #define gs_div_u8(a, b, f, l)  GS_DIVU(uint8_t, a, b, f, l)
 #define gs_div_u16(a, b, f, l) GS_DIVU(uint16_t, a, b, f, l)
 #define gs_div_u32(a, b, f, l) GS_DIVU(uint32_t, a, b, f, l)
-)GSRT"
-R"GSRT(#define gs_div_u64(a, b, f, l) GS_DIVU(uint64_t, a, b, f, l)
+#define gs_div_u64(a, b, f, l) GS_DIVU(uint64_t, a, b, f, l)
 #define gs_mod_u8(a, b, f, l)  GS_MODU(uint8_t, a, b, f, l)
 #define gs_mod_u16(a, b, f, l) GS_MODU(uint16_t, a, b, f, l)
 #define gs_mod_u32(a, b, f, l) GS_MODU(uint32_t, a, b, f, l)
@@ -866,15 +873,15 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 
 #define gs_add_i64(a, b, f, l) ((int64_t)((uint64_t)(a) + (uint64_t)(b)))
 #define gs_sub_i64(a, b, f, l) ((int64_t)((uint64_t)(a) - (uint64_t)(b)))
-#define gs_mul_i64(a, b, f, l) ((int64_t)((uint64_t)(a) * (uint64_t)(b)))
+)GSRT"
+R"GSRT(#define gs_mul_i64(a, b, f, l) ((int64_t)((uint64_t)(a) * (uint64_t)(b)))
 #define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
 #define gs_shl_i64(a, n) ((int64_t)((uint64_t)(a) << ((n) & 63)))
 #define gs_shr_i64(a, n) ((int64_t)((a) >> ((n) & 63)))
 
 #define gs_add_u64(a, b) ((uint64_t)((a) + (b)))
 #define gs_sub_u64(a, b) ((uint64_t)((a) - (b)))
-)GSRT"
-R"GSRT(#define gs_mul_u64(a, b) ((uint64_t)((a) * (b)))
+#define gs_mul_u64(a, b) ((uint64_t)((a) * (b)))
 #define gs_shl_u64(a, n) ((uint64_t)((a) << ((n) & 63)))
 #define gs_shr_u64(a, n) ((uint64_t)((a) >> ((n) & 63)))
 
@@ -1070,15 +1077,15 @@ static int64_t gs_f2ichk(double d, int f32, int64_t lo, int64_t hi, const char *
     if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0))
         gs_asfail_f("out of range", d, f32, type, file, line);
     int64_t v = (int64_t)d;
-    if (v < lo || v > hi) gs_asfail_f("out of range", d, f32, type, file, line);
+)GSRT"
+R"GSRT(    if (v < lo || v > hi) gs_asfail_f("out of range", d, f32, type, file, line);
     if ((double)v != d) gs_asfail_f("changes the value", d, f32, type, file, line);
     return v;
 }
 static uint64_t gs_f2uchk(double d, int f32, const char *file, int line) {
     if (!(d >= 0 && d < 18446744073709551616.0))
         gs_asfail_f("out of range", d, f32, "u64", file, line);
-)GSRT"
-R"GSRT(    uint64_t v = (uint64_t)d;
+    uint64_t v = (uint64_t)d;
     if ((double)v != d) gs_asfail_f("changes the value", d, f32, "u64", file, line);
     return v;
 }
@@ -1235,15 +1242,15 @@ GS_DATA GS_TLS int64_t gs_cb_base;
 
 /* The current program instance's globals (goose_spec.md 11.1), a struct the
    compiler lays out: main's is its one static instance, a worker's a fresh
-   copy of the globals its program uses, taken from the spawning instance
+)GSRT"
+R"GSRT(   copy of the globals its program uses, taken from the spawning instance
    at spawn like the arguments (11.2). No global is shared between program
    instances; the only C statics a program shares are read-only ones. */
 GS_DATA GS_TLS void *gs_gl;
 
 /* Gust: under MSVC's two units (GS_TU_SPLIT) gs_stks has external linkage,
    and MSVC, which then cannot rule out that a store through some pointer
-)GSRT"
-R"GSRT(   changes it, reloaded it before nearly every stack access, where the
+   changes it, reloaded it before nearly every stack access, where the
    static one stayed in a register (compare/'s astar ran 5% slower). A
    thread's block does not change while Goose code runs on it, so there a
    function that indexes it first takes it into a local, GS_STKS_LOCAL,
@@ -1457,14 +1464,14 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
 }
 
 /* ---------------------------------------------------------------------------
-   Verified loading (docs/design/serialization.md): what the generated
+)GSRT"
+R"GSRT(   Verified loading (docs/design/serialization.md): what the generated
    gs_verify_<T> walkers are built from. The bytes are untrusted until the
    walk finishes, so every read here is bounded by the image end and reports
    a malformed encoding instead of running past it. */
 
 /* The ULEB128 at p, or 0 if it runs past `end`, past ten bytes, or carries
-)GSRT"
-R"GSRT(   payload bits above the 64th, or is not shortest. The result is the byte count. */
+   payload bits above the 64th, or is not shortest. The result is the byte count. */
 static int64_t gs_uleb_check(const uint8_t *p, const uint8_t *end, uint64_t *out) {
     uint64_t v = 0;
     int shift = 0;
@@ -5061,6 +5068,7 @@ GS_API int64_t gs_os_time_ns(void);
 GS_API int64_t gs_os_clock_ns(void);
 GS_API void gs_os_sleep_ms(int64_t ms);
 GS_API uint64_t gs_os_random_u64(void);
+GS_API uint64_t gs_os_key_u64(void);
 /* os.trim_memory: discards unused complete pages of this thread program's
    data stacks. Defined with the region registry it walks (runtime_impl.h),
    but declared here like the other os primitives, so that no prototype is
@@ -5962,6 +5970,23 @@ GS_API uint64_t gs_os_random_u64(void) {
 #endif
     seed = gs_os_mix64(seed ^ (uint64_t)(uintptr_t)&counter);
     return gs_os_mix64(seed ^ count);
+}
+
+/* A key no one outside the process can guess, for a dictionary under attack,
+   which is the one thing that asks for it: on Windows from the system's
+   generator (loaded here, which Go does at every start and this does only
+   then), where gs_os_random_u64 mixes the clocks. */
+GS_API uint64_t gs_os_key_u64(void) {
+#ifdef _WIN32
+    HMODULE m = LoadLibraryExW(L"bcryptprimitives.dll", NULL, 0x00000800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
+    if (m) {
+        BOOL (WINAPI *prng)(PUCHAR, SIZE_T);
+        *(FARPROC *)&prng = GetProcAddress(m, "ProcessPrng");
+        uint64_t v;
+        if (prng && prng((PUCHAR)&v, sizeof v)) return v;
+    }
+#endif
+    return gs_os_random_u64();
 }
 )GSRT"
     ) },

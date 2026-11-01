@@ -1484,6 +1484,7 @@ struct SFunction {
     bool has_rets = false;
     bool isrec = false;         // Declared with `recursive`.
     bool isinline = false;      // Declared with `inline`: inlined whatever its size (§7.13).
+    bool iscold = false;        // Gust: declared with `cold`: runs rarely, and never inlined (§7.15).
     bool issimd = false;        // Declared with `simd`: one version per instruction set (§7.12).
     // Declared with `checkfree`, or nested in such a function: a bounds
     // check left in any copy of the body is an error (bce.h).

@@ -56,6 +56,40 @@ large table cost more than before where the old table had just doubled:
 two cache lines (control word, then slot) at up to 7/8 load against one at
 as little as 1/3.
 
+## A hash that is keyed only when it has to be
+
+**Where it falls short.** A hash that is not keyed can be attacked: for 24-byte
+keys, the second word can undo what the first did to the state, so any number
+of keys hash alike, and each insert then walks past all the keys before it.
+16,000 such keys took a second, and 64,000 twenty times that.
+
+**What others do.** Rust's `HashMap` hashes every key with SipHash-1-3 under a
+random key, and Go's maps use a random seed with AES or wyhash. Both pay for it
+on every operation, in programs nobody is attacking, and their order changes
+between runs.
+
+**The design.** Keep the fast hash and watch for the attack. The probe already
+knows what it has seen: how many full groups it passed, and how many keys it
+compared in vain, which for ordinary keys is one tag in 128. An insert that has
+seen too much gives the table a seed, nonzero from then on, and rehashes it. A
+table with a seed hashes keys under it: SipHash of the bytes, and of the
+combination in `hash_combine`, through a global that says which seed applies,
+and SipHash again over the result, which is all an integer needs, its plain
+hash being a bijection.
+
+**What it costs.** One load and one test per operation, and that only because
+`cold fn` keeps the branch to the slow path from costing registers on the way
+past it. The limit has to sit above what ordinary keys reach: in tables at
+their fullest, 60% of probes pass a group and the longest passed 36 in 40
+million, so a limit of 32 groups would have gone off on its own. So a group
+counts 1 and a failed compare 4, and the limit is 64: 16 keys that collide
+outright reach it, and so do 64 groups of keys that only agree in their low bits.
+
+**What it leaves.** Keys built to stay just under the limit, in sets of fifteen
+that collide, cost at most that many compares per operation; there is nothing
+quadratic left to reach for. A key type whose `hash` does not use `hash_combine`
+can still be made to collide, since nothing gives it the key.
+
 ## MSVC's AVX versions, in a translation unit of their own
 
 **Where it falls short.** MSVC builds no simd versions: it has no

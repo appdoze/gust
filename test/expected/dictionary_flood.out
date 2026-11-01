@@ -1,0 +1,11 @@
+ordinary: keyed false false false
+text: 20000 of 20000 with one hash; keyed true; 20000 found
+absent: false
+removed 10000, left 10000, count 10000
+put back: count 20000, sum 200010000
+cleared: count 0, contains false
+refilled: count 20000, keyed true
+ints, one tag: keyed true; 20000 of 20000 found
+ints, many tags: keyed true; 20000 of 20000 found
+pairs: 20000 of 20000 with one hash; keyed true; 20000 found
+nested: keyed true, inner keyed false; 2000 of 2000 found

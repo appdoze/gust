@@ -188,6 +188,13 @@ float log2f(float x); float log10f(float x); float powf(float x, float y);
 #define GS_NORETURN __attribute__((noreturn))
 #define GS_NOINLINE __attribute__((noinline))
 #endif
+/* Gust: a cold fn (spec §7.15). To gcc and clang a branch to one is unlikely,
+   so what it needs saved is saved on that branch, not on the way past it. */
+#if defined(__GNUC__) || defined(__clang__)
+#define GS_COLD __attribute__((noinline, cold))
+#else
+#define GS_COLD GS_NOINLINE
+#endif
 /* Inlined at every call: the byte search's helpers (runtime_impl.h), and a
    function Goose wanted to inline but could not (FnSpec::cinline). */
 #if defined(__GNUC__) || defined(__clang__)

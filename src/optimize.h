@@ -780,6 +780,7 @@ inline Node *Optimizer::TryInline(Call *c) {
     auto K = c->spec;
     auto &info = inlineinfo[K];
     if (!K->live || !K->body) return nullptr;
+    if (K->sf->iscold) return nullptr;
     auto ncuhere = loopdepth > 0 && !colddepth ? ncu * LOOPNCU : ncu;
     // An `inline fn` passes the size rules wherever inlining is on.
     auto small = (K->sf->isinline && nc > 0) || info.nodecount < nc || info.nodecount * K->uses < ncuhere;

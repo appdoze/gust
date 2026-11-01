@@ -863,3 +863,20 @@ GS_API uint64_t gs_os_random_u64(void) {
     seed = gs_os_mix64(seed ^ (uint64_t)(uintptr_t)&counter);
     return gs_os_mix64(seed ^ count);
 }
+
+/* A key no one outside the process can guess, for a dictionary under attack,
+   which is the one thing that asks for it: on Windows from the system's
+   generator (loaded here, which Go does at every start and this does only
+   then), where gs_os_random_u64 mixes the clocks. */
+GS_API uint64_t gs_os_key_u64(void) {
+#ifdef _WIN32
+    HMODULE m = LoadLibraryExW(L"bcryptprimitives.dll", NULL, 0x00000800 /* LOAD_LIBRARY_SEARCH_SYSTEM32 */);
+    if (m) {
+        BOOL (WINAPI *prng)(PUCHAR, SIZE_T);
+        *(FARPROC *)&prng = GetProcAddress(m, "ProcessPrng");
+        uint64_t v;
+        if (prng && prng((PUCHAR)&v, sizeof v)) return v;
+    }
+#endif
+    return gs_os_random_u64();
+}

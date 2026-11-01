@@ -478,6 +478,16 @@ git log upstream/master..main
   checksums. `.github/workflows/ci.yml` builds the lanes and simd tests with
   MSVC on Windows, optimized and `--debug`, each with its AVX2 unit.
 
+## `cold fn`
+
+`cold fn` (spec §7.15) marks a function that runs rarely. It is never inlined,
+gcc and clang lay out a branch to it as the unlikely way, and what its call
+needs saved is saved on that branch. A branch to an ordinary function is
+assumed to be taken half the time, so an `if` that only guards a slow path
+costs registers on the way past it: without this, the check the dictionary's
+flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
+`test/syntax/cold_fn.goose`.
+
 ## Safety checks
 
 - `src/runtime/runtime.h`, `src/runtime/runtime_impl.h`,
@@ -625,6 +635,19 @@ git log upstream/master..main
   for responses of any size, timeouts, overload replies and a graceful
   stop. `test/stdlib/stdlib_net.goose`, `test/threads/net_serve.goose`
   (new).
+
+- `dictionary` defends itself against keys chosen to collide. Whoever knows a
+  hash can make every insert walk past all the keys before it: 16,000 crafted
+  24-byte keys took a second, and four times as many twenty times as long. An
+  insert whose probe has seen too much (a group passed counts 1, a key compared
+  in vain 4, an attack at 64; ordinary keys, which stay well short of it at any
+  size, never set it off in the tests) gives the table a random seed and
+  rehashes it, keyed with SipHash-1-3, the hash Rust's `HashMap` uses on every
+  key. Those 16,000 keys now take 2 ms. A table that is not under attack costs
+  what it did, and keeps its order from run to run. `hash` of bytes and
+  `hash_combine` take the key too, through `hash_flood_key`, a global, so a user
+  key type built from them is covered as written.
+  `test/stdlib/dictionary_flood.goose`.
 
 ## Runtime
 
