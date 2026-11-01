@@ -1923,7 +1923,8 @@ GS_API void gs_release_regions(void) {
 static int gs_region_trim(gs_region *r);
 
 /* As gs_release_regions, but those it can stay with this thread, each with
-   no more than its first GS_KEPT_BYTES in memory. */
+   no more than its first GS_KEPT_BYTES in memory; and its native stack's setup
+   stays too. */
 static void gs_keep_regions(void) {
     if (!gs_kept) gs_kept = (gs_region *)malloc(GS_KEPT_REGIONS * sizeof(gs_region));
     while (gs_nregions) {
@@ -1936,7 +1937,6 @@ static void gs_keep_regions(void) {
     }
     free(gs_regions);
     gs_regions = NULL;
-    gs_native_stack_free();
 }
 
 /* This thread is ending, and they go with it. */
@@ -1945,6 +1945,7 @@ static void gs_release_kept(void) {
 R"GSRT(    while (gs_nkept) gs_release_region(&gs_kept[--gs_nkept]);
     free(gs_kept);
     gs_kept = NULL;
+    gs_native_stack_free();
 }
 #endif
 
@@ -4145,8 +4146,32 @@ static void gs_set_thread_end_hook(void (*f)(void)) {
     gs_mutex_unlock(&gs_threads_mutex);
 }
 
+#if defined(_MSC_VER) && !defined(__clang__)
 )GSRT"
-R"GSRT(/* A monotonic clock in nanoseconds, for a wait's deadline. */
+R"GSRT(#include <intrin.h>
+#endif
+static void gs_pf_relax(void) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    _mm_pause();
+#elif defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    __asm__ __volatile__("yield");
+#endif
+}
+
+/* A word another thread writes under a lock, read outside it, for a spin. */
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GS_SPIN_LOAD(p) (*(void *volatile *)(p))
+#define GS_SPIN_LOAD64(p) (*(volatile int64_t *)(p))
+#define GS_SPIN_STORE64(p, v) (*(volatile int64_t *)(p) = (v))
+#else
+#define GS_SPIN_LOAD(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define GS_SPIN_LOAD64(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define GS_SPIN_STORE64(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#endif
+
+/* A monotonic clock in nanoseconds, for a wait's deadline. */
 static int64_t gs_qclock_ns(void) {
     #ifdef _WIN32
         return (int64_t)GetTickCount64() * 1000000;
@@ -4198,8 +4223,12 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
    have overflowed. */
 #define GS_THREAD_KEEP 64
 #define GS_THREAD_KEEP_MS 50
+#define GS_THREAD_SPIN 2000
 static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; under the mutex */
 static int64_t gs_threads_idle;     /* threads that will take one; under the mutex */
+static int64_t gs_threads_sleeping; /* those of them on gs_threads_more; under the mutex */
+static int64_t gs_threads_ended;    /* workers ended; written under the mutex */
+static int64_t gs_threads_waiting;  /* threads on gs_threads_done; under the mutex */
 static gs_cond gs_threads_more;     /* made by the first gs_thread_start */
 
 #ifdef _WIN32
@@ -4209,9 +4238,9 @@ static void *gs_thread_main(void *p)
 #endif
 {
     gs_thread *t = (gs_thread *)p;
+    gs_native_stack_init();
     while (t) {
         gs_regions_begin(gs_workerregions);
-        gs_native_stack_init();
         gs_current_thread_id = t->id;
         int aborted = 0;
         gs_contained contain;
@@ -4237,12 +4266,21 @@ static void *gs_thread_main(void *p)
         *slot = t->next;
         if (aborted) gs_aborted_add(t->id, contain.msg, contain.len);
         free(t);
-        gs_cond_broadcast(&gs_threads_done);
+        GS_SPIN_STORE64(&gs_threads_ended, gs_threads_ended + 1);
+        if (gs_threads_waiting) gs_cond_broadcast(&gs_threads_done);
         t = NULL;
         if (!aborted && gs_threads_idle < GS_THREAD_KEEP) {
             gs_threads_idle++;
+            gs_mutex_unlock(&gs_threads_mutex);
+            /* A worker started right after this one ended, as in a loop of
+               them, finds this thread awake: a wakeup costs both of them a
+               trip through the kernel. */
+            for (int s = 0; s < GS_THREAD_SPIN && !GS_SPIN_LOAD(&gs_thread_next); s++) gs_pf_relax();
+            gs_mutex_lock(&gs_threads_mutex);
             int64_t deadline = gs_qclock_ns() + GS_THREAD_KEEP_MS * 1000000;
+            gs_threads_sleeping++;
             while (!gs_thread_next && gs_cond_wait_until(&gs_threads_more, &gs_threads_mutex, deadline)) {}
+            gs_threads_sleeping--;
             /* A starter counts this thread out as it leaves one here. */
             if (gs_thread_next) {
                 t = gs_thread_next;
@@ -4289,7 +4327,7 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
         gs_threads_idle--;
         t->handed = gs_thread_next;
         gs_thread_next = t;
-        gs_cond_signal(&gs_threads_more);
+        if (gs_threads_sleeping) gs_cond_signal(&gs_threads_more);
         gs_mutex_unlock(&gs_threads_mutex);
         return id;
     }
@@ -4306,7 +4344,8 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
         failed = pthread_attr_init(&attr);
         if (!failed) {
             failed = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
-            if (!failed) failed = pthread_create(&handle, &attr, gs_thread_main, t);
+)GSRT"
+R"GSRT(            if (!failed) failed = pthread_create(&handle, &attr, gs_thread_main, t);
             pthread_attr_destroy(&attr);
         }
     #endif
@@ -4332,11 +4371,25 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
         gs_mutex_unlock(&gs_threads_mutex);
         gs_abort(err, file, line);
     }
+    int spins = GS_THREAD_SPIN;
     for (;;) {
         gs_thread *t = gs_threads;
         while (t && t->id != id) t = t->next;
         if (!t) break;
+        if (spins > 0) {
+            /* A short worker is done before a sleep and a wakeup would be. */
+            int64_t ended = gs_threads_ended;
+            gs_mutex_unlock(&gs_threads_mutex);
+            while (spins > 0 && GS_SPIN_LOAD64(&gs_threads_ended) == ended) {
+                gs_pf_relax();
+                spins--;
+            }
+            gs_mutex_lock(&gs_threads_mutex);
+            continue;
+        }
+        gs_threads_waiting++;
         gs_cond_wait(&gs_threads_done, &gs_threads_mutex);
+        gs_threads_waiting--;
     }
     uint8_t returned = 1;
     if (msg) {
@@ -4358,8 +4411,7 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
 }
 
 /* Gust: the parallel for pool (§6.5): workers started as the first jobs
-)GSRT"
-R"GSRT(   want them, which wait between jobs. A job wakes them all; each runs its
+   want them, which wait between jobs. A job wakes them all; each runs its
    thunk, which takes chunks until none is left, then reports that it is
    done. One job holds the pool at a time, from its post to its wait.
 
@@ -4381,9 +4433,6 @@ static int gs_pf_busy, gs_pf_waiting;   /* Under the mutex; waiting: the poster 
    n-body step's) find the workers awake, and the caller finds them done,
    without the cost of a wake. Bounded, so an idle program sleeps. */
 #define GS_PF_SPIN 2000
-#if defined(_MSC_VER) && !defined(__clang__)
-#include <intrin.h>
-#endif
 static int64_t gs_pf_load(int64_t *v) {
 #if defined(_MSC_VER) && !defined(__clang__)
     return *(volatile int64_t *)v;
@@ -4408,16 +4457,6 @@ static int64_t gs_pf_dec(int64_t *v) {
 }
 /* A spinning thread's hint to the core, which a hyperthread sibling (the
    caller, running its own chunks) gets the time of. */
-static void gs_pf_relax(void) {
-#if defined(_MSC_VER) && !defined(__clang__)
-    _mm_pause();
-#elif defined(__x86_64__) || defined(__i386__)
-    __builtin_ia32_pause();
-#elif defined(__aarch64__)
-    __asm__ __volatile__("yield");
-#endif
-}
-
 static void gs_pfor_worker(uint8_t *p) {
     (void)p;
     gs_mutex_lock(&gs_pf_mutex);
@@ -4524,7 +4563,8 @@ struct gs_qstate {
 #define GS_QRING_MAX 256
 static GS_TLS struct {
     gs_qnode node;
-    uint8_t bytes[GS_QRING_MAX];
+)GSRT"
+R"GSRT(    uint8_t bytes[GS_QRING_MAX];
 } gs_qscratch;
 
 /* How long a receiver looks for a message before sleeping: about what a
@@ -4541,6 +4581,21 @@ static GS_TLS struct {
 #define GS_QCOUNT_LOAD(s) __atomic_load_n(&(s)->count, __ATOMIC_RELAXED)
 #define GS_QCOUNT_STORE(s, v) __atomic_store_n(&(s)->count, (v), __ATOMIC_RELAXED)
 #endif
+
+/* The queue's lock. Windows's spins before it waits, but glibc's goes straight
+   to a futex, and threads taking turns at one queue then spend their time in
+   the kernel for a lock held a few nanoseconds: 3 receivers and a sender took 7
+   times Go's time. */
+#define GS_QLOCK_SPIN 128
+static void gs_qlock(struct gs_qstate *s) {
+    #ifndef _WIN32
+        for (int i = 0; i < GS_QLOCK_SPIN; i++) {
+            if (!pthread_mutex_trylock(&s->mutex)) return;
+            gs_pf_relax();
+        }
+    #endif
+    gs_mutex_lock(&s->mutex);
+}
 
 static void gs_qspin(struct gs_qstate *s) {
     for (int i = 0; i < GS_QSPIN && !GS_QCOUNT_LOAD(s); i++) gs_pf_relax();
@@ -4568,8 +4623,7 @@ static void gs_qring_to_list(struct gs_qstate *s) {
         n->next = NULL;
         n->size = s->esize;
         memcpy(n + 1, s->ring + ((s->first + i) & (s->cap - 1)) * s->esize, (size_t)s->esize);
-)GSRT"
-R"GSRT(        if (s->tail) s->tail->next = n; else s->head = n;
+        if (s->tail) s->tail->next = n; else s->head = n;
         s->tail = n;
     }
     free(s->ring);
@@ -4606,7 +4660,7 @@ GS_API void gs_qinit(gs_queue *q) {
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size) {
     struct gs_qstate *s = *q;
     int64_t sleeping;
-    gs_mutex_lock(&s->mutex);
+    gs_qlock(s);
     if (!s->esize) s->esize = size > 0 && size <= GS_QRING_MAX ? size : -1;
     if (s->esize == size) {
         if (s->count >= s->limit) {
@@ -4628,7 +4682,7 @@ GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size) {
     n->next = NULL;
     n->size = size;
     memcpy(n + 1, data, (size_t)size);
-    gs_mutex_lock(&s->mutex);
+    gs_qlock(s);
     if (s->count >= s->limit) {
         gs_mutex_unlock(&s->mutex);
         free(n);
@@ -4679,7 +4733,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
     for (int tries = 0; tries < GS_QTRIES; tries++) {
         gs_qspin(s);
         if (GS_QCOUNT_LOAD(s)) {
-            gs_mutex_lock(&s->mutex);
+            gs_qlock(s);
             if (s->count) {
                 gs_qnode *n = gs_qtake(s);
                 gs_mutex_unlock(&s->mutex);
@@ -4688,7 +4742,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
             gs_mutex_unlock(&s->mutex);
         }
     }
-    gs_mutex_lock(&s->mutex);
+    gs_qlock(s);
     while (!s->count) {
         s->sleeping++;
         gs_cond_wait(&s->cond, &s->mutex);
@@ -4704,11 +4758,11 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
     /* Caps ms so the deadline in nanoseconds can't overflow. */
     if (ms > INT64_MAX / 2000000) ms = INT64_MAX / 2000000;
     int64_t deadline = ms > 0 ? gs_qclock_ns() + ms * 1000000 : 0;
-    gs_mutex_lock(&s->mutex);
+    gs_qlock(s);
     if (!s->count && ms > 0) {
         gs_mutex_unlock(&s->mutex);
         gs_qspin(s);
-        gs_mutex_lock(&s->mutex);
+        gs_qlock(s);
     }
     s->sleeping++;
     while (!s->count && ms > 0 &&
@@ -4724,7 +4778,7 @@ GS_API gs_qnode *gs_qpoll(gs_queue *q) { return gs_qwait(q, 0); }
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
     if (n <= 0) gs_abort(GS_E_QBOUND, file, line);
     struct gs_qstate *s = *q;
-    gs_mutex_lock(&s->mutex);
+    gs_qlock(s);
     s->limit = n;
     gs_mutex_unlock(&s->mutex);
 }
@@ -4733,7 +4787,7 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
    qsend puts into and that thread's qrecv takes from. */
 GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
     struct gs_qstate *s = *q;
-    gs_mutex_lock(&s->mutex);
+    gs_qlock(s);
     struct gs_qbox_entry *b = s->boxes;
     while (b && b->id != id) b = b->next;
     if (!b) {
@@ -4745,7 +4799,8 @@ GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
         s->boxes = b;
     }
     gs_mutex_unlock(&s->mutex);
-    return &b->q;
+)GSRT"
+R"GSRT(    return &b->q;
 }
 
 /* Gust: this thread's id, which thread_spawn returned for it; main's is -1. */

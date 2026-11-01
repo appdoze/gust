@@ -377,7 +377,8 @@ GS_API void gs_release_regions(void) {
 static int gs_region_trim(gs_region *r);
 
 /* As gs_release_regions, but those it can stay with this thread, each with
-   no more than its first GS_KEPT_BYTES in memory. */
+   no more than its first GS_KEPT_BYTES in memory; and its native stack's setup
+   stays too. */
 static void gs_keep_regions(void) {
     if (!gs_kept) gs_kept = (gs_region *)malloc(GS_KEPT_REGIONS * sizeof(gs_region));
     while (gs_nregions) {
@@ -390,7 +391,6 @@ static void gs_keep_regions(void) {
     }
     free(gs_regions);
     gs_regions = NULL;
-    gs_native_stack_free();
 }
 
 /* This thread is ending, and they go with it. */
@@ -398,6 +398,7 @@ static void gs_release_kept(void) {
     while (gs_nkept) gs_release_region(&gs_kept[--gs_nkept]);
     free(gs_kept);
     gs_kept = NULL;
+    gs_native_stack_free();
 }
 #endif
 
