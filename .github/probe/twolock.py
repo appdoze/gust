@@ -15,7 +15,7 @@ print(run("nproc; lscpu | grep -E 'Model name|Thread|Core'", shell=True).stdout,
 
 # ThreadSanitizer: the program's C and the runtime's, as the compiler wrote them.
 bad = 0
-for t in ("queue_stress", "queue_ring", "queue_bounds", "queue_producers", "mailboxes", "thread_reuse"):
+for t in ("queue_stress", "queue_ring", "queue_bounds", "queue_producers", "mailboxes", "thread_reuse", "http_protocol", "http_server", "http_client", "thread_contained_many", "queue_tree"):
     src = f"test/threads/{t}.goose"
     r = run([NEW, "build", "-q", "--cc", "clang", src, "-o", f"/tmp/{t}_plain"])
     assert r.returncode == 0, r.stdout + r.stderr
