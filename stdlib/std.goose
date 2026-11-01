@@ -82,7 +82,7 @@ fn swap<T>(a: T&, b: T&) {
 // ---- hashing -------------------------------------------------------------
 // One overload per scalar type: a u8 widens equally well into i64 and u64,
 // so a single generic would be ambiguous. Integers get a multiply-xorshift
-// mix (the low bits are what `dictionary` masks and keeps as slot tags). A
+// mix (the low bits pick a `dictionary` group, the top seven are its tag). A
 // negative integer mixes as its two's-complement bits, and a float as its
 // count of 1/65536ths, truncated and wrapped to 64 bits: `as!`, since those
 // conversions change the value on purpose.

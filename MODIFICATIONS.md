@@ -544,6 +544,37 @@ git log upstream/master..main
   Growing a table of slice keys from empty costs a third more time than
   before, still less than Rust's.
 
+- `stdlib/dictionary.goose`: a Swiss table in Go's group layout
+  (`docs/gust/performance_designs.md`): groups of eight slots, each with a
+  control word of one byte per slot (empty, deleted, or the hash's top seven
+  bits), in the one grow-shrink array, so references into it keep §5.2's
+  rules. A lookup matches a group's eight bytes at once (the SWAR zero-byte
+  test) and stops at a group with an empty byte; the table fills to 7/8 and
+  doubles in place, or rehashes at its own size where tombstones are most of
+  what fills it (hashbrown's rehash_in_place over an array that may have
+  grown); removal leaves a tombstone only in a full group. The probes hand
+  back the slot they found, so no bounds check is left, and a match's slot
+  is a multiply rather than std's `ctz`, which is a loop under TinyCC and
+  MIR (with it `gust run` took twice the time). Measured with
+  `compare/quiet_bench.py` on Windows against the one-byte-tag table:
+  `compare/`'s hashmap at 0.77x its time with clang and 0.84x with MSVC,
+  strings at 0.86x and 0.87x, the same peak memory; under MIR 0.53x and
+  0.86x, under TinyCC level. Grown from empty to 885k integer keys it peaks
+  at 22.6 MB where it took 40.4 (Rust 32.3), and 82.8 MB for string keys
+  where it took 108.9 (Rust 97.1). That table is 84% full where the old one,
+  just doubled, was 42%, so lookups cost more there: 1.23x the time with
+  integer keys (0.77x Rust's), 1.02x with strings. Removing half and adding
+  as many keys twice over leaves enough tombstones to double it, as it does
+  Rust's: the same peak as before, 1.15x and 1.00x the time. On Linux under
+  cachegrind (Bench runs 41257002851 before, 41259326574 after) hashmap
+  takes 12% more instructions and a third of the mispredicted branches (3.0
+  million, from 9.0), strings 14% more and 0.63x. Both runs before had a
+  faster Linux runner than both runs after, so the times there do not
+  compare; the local ones above do.
+  `test/stdlib/stdlib_dictionary_model.goose` gains a case that forces a
+  rehash at the table's own size; `samples/expected/serialize.out` follows
+  `each`'s new order.
+
 - `stdlib/slots.goose` (new), `docs/stdlib.md`: generation-checked handles
   over a `reusable` pool: a handle names one allocation by index and serial
   number, and using it after the allocation is released, or releasing it
