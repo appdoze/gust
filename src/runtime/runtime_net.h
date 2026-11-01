@@ -707,6 +707,17 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     e.events = (uint32_t)(((now & GS_POLL_IN) ? EPOLLIN : 0) | ((now & GS_POLL_OUT) ? EPOLLOUT : 0));
     e.data.u64 = gs_net_payload(p, ref);
     int op = !old ? EPOLL_CTL_ADD : !now ? EPOLL_CTL_DEL : EPOLL_CTL_MOD;
+    /* Gust: a listener (ref < 0, a watch; only ever added and removed, as
+       an exclusive entry cannot be modified) wakes one waiting worker per
+       connection, not all. On loopback that wakeup is paid for by the client,
+       whose CPU runs the receive path. Kernels before 4.5 refuse the flag. */
+    #ifdef EPOLLEXCLUSIVE
+    if (op == EPOLL_CTL_ADD && ref < 0) {
+        struct epoll_event x = e;
+        x.events |= EPOLLEXCLUSIVE;
+        if (epoll_ctl(p->kfd, op, s, &x) == 0) return 1;
+    }
+    #endif
     return epoll_ctl(p->kfd, op, s, &e) == 0;
 }
 #elif GS_NET_KQUEUE

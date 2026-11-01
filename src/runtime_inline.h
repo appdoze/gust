@@ -6163,6 +6163,17 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     e.events = (uint32_t)(((now & GS_POLL_IN) ? EPOLLIN : 0) | ((now & GS_POLL_OUT) ? EPOLLOUT : 0));
     e.data.u64 = gs_net_payload(p, ref);
     int op = !old ? EPOLL_CTL_ADD : !now ? EPOLL_CTL_DEL : EPOLL_CTL_MOD;
+    /* Gust: a listener (ref < 0, a watch; only ever added and removed, as
+       an exclusive entry cannot be modified) wakes one waiting worker per
+       connection, not all. On loopback that wakeup is paid for by the client,
+       whose CPU runs the receive path. Kernels before 4.5 refuse the flag. */
+    #ifdef EPOLLEXCLUSIVE
+    if (op == EPOLL_CTL_ADD && ref < 0) {
+        struct epoll_event x = e;
+        x.events |= EPOLLEXCLUSIVE;
+        if (epoll_ctl(p->kfd, op, s, &x) == 0) return 1;
+    }
+    #endif
     return epoll_ctl(p->kfd, op, s, &e) == 0;
 }
 #elif GS_NET_KQUEUE
@@ -6173,7 +6184,8 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     int n = 0;
     void *data = (void *)(uintptr_t)gs_net_payload(p, ref);
     if ((old & GS_POLL_IN) != (now & GS_POLL_IN)) {
-        EV_SET(&ch[n], (uintptr_t)s, EVFILT_READ, (now & GS_POLL_IN) ? EV_ADD | EV_ENABLE : EV_DELETE, 0, 0,
+)GSRT"
+R"GSRT(        EV_SET(&ch[n], (uintptr_t)s, EVFILT_READ, (now & GS_POLL_IN) ? EV_ADD | EV_ENABLE : EV_DELETE, 0, 0,
                data);
         n++;
     }
@@ -6187,8 +6199,7 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
 #elif defined(_WIN32)
 static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     struct gs_net_ks *k = p->kst[f];
-)GSRT"
-R"GSRT(    if (!old) {
+    if (!old) {
         k = (struct gs_net_ks *)calloc(1, sizeof *k);
         if (!k) return 0;
         DWORD got = 0;
@@ -6397,7 +6408,8 @@ GS_API int64_t gs_net_listener_port(int64_t lh) {
     return port;
 }
 
-/* Only its owner closes a listener. Closing waits for no one: the socket
+)GSRT"
+R"GSRT(/* Only its owner closes a listener. Closing waits for no one: the socket
    goes when the last accept or watch lets it go. */
 GS_API int64_t gs_net_close_listener(int64_t lh) {
     GS_NET_LOCK();
@@ -6417,8 +6429,7 @@ GS_API int64_t gs_net_close_listener(int64_t lh) {
 /* ---- pollers ------------------------------------------------------------ */
 
 GS_API int64_t gs_net_poller(void) {
-)GSRT"
-R"GSRT(    if (!gs_net_start()) return GS_NET_UNAVAILABLE;
+    if (!gs_net_start()) return GS_NET_UNAVAILABLE;
     gs_net_used = 1;
     int64_t i = -1;
     for (int64_t k = 0; k < gs_net_npls; k++)
@@ -6636,7 +6647,8 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
 #ifndef _WIN32
         /* A connection reset before it was taken is no reason to stop. */
         if (err == ECONNABORTED || err == EINTR) again = 1;
-        if (err == EMFILE || err == ENFILE) return GS_NET_LIMIT;
+)GSRT"
+R"GSRT(        if (err == EMFILE || err == ENFILE) return GS_NET_LIMIT;
 #else
         if (err == WSAECONNRESET) again = 1;
         if (err == WSAEMFILE || err == WSAENOBUFS) return GS_NET_LIMIT;
@@ -6655,8 +6667,7 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
     int64_t h = gs_net_addcn(p, s);
     if (h < 0) { gs_net_tally_drop(t); return h; }
     p->cns[gs_net_index_of(h)].tally = t;
-)GSRT"
-R"GSRT(    /* Another thread's connection may close in between: a count. */
+    /* Another thread's connection may close in between: a count. */
     gs_net_accepted_open = gs_net_tally_add(t, 0) - 1;
     return h;
 }
@@ -6839,7 +6850,8 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
         /* A socket ready both ways is two kernel events, and one report. */
         int64_t m = 0;
         while (m < k && handles[m] != h) m++;
-        if (m < k) events[m] |= ev;
+)GSRT"
+R"GSRT(        if (m < k) events[m] |= ev;
         else {
             handles[k] = h;
             events[k++] = ev;
@@ -6856,8 +6868,7 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
     int64_t nq = p->nkq;
     p->nkq = 0;
     for (int64_t q = 0; q < nq; q++) {
-)GSRT"
-R"GSRT(        struct gs_net_ks *s = p->kq[q];
+        struct gs_net_ks *s = p->kq[q];
         s->queued = 0;
         if (s->deleted) {
             gs_afd_free_if_done(s);
@@ -7054,7 +7065,8 @@ static void gs_net_thread_end(void) {
 /* ---- stopping ----------------------------------------------------------- */
 
 /* Written by a signal handler (POSIX) or the console's handler thread
-   (Windows) and read by every thread: a lock-free atomic, since
+)GSRT"
+R"GSRT(   (Windows) and read by every thread: a lock-free atomic, since
    volatile sig_atomic_t is enough for a signal handler and its own thread
    but C11 makes it a data race between threads. */
 #ifdef _WIN32
@@ -7065,8 +7077,7 @@ GS_API void gs_net_request_stop(void) {
        thread of its own, which may take the lock. */
     GS_NET_LOCK();
     for (int64_t i = 0; i < gs_net_nports; i++) gs_afd.PostQueuedCompletionStatus(gs_net_ports[i], 0, 0, NULL);
-)GSRT"
-R"GSRT(    GS_NET_UNLOCK();
+    GS_NET_UNLOCK();
 }
 GS_API uint8_t gs_net_stop_requested(void) { return InterlockedCompareExchange(&gs_net_stop, 0, 0) != 0; }
 static BOOL WINAPI gs_net_on_console(DWORD type) {
