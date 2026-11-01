@@ -1180,9 +1180,10 @@ GS_API void gs_pfor_wait(gs_pfor_job *j);
 /* One queue per flat element type the program uses (the compiler emits a
    gs_queue global per type, null as static data starts, which main sets up
    before anything can use it). Values are contiguous byte images: gs_qget,
-   gs_qwait and gs_qpoll return a malloc'd node the caller copies from and
-   frees, gs_qwait and gs_qpoll NULL when nothing came. gs_qput returns 0,
-   queueing nothing, when the queue is at its limit. */
+   gs_qwait and gs_qpoll return a node the caller copies from and hands to
+   gs_qfree before the thread's next get, gs_qwait and gs_qpoll NULL when
+   nothing came. gs_qput returns 0, queueing nothing, when the queue is at its
+   limit. */
 typedef struct gs_qnode {
     struct gs_qnode *next;
     int64_t size;
@@ -1196,6 +1197,7 @@ GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
 GS_API gs_qnode *gs_qget(gs_queue *q);
 GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms);
 GS_API gs_qnode *gs_qpoll(gs_queue *q);
+GS_API void gs_qfree(gs_qnode *n);
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line);
 /* Gust: thread `id`'s own queue of q's type (qsend, qrecv), and this
    thread's id (thread_self: main's is -1). */

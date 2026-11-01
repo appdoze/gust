@@ -627,6 +627,16 @@ git log upstream/master..main
   most 32 connections a turn and honours `Limits.pool_conns`, a limit over
   every worker on the listener, which `examples/api/http.gust` uses in
   place of an even split of the pool's limit.
+- Typed queues and mailboxes (`src/runtime/runtime_threads.h`,
+  `src/codegen_builtins.h`): messages of up to 256 bytes all of one size wait
+  in a ring, where each had been a `malloc` by the sender and a `free` by the
+  receiver; a get hands out a copy in thread-local storage (`gs_qfree`). A
+  receiver looks at the count before it takes the lock and spins a little
+  before it sleeps, and a sender signals only where one sleeps. One producer to
+  three consumers ran 1,000,000 messages in 0.61 s and takes 0.11 s (Rust's
+  std 0.10, Go 0.08); a round trip between two threads went from 1.3 to 0.35
+  microseconds (Rust's std 1.2, Go 0.6). Order, limits and refusals are as
+  before; a queue that sees two sizes falls back to nodes, in order.
 - `src/runtime/runtime_net.h`, `stdlib/net.goose`: a connection costs
   fewer system calls. On Linux an accept takes `accept4` with
   `SOCK_NONBLOCK | SOCK_CLOEXEC`, as Go's and tokio's do, where three
