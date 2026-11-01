@@ -143,7 +143,7 @@ struct Parser {
             case T_RETURN: case T_BREAK: case T_CONTINUE:
                 return !declaration;
             default:
-                return AtInline() || AtCheckfree() || (declaration && AtRoot());
+                return AtInline() || AtCold() || AtCheckfree() || (declaration && AtRoot());
         }
     }
 
@@ -293,6 +293,13 @@ struct Parser {
         if (lex.tok != T_IDENT || lex.attr != "inline") return false;
         auto next = lex.PeekTok();
         return next == T_FN || next == T_RECURSIVE || next == T_THREADFN;
+    }
+
+    // Gust: `cold` likewise, directly before `fn` or `recursive` (§7.15).
+    bool AtCold() {
+        if (lex.tok != T_IDENT || lex.attr != "cold") return false;
+        auto next = lex.PeekTok();
+        return next == T_FN || next == T_RECURSIVE;
     }
 
     // Gust: `root` before `struct`, a contextual modifier
@@ -450,7 +457,7 @@ struct Parser {
             default: break;
         }
         declseen = true;
-        if (AtInline() || AtCheckfree()) goto fndecl;
+        if (AtInline() || AtCold() || AtCheckfree()) goto fndecl;
         if (AtRoot()) { ParseStructDecl(); return; }
         switch (lex.tok) {
             case T_STRUCT: ParseStructDecl(); return;
@@ -779,6 +786,12 @@ struct Parser {
             if (sf->isexport) Error("export fn cannot be inline: its C wrapper calls it");
             if (sf->issimd) Error("simd fn cannot be inline: its callers would run the baseline only");
             sf->isinline = true;
+            lex.Next();
+        }
+        if (AtCold()) {
+            if (sf->isextern) Error("extern fn cannot be cold: it has no body to mark");
+            if (sf->issimd) Error("simd fn cannot be cold: its versions are there for speed");
+            sf->iscold = true;
             lex.Next();
         }
         sf->isrec = IsNext(T_RECURSIVE);
@@ -2193,7 +2206,7 @@ struct Parser {
     // One statement of b, or its tail; returns false once the block has
     // ended (its `}` consumed, by a guard's rest of the block included).
     bool ParseStatement(Block *b) {
-        if (AtInline() || AtCheckfree()) goto nestedfndecl;
+        if (AtInline() || AtCold() || AtCheckfree()) goto nestedfndecl;
         switch (lex.tok) {
             case T_LET: case T_VAR: case T_CONST: case T_REUSABLE: {
                 if (lex.tok == T_CONST && lex.PeekTok() == T_FOR) {

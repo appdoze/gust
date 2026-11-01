@@ -119,6 +119,12 @@ fn hash_le32(s: u8[:], i: i64) -> u64 {
     c[0] | (c[1] as u64) << 8 | (c[2] as u64) << 16 | (c[3] as u64) << 24
 }
 
+// Nonzero only while a dictionary under attack hashes a key (dictionary.goose),
+// on this thread: what a chosen key can make collide outright, the hashes of
+// bytes and of combinations, is keyed with it then. A global is one to each
+// thread program, so no other thread sees it.
+var hash_flood_key: u64 = 0;
+
 // Bytes, 8 at a time: one multiply and a rotate per word but the last,
 // which is the final 8 bytes (overlapping the words before) or, for a short
 // s, its bytes gathered into one word, and the length is the seed. The last
@@ -126,7 +132,7 @@ fn hash_le32(s: u8[:], i: i64) -> u64 {
 // reaches the low bits. Keys longer than 24 bytes take hash_lanes, a call of
 // its own from this early return, so that the short keys' code stays small
 // enough for the C compiler to inline into a dictionary's lookups.
-fn hash(s: u8[:]) -> u64 {
+inline fn hash(s: u8[:]) -> u64 {
     let n = s.len;
     if n > 24 { return hash_lanes(s); }
     var h = (n as! u64) * 11400714819323198485;
@@ -146,6 +152,7 @@ fn hash(s: u8[:]) -> u64 {
     }
     h = (h ^ w) * 11400714819323198485;
     h = (h ^ (h >> 32)) * 15485907386658061715;
+    if hash_flood_key != 0 { return hash_keyed(s, hash_flood_key); }
     return h ^ (h >> 32);
 }
 
@@ -154,6 +161,7 @@ fn hash(s: u8[:]) -> u64 {
 // rounds, the even and the odd words of each 16 bytes, which a processor
 // overlaps; the second is folded into the first for the remaining words.
 fn hash_lanes(s: u8[:]) -> u64 {
+    if hash_flood_key != 0 { return hash_keyed(s, hash_flood_key); }
     let n = s.len;
     var h = (n as! u64) * 11400714819323198485;
     var g = h ^ 0x9E3779B97F4A7C15;
@@ -177,8 +185,84 @@ fn hash_lanes(s: u8[:]) -> u64 {
 }
 
 fn hash_combine(seed: u64, h: u64) -> u64 {
-    seed ^ (h + 11400714819323198485 + (seed << 6) + (seed >> 2))
+    if hash_flood_key != 0 { return hash_combine_keyed(seed, h, hash_flood_key); }
+    return seed ^ (h + 11400714819323198485 + (seed << 6) + (seed >> 2));
 }
+
+// SipHash-1-3, as in Rust's HashMap, for a dictionary under attack: a key
+// that collides needs its key, which nothing tells the sender.
+struct hash_sip { a: u64, b: u64, c: u64, d: u64 }
+
+fn hash_sip_round(s: hash_sip&) {
+    s.a += s.b;
+    s.b = (s.b << 13) | (s.b >> 51);
+    s.b ^= s.a;
+    s.a = (s.a << 32) | (s.a >> 32);
+    s.c += s.d;
+    s.d = (s.d << 16) | (s.d >> 48);
+    s.d ^= s.c;
+    s.a += s.d;
+    s.d = (s.d << 21) | (s.d >> 43);
+    s.d ^= s.a;
+    s.c += s.b;
+    s.b = (s.b << 17) | (s.b >> 47);
+    s.b ^= s.c;
+    s.c = (s.c << 32) | (s.c >> 32);
+}
+
+fn hash_sip_keys(k0: u64, k1: u64) -> hash_sip {
+    hash_sip { k0 ^ 0x736F6D6570736575, k1 ^ 0x646F72616E646F6D, k0 ^ 0x6C7967656E657261, k1 ^ 0x7465646279746573 }
+}
+
+// The second half of the key follows from the first.
+fn hash_sip_start(k: u64) -> hash_sip { hash_sip_keys(k, hash_mix(k)) }
+
+fn hash_sip_word(s: hash_sip&, m: u64) {
+    s.d ^= m;
+    hash_sip_round(s);
+    s.a ^= m;
+}
+
+fn hash_sip_end(s: hash_sip&) -> u64 {
+    s.c ^= 255;
+    hash_sip_round(s);
+    hash_sip_round(s);
+    hash_sip_round(s);
+    return s.a ^ s.b ^ s.c ^ s.d;
+}
+
+fn hash_sip_bytes(st: hash_sip&, s: u8[:]) -> u64 {
+    let n = s.len;
+    var i = 0;
+    while i + 8 <= n {
+        hash_sip_word(st, hash_le64(s, i));
+        i += 8;
+    }
+    var last = (n as! u64) << 56;
+    var shift = 0;
+    while i < n {
+        last |= (s[i] as u64) << shift;
+        shift += 8;
+        i += 1;
+    }
+    hash_sip_word(st, last);
+    return hash_sip_end(st);
+}
+
+cold fn hash_keyed(s: u8[:], k: u64) -> u64 {
+    var st = hash_sip_start(k);
+    return hash_sip_bytes(st, s);
+}
+
+cold fn hash_combine_keyed(seed: u64, h: u64, k: u64) -> u64 {
+    var st = hash_sip_start(k);
+    hash_sip_word(st, seed);
+    hash_sip_word(st, h);
+    return hash_sip_end(st);
+}
+
+// A key nothing outside this process can guess, for hash_sip_start.
+extern fn hash_flood_seed() -> u64 = "gs_os_key_u64";
 
 // ---- random numbers ---------------------------------------------------------
 // splitmix64: one word of state, which is also the seed.

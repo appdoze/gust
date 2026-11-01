@@ -3181,6 +3181,7 @@ Spec §7.5.
 | `thread_fn` | a worker's entry point | [22](#22-threads) |
 | `checkfree fn` | no bounds check may remain in it | [15](#checkfree-fn) |
 | `inline fn` | inlined at every call, whatever its size | below |
+| `cold fn` | runs rarely: never inlined, and calls to it are the unlikely way | below |
 | `simd fn` | built once per instruction-set level | below |
 
 The qualifiers come in a fixed order: `export` or `extern` first, then

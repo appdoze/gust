@@ -72,6 +72,7 @@ inline string FnHeader(const SFunction *sf) {
     if (sf->isextern) s += "extern ";
     if (sf->checkfree && !sf->isnested) s += "checkfree ";
     if (sf->isinline) s += "inline ";
+    if (sf->iscold) s += "cold ";
     if (sf->issimd) s += "simd ";
     if (sf->isrec) s += "recursive ";
     s += sf->isthread ? "thread_fn " : "fn ";

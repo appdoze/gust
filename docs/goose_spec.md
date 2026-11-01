@@ -3555,6 +3555,32 @@ block written inside a `checkfree` function is checked as part of it.
   error with `extern`. A nested function inherits it. Under `--no-bce`
   nothing is verified, and the compiler warns about this.
 
+### 7.15 `cold fn`: runs rarely
+
+```goose
+cold fn report_full(q: queue&) { ... }
+
+fn put(q: queue&, v: i64) {
+    if q.len == q.cap { report_full(q); return; }
+    ...
+}
+```
+
+`cold` says that calls to the function are rare next to the code around
+them: an error, a slow path, the first use of something. It is never inlined,
+the code leading to a call is laid out as the unlikely way, and what the call
+needs saved is saved only there, so the way past it costs what it would
+without the call. The function itself is compiled for size. A hot function
+marked `cold` runs slower.
+
+Like `inline`, `cold` has no meaning of its own: a program computes the same
+with or without it.
+
+`cold` is a keyword only directly before `fn` or `recursive`, so it stays
+usable as a name. It is an error together with `extern` (no body to mark) and
+`simd` (its versions are there for speed), and `inline` is not accepted
+with it.
+
 ## 8. ADTs in use
 
 ### 8.1 `match`

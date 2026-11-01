@@ -178,6 +178,12 @@ struct key { a: i64, b: i64 }
 fn hash(k: key) -> u64 { hash_combine(hash(k.a), hash(k.b)) }
 ```
 
+These hashes are not keyed, so anyone who knows them can choose keys that
+collide. `dictionary` notices (below), and for a table under attack `hash` of
+bytes and `hash_combine` take a random key. A key type's `hash` written with
+them is protected by that; one that mixes its fields some other way can still
+be made to collide.
+
 ### Random numbers
 
 ```goose
@@ -498,6 +504,13 @@ tombstones; `reserve(n)` sizes it for `n` entries at that load.
 Strings are keyed as `u8[:]` slices into text the caller keeps (`const u8[:]`
 for literals or views of `const` data, §9.5), or as inline
 `u8[..k]`. A set is `dictionary<K, bool>`.
+
+A table defends itself against keys chosen to collide. An insert whose probe
+has passed too many groups or compared too many keys in vain gives the table a
+random seed and rehashes it, keyed with SipHash-1-3, as every Rust `HashMap` is
+from the start. Until then a table costs what it would without this and its
+order is the same from run to run; after that, the order differs between runs,
+and each hash takes a few times longer. Ordinary keys do not set it off.
 
 The group array is grow-shrink, so a reference into it (a `get` or
 `get_or_insert` result, or an `each` binder) must have its last use before
