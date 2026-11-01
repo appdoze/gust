@@ -1,0 +1,17 @@
+name: Probe
+on:
+  push:
+    branches: ['probe/**']
+jobs:
+  fanout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - run: sudo apt-get install -y --no-install-recommends time strace
+      - run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build --config Release --target goose -j 4
+      - run: python .github/probe/fanout.py
