@@ -592,6 +592,12 @@ fn serve<D, P, S>(listener: Listener, poller: Poller, first: Conn, proto: S, lim
                 continue;
             }
             open(c, now);
+            // Gust: read at once, as Go's and tokio's servers do. A client's
+            // first request has most often come in with its connection, and
+            // serving it now saves waiting for the poller to say so; where
+            // it has not, the read finds nothing (AGAIN) and the poller
+            // waits for it as before.
+            readable(index(c), now);
         }
     }
 

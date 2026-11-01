@@ -5538,6 +5538,17 @@ static int gs_net_nonblock(gs_sock s) {
     fcntl(s, F_SETFD, FD_CLOEXEC);
     return f >= 0 && fcntl(s, F_SETFL, f | O_NONBLOCK) == 0;
 }
+#ifdef __linux__
+/* Gust: an accepted connection non-blocking and close-on-exec in the accept
+   itself, as Go's and tokio's are, where gs_net_nonblock takes three more
+   system calls. glibc declares accept4 only under _GNU_SOURCE (as with
+   pthread_getattr_np), and then with a transparent union this would clash
+   with: declared here only where it has not been. */
+#define GS_NET_ACCEPT4 1
+#ifndef __USE_GNU
+int accept4(int, struct sockaddr *, socklen_t *, int);
+#endif
+#endif
 static int gs_net_poll(gs_pollfd *fds, int64_t n, int64_t ms) {
     int r = poll(n ? fds : NULL, (nfds_t)n, (int)ms);
     if (r < 0) {
@@ -5688,7 +5699,8 @@ static volatile int gs_net_used;
             if (cap_ > n) {                                                       \
                 type *p_ = (type *)realloc(arr, (size_t)cap_ * sizeof(type));     \
                 if (p_) {                                                         \
-                    memset(p_ + n, 0, (size_t)(cap_ - n) * sizeof(type));         \
+)GSRT"
+R"GSRT(                    memset(p_ + n, 0, (size_t)(cap_ - n) * sizeof(type));         \
                     arr = p_; out = n; n = cap_;                                  \
                 }                                                                 \
             }                                                                     \
@@ -5697,8 +5709,7 @@ static volatile int gs_net_used;
 
 static gs_net_lst *gs_net_lst_of(int64_t h) {
     if (gs_net_kind(h) != GS_NET_K_LISTENER) return NULL;
-)GSRT"
-R"GSRT(    int64_t i = gs_net_index_of(h);
+    int64_t i = gs_net_index_of(h);
     if (i >= gs_net_nlsts) return NULL;
     gs_net_lst *l = &gs_net_lsts[i];
     return l->live && !l->closing && l->gen == gs_net_gen_of(h) ? l : NULL;
@@ -5874,15 +5885,15 @@ typedef struct { ULONG_PTR key; LPOVERLAPPED ovl; ULONG_PTR internal; DWORD byte
 typedef gs_ntstatus (WINAPI *gs_NtCreateFile)(HANDLE *, ULONG, gs_objattr *, gs_iosb *, void *, ULONG, ULONG,
                                               ULONG, ULONG, void *, ULONG);
 typedef gs_ntstatus (WINAPI *gs_NtDeviceIoControlFile)(HANDLE, HANDLE, void *, void *, gs_iosb *, ULONG, void *,
-                                                       ULONG, void *, ULONG);
+)GSRT"
+R"GSRT(                                                       ULONG, void *, ULONG);
 typedef gs_ntstatus (WINAPI *gs_NtCancelIoFileEx)(HANDLE, gs_iosb *, gs_iosb *);
 typedef HANDLE (WINAPI *gs_CreateIoCompletionPort)(HANDLE, HANDLE, ULONG_PTR, DWORD);
 typedef BOOL (WINAPI *gs_GetQueuedCompletionStatusEx)(HANDLE, gs_ovl_entry *, ULONG, ULONG *, DWORD, BOOL);
 typedef BOOL (WINAPI *gs_PostQueuedCompletionStatus)(HANDLE, DWORD, ULONG_PTR, LPOVERLAPPED);
 typedef BOOL (WINAPI *gs_SetFileCompletionNotificationModes)(HANDLE, UCHAR);
 static struct {
-)GSRT"
-R"GSRT(    gs_NtCreateFile NtCreateFile;
+    gs_NtCreateFile NtCreateFile;
     gs_NtDeviceIoControlFile NtDeviceIoControlFile;
     gs_NtCancelIoFileEx NtCancelIoFileEx;
     gs_CreateIoCompletionPort CreateIoCompletionPort;
@@ -6060,7 +6071,8 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
 #elif defined(_WIN32)
 static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     struct gs_net_ks *k = p->kst[f];
-    if (!old) {
+)GSRT"
+R"GSRT(    if (!old) {
         k = (struct gs_net_ks *)calloc(1, sizeof *k);
         if (!k) return 0;
         DWORD got = 0;
@@ -6077,8 +6089,7 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     if (!k) return 1;
     if (!now) {
         p->kst[f] = NULL;
-)GSRT"
-R"GSRT(        k->deleted = 1;
+        k->deleted = 1;
         gs_afd_cancel(p, k);
         gs_afd_free_if_done(k);
         return 1;
@@ -6290,7 +6301,8 @@ GS_API int64_t gs_net_close_listener(int64_t lh) {
 /* ---- pollers ------------------------------------------------------------ */
 
 GS_API int64_t gs_net_poller(void) {
-    if (!gs_net_start()) return GS_NET_UNAVAILABLE;
+)GSRT"
+R"GSRT(    if (!gs_net_start()) return GS_NET_UNAVAILABLE;
     gs_net_used = 1;
     int64_t i = -1;
     for (int64_t k = 0; k < gs_net_npls; k++)
@@ -6304,8 +6316,7 @@ GS_API int64_t gs_net_poller(void) {
         i = gs_net_npls++;
     }
     gs_net_pl *p = &gs_net_pls[i];
-)GSRT"
-R"GSRT(    uint32_t gen = gs_net_nextgen(p->gen);
+    uint32_t gen = gs_net_nextgen(p->gen);
     memset(p, 0, sizeof *p);
     p->gen = gen;
     p->live = 1;
@@ -6485,7 +6496,11 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
     }
     GS_NET_UNLOCK();
     if (!l) return GS_NET_BAD_HANDLE;
+#ifdef GS_NET_ACCEPT4
+    gs_sock s = accept4(ls, NULL, NULL, SOCK_NONBLOCK | SOCK_CLOEXEC);
+#else
     gs_sock s = GS_NET_CALL(accept)(ls, NULL, NULL);
+#endif
     int again = s == GS_BAD_SOCK && gs_net_wouldblock();
     int64_t err = s == GS_BAD_SOCK ? gs_net_oserr : 0;
 #ifndef _WIN32
@@ -6512,17 +6527,20 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
 #endif
         return again ? GS_NET_AGAIN : GS_NET_ERROR;
     }
+#ifndef GS_NET_ACCEPT4
     if (!gs_net_nonblock(s)) {
         gs_net_noteerr();
         gs_net_closesock(s);
         gs_net_tally_drop(t);
         return GS_NET_ERROR;
     }
+#endif
     gs_net_tune(s);
     int64_t h = gs_net_addcn(p, s);
     if (h < 0) { gs_net_tally_drop(t); return h; }
     p->cns[gs_net_index_of(h)].tally = t;
-    /* Another thread's connection may close in between: a count. */
+)GSRT"
+R"GSRT(    /* Another thread's connection may close in between: a count. */
     gs_net_accepted_open = gs_net_tally_add(t, 0) - 1;
     return h;
 }
@@ -6536,8 +6554,7 @@ GS_API int64_t gs_net_connect(int64_t ph, sl_u8 host, int64_t port, int64_t time
     if (!gs_net_parse_ip(host, &ip) || port <= 0 || port > 65535) return GS_NET_ADDRESS;
     gs_sock s = GS_NET_CALL(socket)(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (s == GS_BAD_SOCK) { gs_net_noteerr(); return GS_NET_ERROR; }
-)GSRT"
-R"GSRT(    if (!gs_net_nonblock(s)) { gs_net_noteerr(); gs_net_closesock(s); return GS_NET_ERROR; }
+    if (!gs_net_nonblock(s)) { gs_net_noteerr(); gs_net_closesock(s); return GS_NET_ERROR; }
     struct sockaddr_in a;
     memset(&a, 0, sizeof a);
     a.sin_family = AF_INET;
@@ -6723,7 +6740,8 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
     int64_t nq = p->nkq;
     p->nkq = 0;
     for (int64_t q = 0; q < nq; q++) {
-        struct gs_net_ks *s = p->kq[q];
+)GSRT"
+R"GSRT(        struct gs_net_ks *s = p->kq[q];
         s->queued = 0;
         if (s->deleted) {
             gs_afd_free_if_done(s);
@@ -6741,8 +6759,7 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
         return GS_NET_ERROR;
     }
     for (ULONG j = 0; j < n; j++) {
-)GSRT"
-R"GSRT(        struct gs_net_ks *s = (struct gs_net_ks *)es[j].ovl;
+        struct gs_net_ks *s = (struct gs_net_ks *)es[j].ovl;
         if (!s) {   /* a stop's wake: this wait returns */
             woke = 1;
             continue;
@@ -6932,7 +6949,8 @@ GS_API void gs_net_request_stop(void) {
        thread of its own, which may take the lock. */
     GS_NET_LOCK();
     for (int64_t i = 0; i < gs_net_nports; i++) gs_afd.PostQueuedCompletionStatus(gs_net_ports[i], 0, 0, NULL);
-    GS_NET_UNLOCK();
+)GSRT"
+R"GSRT(    GS_NET_UNLOCK();
 }
 GS_API uint8_t gs_net_stop_requested(void) { return InterlockedCompareExchange(&gs_net_stop, 0, 0) != 0; }
 static BOOL WINAPI gs_net_on_console(DWORD type) {
@@ -6950,8 +6968,7 @@ GS_API void gs_net_request_stop(void) {
     int one = 1;
     __atomic_store(&gs_net_stop, &one, __ATOMIC_SEQ_CST);
     /* Every epoll and kqueue poller's wait returns: a write, which a
-)GSRT"
-R"GSRT(       signal handler may make. */
+       signal handler may make. */
     int w = gs_net_wakefd[1];
     if (w >= 0) {
         char c = 1;
