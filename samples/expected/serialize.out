@@ -8,8 +8,8 @@ loaded true, 262 nodes, same size true
   think = 5
   curiosity = 1
   nonexistentword = 0
-answers match true, depth 17 = 17
-compact 2494 bytes for 262 nodes, reload true totals true
+answers match true, depth 16 = 16
+compact 2498 bytes for 262 nodes, reload true totals true
 tampered link false, nodes 0
 edited count true, still a tree true
 truncated false, extended false, empty true 0, no prefix false

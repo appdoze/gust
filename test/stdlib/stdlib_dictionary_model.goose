@@ -2,13 +2,15 @@
 // Random inserts, updates, get_or_insert, removes, lookups and the odd
 // clear or reserve (which then grows a filled table by more than a factor
 // of two in place) over a universe of keys, checking every result and the
-// count as it goes and every key at the end. The key types: integers;
-// keys whose hashes agree in the low 40 bits, so every tag and home slot
-// is the same and every probe compares keys; keys that all hash to the
-// last slot, so each run wraps past the end of the table; slices of every
-// length the string hash reads its own way (none, 1-3, 4-8, 9 and more
-// bytes), looked up through slices of a second copy of the text; and
-// inline u8[..16] keys.
+// count as it goes and every key at the end. Removals from full groups
+// leave tombstones, which inserts reuse and growth, or a rehash at the
+// same size, clears. The key types: integers; keys whose hashes agree in
+// the low 40 bits, so every tag and home group is the same and every probe
+// compares keys; keys that all hash to the last group, so each probe
+// sequence wraps past the end of the table; slices of every length the
+// string hash reads its own way (none, 1-3, 4-8, 9 and more bytes), looked
+// up through slices of a second copy of the text; and inline u8[..16]
+// keys.
 import dictionary;
 
 struct same { v: i64 }
@@ -80,7 +82,49 @@ fn drive<K, F>(rounds: i64, universe: i64, seed: u64) -> bool {
     var n = 0;
     var sum = 0;
     d.each() { key, v => n++; sum += v; };
-    return ok && n == count && sum == total && d.slots.len * 2 >= d.count * 3;
+    return ok && n == count && sum == total && d.count + d.left <= d.groups.len * 7 && d.left >= 0;
+}
+
+// Keys placed by hand: group g is home, v the tag.
+struct at { g: i64, v: i64 }
+fn hash(k: at) -> u64 { (k.v as! u64) << 57 | (k.g as! u64) }
+
+// Tombstones cleared at the table's own size: in a table of four groups
+// (28 entries and tombstones before it grows), ten keys of home 0 fill
+// group 0 and spill two into group 1, the next on their probe sequence,
+// six of home 1 fill group 1, and eight fill group 2. Removing group 0's
+// and group 1's own keys and one of group 2's, all from full groups,
+// leaves 15 tombstones; four inserts into group 3 then use up the room,
+// and the fifth rehashes the table at its own size (13 entries are at most
+// half of 28), which moves the two spilled keys home to group 0.
+fn tombstones() -> bool {
+    var d = dictionary<at, i64> {};
+    d.reserve(28);
+    var ok = d.groups.len == 4;
+    for v in 10 { d.insert(at { 0, v }, v); }
+    for v in 6 { d.insert(at { 1, v }, 100 + v); }
+    for v in 8 { d.insert(at { 2, v }, 200 + v); }
+    ok = ok && d.count == 24 && d.left == 4;
+    for v in 8 { d.remove(at { 0, v }); }
+    for v in 6 { d.remove(at { 1, v }); }
+    d.remove(at { 2, 0 });
+    ok = ok && d.count == 9 && d.left == 4;
+    for v in 4 { d.insert(at { 3, v }, 300 + v); }
+    ok = ok && d.count == 13 && d.left == 0;
+    d.insert(at { 3, 4 }, 304);
+    ok = ok && d.groups.len == 4 && d.count == 14 && d.left == 28 - 14;
+    for g in 4 {
+        for v in 10 {
+            let want = (g == 0 && v >= 8) || (g == 2 && v >= 1 && v < 8) || (g == 3 && v < 5);
+            let x = d.get(at { g, v });
+            if x { if !want || x != g * 100 + v { ok = false; } } else if want { ok = false; }
+        }
+    }
+    // The spilled keys are back in their home group, whose control word
+    // the rehash wrote.
+    var home = 0;
+    for &gr in d.groups[0..1] { for j in 8 { if gr.ctrl >> (j * 8) & 255 < 128 { home++; } } }
+    return ok && home == 2;
 }
 
 fn main() {
@@ -139,4 +183,5 @@ fn main() {
         if a && b { if a == k && b == k { found++; } }
     }
     print(found == short.len, " ", inl.count == short.len, " ", short.len);   // true true 679
+    print(tombstones());                                                 // true
 }
