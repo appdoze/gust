@@ -1120,7 +1120,13 @@ fn parse_int(s: u8[:], base: i64 = 10) -> i64, bool {
 const parse_flt_pow10: f64[23] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
                                   1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22];
 
+// Gust: mant * 10^exp10 (with more digits after, if truncated), the float
+// nearest the text s, for what one exact operation below does not settle.
+extern fn parse_flt_exact(s: const u8[:], mant: u64, exp10: i64, truncated: bool) -> f64 = "gs_parse_f64";
+
 // A decimal float with optional sign, fraction and exponent; false otherwise.
+// The nearest float to it, a tie going to the even significand, so that a
+// float's text reads back as that float.
 fn parse_flt(s: u8[:]) -> f64, bool {
     var i = 0;
     var neg = false;
@@ -1155,17 +1161,17 @@ fn parse_flt(s: u8[:]) -> f64, bool {
         digits -= exp10;
     }
     if digits == 0 { return 0.0, false; }
-    // Up to 19 digits fit a u64 exactly. With no exponent either, the value
-    // is that integer over an exact power of ten, the scaling below in one
-    // step. Up to 18 they fit an i64 too, which converts to f64 in one
-    // instruction where a u64 takes several on x86-64, to the same value.
-    if digits <= 19 && i == s.len {
-        var v = 0.0;
-        if digits <= 18 { v = mant as! i64; } else { v = mant; }
+    // Up to 19 digits fit a u64 exactly. With no exponent either, and up to
+    // 2^53, the value is that integer, which an f64 holds exactly, over an
+    // exact power of ten: one correctly rounded division (Clinger's fast
+    // path), the integer converted as an i64 in one instruction.
+    if digits <= 19 && i == s.len && mant <= 9007199254740992 {
+        var v: f64 = mant as! i64;
         if exp10 < 0 { v /= parse_flt_pow10[-exp10]; }
         if neg { v = -v; }
         return v, true;
     }
+    var truncated = false;
     if digits > 19 {
         // mant may have wrapped above: read the digits again keeping the
         // first 19 significant digits, with the exponent counting integer
@@ -1173,6 +1179,7 @@ fn parse_flt(s: u8[:]) -> f64, bool {
         // the exponent. These loops stop where those did, at i.
         mant = 0;
         exp10 = 0;
+        truncated = true;
         var mdigits = 0;
         var j = start;
         while j < s.len && s[j] == '0' { j += 1; }
@@ -1209,17 +1216,18 @@ fn parse_flt(s: u8[:]) -> f64, bool {
         if edigits == 0 { return 0.0, false; }
         exp10 += if eneg { -e } else { e };
     }
-    // A mantissa below 2^53 converts exactly and a power of ten up to 10^22
-    // is exact in binary64, so one multiply or divide is correctly rounded
-    // (Clinger's fast path); longer inputs and larger exponents scale in
-    // steps and may be off by an ulp. A longer mantissa rounds as it
-    // converts.
-    var v: f64 = mant;
-    var e = exp10;
-    while e > 22 { v *= 1e22; e -= 22; }
-    while e < -22 { v /= 1e22; e += 22; }
-    if e > 0 { v *= parse_flt_pow10[e]; } else if e < 0 { v /= parse_flt_pow10[-e]; }
     if i != s.len { return 0.0, false; }
+    var v = 0.0;
+    if mant != 0 {
+        // As above, for a power of ten up to 10^22 either way. The rest take
+        // the runtime's reader.
+        if !truncated && mant <= 9007199254740992 && exp10 >= -22 && exp10 <= 22 {
+            v = mant as! i64;
+            if exp10 > 0 { v *= parse_flt_pow10[exp10]; } else if exp10 < 0 { v /= parse_flt_pow10[-exp10]; }
+        } else {
+            v = parse_flt_exact(s, mant, exp10, truncated);
+        }
+    }
     if neg { v = -v; }
     return v, true;
 }

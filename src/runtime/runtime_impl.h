@@ -1689,8 +1689,10 @@ GS_API int64_t gs_fmt_i64(uint8_t *dst, int64_t v) {
 
    The numbers are naturals in 32-bit limbs, least significant first. The
    denominator s stays below 2^1079 (ten times 2^1075, for the smallest
-   doubles), and the others below eleven times s. */
-typedef struct { int n; uint32_t d[36]; } gs_big;
+   doubles), and the others below eleven times s. Gust: reading a decimal
+   (gs_dec_exact) compares up to 780 digits scaled by up to 10^1125 or 2^1075,
+   which fit these limbs too. */
+typedef struct { int n; uint32_t d[130]; } gs_big;
 
 /* a = v << sh, for v > 0. */
 static void gs_big_set(gs_big *a, uint64_t v, int sh) {
@@ -1706,6 +1708,17 @@ static void gs_big_set(gs_big *a, uint64_t v, int sh) {
 
 static void gs_big_mul(gs_big *a, uint32_t m) {
     uint64_t c = 0;
+    for (int i = 0; i < a->n; i++) {
+        c += (uint64_t)a->d[i] * m;
+        a->d[i] = (uint32_t)c;
+        c >>= 32;
+    }
+    if (c) a->d[a->n++] = (uint32_t)c;
+}
+
+/* a = a * m + c, where a may be zero (n 0). */
+static void gs_big_mul_small_add(gs_big *a, uint32_t m, uint32_t c0) {
+    uint64_t c = c0;
     for (int i = 0; i < a->n; i++) {
         c += (uint64_t)a->d[i] * m;
         a->d[i] = (uint32_t)c;
@@ -1753,7 +1766,7 @@ static void gs_big_sub(gs_big *a, const gs_big *b) {
 /* The shortest digits of f * 2^e (f > 0) as a float of `bits` significant
    bits and least exponent emin, into dig; returns their count and sets *k
    so that the value they spell is 0.d1d2... * 10^*k. */
-static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int *k) {
+static int gs_float_digits_big(uint64_t f, int e, int bits, int emin, char *dig, int *k) {
     gs_big r, s, mp, mlo, t;
     /* Reading rounds a tie to the even significand, so the interval that
        reads back as f * 2^e includes its ends when f is even. */
@@ -1817,6 +1830,136 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
     }
 }
 
+/* Gust: most floats' digits in 64-bit arithmetic, Grisu3 (Loitsch, "Printing
+   Floating-Point Numbers Quickly and Accurately with Integers", 2010), as
+   Rust's formatter finds them: the value and the two ends of the interval
+   that reads back as it, scaled by a cached power of ten, each known to one
+   unit. Where that uncertainty leaves the shortest and nearest digits unproved,
+   for about one float in two hundred, it returns 0 and the integers decide.
+
+   10^d for d = -348, -340, ..., 340: the leading 64 bits, rounded. Its binary
+   exponent is floor(d log2 10) - 63, by 1741647 / 2^19 for log2 10. */
+static const uint64_t gs_pow10_64[87] = {
+    0xfa8fd5a0081c0288ull, 0xbaaee17fa23ebf76ull, 0x8b16fb203055ac76ull,
+    0xcf42894a5dce35eaull, 0x9a6bb0aa55653b2dull, 0xe61acf033d1a45dfull,
+    0xab70fe17c79ac6caull, 0xff77b1fcbebcdc4full, 0xbe5691ef416bd60cull,
+    0x8dd01fad907ffc3cull, 0xd3515c2831559a83ull, 0x9d71ac8fada6c9b5ull,
+    0xea9c227723ee8bcbull, 0xaecc49914078536dull, 0x823c12795db6ce57ull,
+    0xc21094364dfb5637ull, 0x9096ea6f3848984full, 0xd77485cb25823ac7ull,
+    0xa086cfcd97bf97f4ull, 0xef340a98172aace5ull, 0xb23867fb2a35b28eull,
+    0x84c8d4dfd2c63f3bull, 0xc5dd44271ad3cdbaull, 0x936b9fcebb25c996ull,
+    0xdbac6c247d62a584ull, 0xa3ab66580d5fdaf6ull, 0xf3e2f893dec3f126ull,
+    0xb5b5ada8aaff80b8ull, 0x87625f056c7c4a8bull, 0xc9bcff6034c13053ull,
+    0x964e858c91ba2655ull, 0xdff9772470297ebdull, 0xa6dfbd9fb8e5b88full,
+    0xf8a95fcf88747d94ull, 0xb94470938fa89bcfull, 0x8a08f0f8bf0f156bull,
+    0xcdb02555653131b6ull, 0x993fe2c6d07b7facull, 0xe45c10c42a2b3b06ull,
+    0xaa242499697392d3ull, 0xfd87b5f28300ca0eull, 0xbce5086492111aebull,
+    0x8cbccc096f5088ccull, 0xd1b71758e219652cull, 0x9c40000000000000ull,
+    0xe8d4a51000000000ull, 0xad78ebc5ac620000ull, 0x813f3978f8940984ull,
+    0xc097ce7bc90715b3ull, 0x8f7e32ce7bea5c70ull, 0xd5d238a4abe98068ull,
+    0x9f4f2726179a2245ull, 0xed63a231d4c4fb27ull, 0xb0de65388cc8ada8ull,
+    0x83c7088e1aab65dbull, 0xc45d1df942711d9aull, 0x924d692ca61be758ull,
+    0xda01ee641a708deaull, 0xa26da3999aef774aull, 0xf209787bb47d6b85ull,
+    0xb454e4a179dd1877ull, 0x865b86925b9bc5c2ull, 0xc83553c5c8965d3dull,
+    0x952ab45cfa97a0b3ull, 0xde469fbd99a05fe3ull, 0xa59bc234db398c25ull,
+    0xf6c69a72a3989f5cull, 0xb7dcbf5354e9beceull, 0x88fcf317f22241e2ull,
+    0xcc20ce9bd35c78a5ull, 0x98165af37b2153dfull, 0xe2a0b5dc971f303aull,
+    0xa8d9d1535ce3b396ull, 0xfb9b7cd9a4a7443cull, 0xbb764c4ca7a44410ull,
+    0x8bab8eefb6409c1aull, 0xd01fef10a657842cull, 0x9b10a4e5e9913129ull,
+    0xe7109bfba19c0c9dull, 0xac2820d9623bf429ull, 0x80444b5e7aa7cf85ull,
+    0xbf21e44003acdd2dull, 0x8e679c2f5e44ff8full, 0xd433179d9c8cb841ull,
+    0x9e19db92b4e31ba9ull, 0xeb96bf6ebadf77d9ull, 0xaf87023b9bf0ee6bull,
+};
+
+/* The high 64 bits of a * b, rounded. */
+static uint64_t gs_mul_round(uint64_t a, uint64_t b) {
+#if GS_HAVE_U128
+    return gs_mulhi_u64(a, b) + ((a * b) >> 63);
+#else
+    uint64_t al = (uint32_t)a, ah = a >> 32, bl = (uint32_t)b, bh = b >> 32;
+    uint64_t lh = al * bh, hl = ah * bl;
+    uint64_t mid = (al * bl >> 32) + (uint32_t)lh + (uint32_t)hl + (1u << 31);
+    return ah * bh + (lh >> 32) + (hl >> 32) + (mid >> 32);
+#endif
+}
+
+/* The last digit moved toward w, within what is proved: `rest` is what the
+   digits so far leave below the upper end, ten_kappa the last digit's weight,
+   and unit the uncertainty. False where it is not certain which digit is
+   nearest, or that the digits read back. */
+static int gs_grisu_weed(char *dig, int n, uint64_t high_w, uint64_t unsafe_width, uint64_t rest,
+                         uint64_t ten_kappa, uint64_t unit) {
+    uint64_t small = high_w - unit, big = high_w + unit;
+    while (rest < small && unsafe_width - rest >= ten_kappa &&
+           (rest + ten_kappa < small || small - rest >= rest + ten_kappa - small)) {
+        dig[n - 1]--;
+        rest += ten_kappa;
+    }
+    if (rest < big && unsafe_width - rest >= ten_kappa &&
+        (rest + ten_kappa < big || big - rest > rest + ten_kappa - big))
+        return 0;
+    return 2 * unit <= rest && rest <= unsafe_width - 4 * unit;
+}
+
+/* As gs_float_digits, or 0 where the digits are not proved. */
+static int gs_grisu3(uint64_t f, int e, int bits, int emin, char *dig, int *k) {
+    static const uint32_t ten[] = { 1u, 10u, 100u, 1000u, 10000u, 100000u, 1000000u, 10000000u,
+                                    100000000u, 1000000000u };
+    int asym = f == (uint64_t)1 << (bits - 1) && e > emin;
+    int lz = 64 - bits, kappa = 1, n = 0;
+    /* A subnormal has fewer bits than its type. */
+    if (!(f >> (bits - 1))) while (!((f << lz) >> 63)) lz++;
+    uint64_t wf = f << lz;
+    int we = e - lz;
+    uint64_t hif = ((f << 1) + 1) << (lz - 1);
+    uint64_t lof = asym ? ((f << 2) - 1) << (lz - 2) : ((f << 1) - 1) << (lz - 1);
+    /* The power that brings the exponent into -60 to -32, by 1292913987 / 2^32
+       for log10 2 (checked for every exponent a float has). */
+    int idx = (348 + (int)(((int64_t)(-61 - we) * 1292913987) >> 32)) / 8 + 1;
+    int d = -348 + 8 * idx;
+    int shift = -(we + ((d * 1741647) >> 19) - 63 + 64);
+    uint64_t cf = gs_pow10_64[idx];
+    uint64_t w = gs_mul_round(wf, cf);
+    uint64_t too_low = gs_mul_round(lof, cf) - 1, too_high = gs_mul_round(hif, cf) + 1;
+    uint64_t unsafe_width = too_high - too_low, unit = 1;
+    uint64_t one = (uint64_t)1 << shift;
+    uint32_t integrals = (uint32_t)(too_high >> shift);
+    uint64_t fractionals = too_high & (one - 1);
+    while (kappa < 10 && integrals >= ten[kappa]) kappa++;
+    for (int p = kappa - 1; p >= 0; p--) {
+        uint32_t div = ten[p];
+        dig[n++] = (char)('0' + integrals / div);
+        integrals %= div;
+        kappa--;
+        uint64_t rest = ((uint64_t)integrals << shift) + fractionals;
+        if (rest < unsafe_width) {
+            if (!gs_grisu_weed(dig, n, too_high - w, unsafe_width, rest, (uint64_t)div << shift, unit))
+                return 0;
+            *k = n + kappa - d;
+            return n;
+        }
+    }
+    for (;;) {
+        fractionals *= 10;
+        unit *= 10;
+        unsafe_width *= 10;
+        dig[n++] = (char)('0' + (fractionals >> shift));
+        fractionals &= one - 1;
+        kappa--;
+        if (fractionals < unsafe_width) {
+            if (!gs_grisu_weed(dig, n, (too_high - w) * unit, unsafe_width, fractionals, one, unit))
+                return 0;
+            *k = n + kappa - d;
+            return n;
+        }
+    }
+}
+
+static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int *k) {
+    int n = gs_grisu3(f, e, bits, emin, dig, k);
+    return n ? n : gs_float_digits_big(f, e, bits, emin, dig, k);
+}
+
 /* The text of a finite float from its fields: the sign, the significand
    without its implicit bit and the biased exponent, for a type of `bits`
    significant bits and least exponent emin. The digits are laid out as C's
@@ -1877,6 +2020,214 @@ GS_API int64_t gs_fmt_f64(uint8_t *dst, double v) {
     memcpy(&b, &v, sizeof b);
     return gs_fmt_float(dst, (int)(b >> 63), b & (((uint64_t)1 << 52) - 1),
                         (int)(b >> 52) & 0x7FF, 53, -1074);
+}
+
+/* Gust: the float nearest a decimal, as Rust's and Go's readers give it, so
+   that a float's text reads back as that float. std's parse_flt has taken the
+   cases one exact operation settles (Clinger's); the rest are mant * 10^exp10
+   for up to 19 significant digits (`truncated`: more followed), scaled in
+   64-bit arithmetic through the formatter's powers of ten, the uncertainty
+   kept in eighths of the last bit. Where it reaches across the point halfway
+   between two doubles, or the result is not a normal double, the text itself
+   is compared with those points in integers. */
+static int gs_dec_scale(uint64_t mant, int64_t exp10, int truncated, double *out) {
+    static const uint64_t adjust[8] = { 0, 0xa000000000000000ull, 0xc800000000000000ull,
+                                        0xfa00000000000000ull, 0x9c40000000000000ull,
+                                        0xc350000000000000ull, 0xf424000000000000ull,
+                                        0x9896800000000000ull };
+    static const int adjust_e[8] = { 0, -60, -57, -54, -50, -47, -44, -40 };
+    if (exp10 < -340 || exp10 > 340) return 0;
+    int e = 0;
+    while (!(mant >> 63)) {
+        mant <<= 1;
+        e--;
+    }
+    /* Digits cut off leave the value up to a whole unit above mant. */
+    uint64_t err = truncated ? (uint64_t)8 << -e : 0;
+    int idx = (int)((exp10 + 348) / 8), d = -348 + 8 * idx, a = (int)exp10 - d;
+    if (a) {
+        /* An exact power, and half a unit from rounding the product. */
+        mant = gs_mul_round(mant, adjust[a]);
+        e += adjust_e[a] + 64;
+        err += 4 + (err != 0);
+        if (!(mant >> 63)) {
+            mant <<= 1;
+            e--;
+            err <<= 1;
+        }
+    }
+    /* Half a unit in the power, and half from rounding the product. */
+    mant = gs_mul_round(mant, gs_pow10_64[idx]);
+    e += ((d * 1741647) >> 19) - 63 + 64;
+    err += 8 + (err != 0);
+    if (!(mant >> 63)) {
+        mant <<= 1;
+        e--;
+        err <<= 1;
+    }
+    const uint64_t half = (uint64_t)0x400 * 8;
+    uint64_t low = (mant & 0x7FF) * 8;
+    if (err >= half || (half - err < low && low < half + err)) return 0;
+    uint64_t r = mant >> 11;
+    int be = e + 1086;
+    if (low >= half + err) r++;
+    if (r >> 53) {
+        r >>= 1;
+        be++;
+    }
+    if (be <= 0 || be >= 2047) return 0;
+    union { double d; uint64_t u; } v;
+    v.u = (uint64_t)be << 52 | (r & (((uint64_t)1 << 52) - 1));
+    *out = v.d;
+    return 1;
+}
+
+/* a <<= sh, for a > 0. */
+static void gs_big_shl(gs_big *a, int sh) {
+    int w = sh >> 5, b = sh & 31, i;
+    int n = a->n;
+    a->d[n + w] = 0;
+    for (i = n - 1; i >= 0; i--) {
+        if (b) {
+            a->d[i + w + 1] |= a->d[i] >> (32 - b);
+            a->d[i + w] = a->d[i] << b;
+        } else {
+            a->d[i + w] = a->d[i];
+        }
+    }
+    for (i = 0; i < w; i++) a->d[i] = 0;
+    a->n = n + w + 1;
+    while (!a->d[a->n - 1]) a->n--;
+}
+
+/* D * 10^E against (2f + 1) * 2^(e - 1): the point above the double f * 2^e. */
+static int gs_dec_cmp_mid(const gs_big *dec, int64_t exp10, uint64_t f, int e) {
+    gs_big a = *dec, b;
+    gs_big_set(&b, 2 * f + 1, 0);
+    if (exp10 > 0) gs_big_mul_pow10(&a, (int)exp10);
+    else if (exp10 < 0) gs_big_mul_pow10(&b, (int)-exp10);
+    if (e > 1) gs_big_shl(&b, e - 1);
+    else if (e < 1) gs_big_shl(&a, 1 - e);
+    return gs_big_cmp(&a, &b);
+}
+
+/* The double's fields, for the point above it. */
+static void gs_dec_fields(uint64_t bits, uint64_t *f, int *e) {
+    int be = (int)(bits >> 52);
+    *f = bits & (((uint64_t)1 << 52) - 1);
+    if (be) *f |= (uint64_t)1 << 52;
+    *e = (be ? be : 1) - 1075;
+}
+
+/* The nearest double by the text's own digits, from `guess`, within a few
+   places of it: moved until the value lies between the points halfway to
+   its neighbours, a tie going to the even significand. Past 780 significant
+   digits a digit 1 stands for all the rest: no point halfway between two
+   doubles has as many. */
+static double gs_dec_exact(const uint8_t *s, int64_t len, int64_t exp10, double guess) {
+    const uint64_t inf = (uint64_t)0x7FF << 52;
+    gs_big dec;
+    int64_t i = 0, nd = 0, e10 = 0;
+    int seen_point = 0, sticky = 0;
+    uint32_t chunk = 0, scale = 1;
+    (void)exp10;
+    dec.n = 0;
+    if (i < len && (s[i] == '-' || s[i] == '+')) i++;
+    for (; i < len; i++) {
+        uint8_t c = s[i];
+        if (c == '.') {
+            seen_point = 1;
+            continue;
+        }
+        if (c < '0' || c > '9') break;
+        if (nd == 0 && c == '0') {
+            if (seen_point) e10--;
+            continue;
+        }
+        if (nd < 779) {
+            chunk = chunk * 10 + (uint32_t)(c - '0');
+            scale *= 10;
+            nd++;
+            if (seen_point) e10--;
+            if (scale == 1000000000u) {
+                gs_big_mul_small_add(&dec, scale, chunk);
+                chunk = 0;
+                scale = 1;
+            }
+        } else {
+            if (c != '0') sticky = 1;
+            if (!seen_point) e10++;
+        }
+    }
+    if (sticky) {
+        chunk = chunk * 10 + 1;
+        scale *= 10;
+        nd++;
+        e10--;
+    }
+    if (scale > 1) gs_big_mul_small_add(&dec, scale, chunk);
+    if (i < len && (s[i] == 'e' || s[i] == 'E')) {
+        int neg = 0;
+        int64_t x = 0;
+        i++;
+        if (i < len && (s[i] == '-' || s[i] == '+')) neg = s[i++] == '-';
+        for (; i < len && s[i] >= '0' && s[i] <= '9'; i++)
+            if (x < 100000) x = x * 10 + (s[i] - '0');
+        e10 += neg ? -x : x;
+    }
+    union { double d; uint64_t u; } v;
+    if (!nd || dec.n == 0) return 0.0;
+    /* Past the range: above 10^310, below 10^-345, every double is far off. */
+    if (nd + e10 > 310) {
+        v.u = inf;
+        return v.d;
+    }
+    if (nd + e10 < -345) return 0.0;
+    v.d = guess;
+    uint64_t bits = v.u & ~((uint64_t)1 << 63);
+    if (bits > inf) bits = inf;
+    for (;;) {
+        uint64_t f;
+        int e, above = -1, below = 1;
+        if (bits < inf) {
+            gs_dec_fields(bits, &f, &e);
+            above = gs_dec_cmp_mid(&dec, e10, f, e);
+            if (above > 0) {
+                bits++;
+                continue;
+            }
+        }
+        if (bits > 0) {
+            gs_dec_fields(bits - 1, &f, &e);
+            below = gs_dec_cmp_mid(&dec, e10, f, e);
+            if (below < 0) {
+                bits--;
+                continue;
+            }
+        }
+        if (above == 0 && (bits & 1)) bits++;
+        else if (below == 0 && (bits & 1)) bits--;
+        v.u = bits;
+        return v.d;
+    }
+}
+
+static double gs_dec_to_f64(const uint8_t *s, int64_t len, uint64_t mant, int64_t exp10, int truncated) {
+    double v;
+    if (gs_dec_scale(mant, exp10, truncated, &v)) return v;
+    /* A start within a few places where a double holds the scale, which the
+       exact comparison moves from. */
+    v = (double)mant;
+    int64_t e = exp10;
+    for (; e > 22; e -= 22) v *= 1e22;
+    for (; e < -22; e += 22) v /= 1e22;
+    {
+        static const double p[] = { 1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
+                                    1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22 };
+        if (e > 0) v *= p[e];
+        else if (e < 0) v /= p[-e];
+    }
+    return gs_dec_exact(s, len, exp10, v);
 }
 
 /* The digits are the f32's own, laid out as an f64's are, so 0.1 as an f32

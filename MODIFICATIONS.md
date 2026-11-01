@@ -552,6 +552,19 @@ git log upstream/master..main
   `test/stdlib/stdlib_bits.goose` (new) checks all three against counting
   bit by bit, for zero, each bit, runs, every pair of bits and random words.
 
+- A float's text and reading it back (`src/runtime/runtime_impl.h`,
+  `gs_grisu3`, `gs_dec_to_f64`; `stdlib/std.goose`, `parse_flt`). Formatting
+  finds the digits by Grisu3, as Rust's does, where every float took big
+  integers, which stay for the 0.25% to 0.8% it cannot prove: the same text
+  for every float (80 million compared with the integers' digits, none
+  differing), at 0.86x Rust's cycles, from 7.1x. Reading had been off by a
+  unit in the last place for up to one float's shortest text in five, which so
+  did not read back; `parse_flt` now gives the nearest float, ties to even, as
+  Rust's and Go's do: Clinger's exact case, else 64-bit scaling through the
+  same 87 powers of ten with its uncertainty tracked, else the text compared
+  exactly with the points halfway between doubles. 510,000 hard texts agree
+  with Python's. `test/stdlib/float_text.goose` (new).
+
 - `stdlib/dictionary.goose`: a slot's tag is one byte, the top seven bits
   of the key's hash, where it was the low 31 with the home slot in them, so
   growth and removal hash the keys they move again. A slot of `i64` keys and

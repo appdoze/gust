@@ -410,6 +410,10 @@ GS_API void gs_os_write_stderr(sl_u8 s) {
 
 GS_API void gs_os_flush_stdout(void) { fflush(stdout); }
 
+GS_API double gs_parse_f64(sl_u8 s, uint64_t mant, int64_t exp10, uint8_t truncated) {
+    return gs_dec_to_f64(s.data, s.len, mant, exp10, truncated);
+}
+
 /* One line of stdin, without its newline or a carriage return before it;
    false at end of input. */
 GS_API uint8_t gs_os_read_line(gs_rref out) {
