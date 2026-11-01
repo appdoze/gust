@@ -35,9 +35,10 @@ jobs:
         run: cmake --build build --config Release --target goose -j 4
 
       # GNU time measures a run's peak memory on Linux (compare/ci_measure.py).
-      - name: Install GNU time
+      # GNU time for peak memory, valgrind for instruction counts.
+      - name: Install GNU time and valgrind
         if: runner.os == 'Linux'
-        run: sudo apt-get install -y --no-install-recommends time
+        run: sudo apt-get install -y --no-install-recommends time valgrind
 
       - name: Toolchains
         run: |
@@ -51,4 +52,4 @@ jobs:
         run: >-
           python compare/ci_measure.py --out cmpb --runs 7
           --gust build/${{ runner.os == 'Windows' && 'Release/gust.exe' || 'gust' }}
-          ${{ runner.os == 'Windows' && '--no-mir' || '' }}
+          ${{ runner.os == 'Windows' && '--no-mir' || '--instructions' }}
