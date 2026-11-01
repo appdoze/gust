@@ -140,6 +140,22 @@ def hello_builds(gust, out, exe):
     return sizes
 
 
+def startup_times(out, exe):
+    """How long a hello world takes from start to exit: the least of many
+    runs, each one's executable already in the page cache."""
+    print("\nprocess start to exit, hello world, ms (least of 60 runs)")
+    for name in ("gust-clang", "gust-gcc", "gust-msvc", "rust", "go"):
+        path = os.path.join(out, f"hello-{name}{exe}")
+        if not os.path.exists(path):
+            continue
+        best = math.inf
+        for _ in range(60):
+            t0 = time.perf_counter()
+            subprocess.run([path], stdout=subprocess.DEVNULL)
+            best = min(best, time.perf_counter() - t0)
+        print(f"  {name:<12}{best * 1000:8.3f}")
+
+
 def resident_maps(gust, out):
     """Linux: where a sleeping hello world's resident memory is, by mapping,
     in Gust, C (cc -O2) and Rust: what each one's baseline is made of."""
@@ -286,6 +302,7 @@ def main():
     print("executable size, bytes, and build time: hello world, each toolchain's default build")
     for n, (s, t) in hello_builds(gust, out, exe).items():
         print(f"  {n:<12}{s:>10}  {t:6.2f} s")
+    startup_times(out, exe)
     if sys.platform.startswith("linux"):
         resident_maps(gust, out)
 
