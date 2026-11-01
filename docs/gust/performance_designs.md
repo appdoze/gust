@@ -44,6 +44,15 @@ in place clears the tombstones.
 instructions under cachegrind), and the growth and removal test with
 integer and string keys, against today's dictionary and Rust's.
 
+**Built** (MODIFICATIONS.md has the measurements). Two departures: a
+growth rehashes every entry by hashbrown's in-place walk rather than
+splitting each group in two, since an entry may sit past its home group;
+and a match's slot comes from a multiply, about as fast as `ctz` under the
+C compilers and several times faster under TinyCC and MIR. Lookups in a
+large table cost more than before where the old table had just doubled:
+two cache lines (control word, then slot) at up to 7/8 load against one at
+as little as 1/3.
+
 ## MSVC's AVX versions, in a translation unit of their own
 
 **Where it falls short.** MSVC builds no simd versions: it has no

@@ -48,7 +48,7 @@ fn main() {
     print(kd.contains(key { 2, 1 }), " ", kd.contains(key { 1, 1 }));      // true false
     var rs = dictionary<i64, bool> {};
     rs.reserve(100);
-    print(rs.slots.len >= 150, " ", rs.count);                            // true 0
+    print(rs.groups.len * 7 >= 100, " ", rs.count);                       // true 0
     var nd = dictionary<i64, i64> {};
     for i in 50 { nd.insert(-i, i * i); }
     block { let n7 = nd.get(-7); if n7 { print(n7, " ", nd.count); } }    // 49 50

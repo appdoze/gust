@@ -469,7 +469,7 @@ another function bypasses that callback.
 ## dictionary
 
 ```goose
-struct dictionary<K, V> { count: i64, slots: dictionary_slot<K, V>[>..<] }
+struct dictionary<K, V> { count: i64, left: i64, groups: dictionary_group<K, V>[>..<] }
 fn get<K, V>(d: dictionary<K, V>&, key: K) -> V?               // reference to the value, or null
 fn contains<K, V>(d: dictionary<K, V>&, key: K) -> bool
 fn insert<K, V>(d: dictionary<K, V>&, key: K, val: V) -> bool   // overwrites; true if new
@@ -481,19 +481,22 @@ fn reserve<K, V>(d: dictionary<K, V>&, n: i64)                  // room for n en
 fn each<K, V, F>(d: dictionary<K, V>&)                          // F(key, val&); order unspecified
 ```
 
-The table uses open addressing with linear probing, a power-of-two capacity
-and backward-shift deletion. Keys and values are fixed-size; a key type
-needs `hash` and `==`. Each slot keeps 31 bits of its key's hash as a tag,
-so a lookup compares keys only where the tags agree, and growth and removal
-do not hash keys again (in tables of up to 2^31 slots). `insert`, `update`
-and `get_or_insert` look a key up once, whether or not it is there. The
-table doubles in place at 2/3 load; `reserve(n)` sizes it for `n` entries
-at that load.
+The table is a Swiss table in Go's layout: groups of eight slots, each
+with a control word of one byte per slot (empty, deleted, or the top seven
+bits of its key's hash), in a power-of-two array. A lookup compares a
+key's seven bits with a whole group's at once, compares keys only where
+they agree, and stops at a group with an empty slot; a probe goes on to
+the next group by triangular steps. Keys and values are fixed-size; a key
+type needs `hash` and `==`. `insert`, `update` and `get_or_insert` look a
+key up once, whether or not it is there. Removal leaves a tombstone where
+the key's group is full. The table fills to 7/8, tombstones included, and
+then doubles in place, or rehashes at its own size where most of that is
+tombstones; `reserve(n)` sizes it for `n` entries at that load.
 Strings are keyed as `u8[:]` slices into text the caller keeps (`const u8[:]`
 for literals or views of `const` data, §9.5), or as inline
 `u8[..k]`. A set is `dictionary<K, bool>`.
 
-The slot array is grow-shrink, so a reference into it (a `get` or
+The group array is grow-shrink, so a reference into it (a `get` or
 `get_or_insert` result, or an `each` binder) must have its last use before
 the next `insert`, `update`, `remove` or `clear`. Otherwise the checker
 reports an error at the mutation, naming the reference and where it was
@@ -516,8 +519,8 @@ require it (§9.5). A dictionary holding writable slices can use
 `dictionary<u8[:], V>`, whether the underlying buffer is bound with `let`
 or `var`.
 
-A value can be a reference if it is optional: `Cell?`, or a link into a
-pool such as `Cell&<u32 in cells>?`. The unused slots hold `default<V>()`,
+A value can be a reference if it is optional: `Cell?`, or a link into a pool
+such as `Cell&<u32 in cells>?`. New slots are filled with `default<V>()`,
 which a non-optional reference does not have. `insert` over an existing key
 stores the new reference rather than writing through the old one. `get` and
 `get_or_insert` return the stored reference itself, and the blocks of
