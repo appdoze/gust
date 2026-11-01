@@ -542,10 +542,10 @@ inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const stri
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
         versions[lv] = Unique(cat(name, "_simd", lv));
         if (fused)
-            Append(code, "#if GS_SIMD >= ", lv,
-                   "\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\n", wide, "GS_SIMD_TARGET", lv,
-                   " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody, "}\n", base,
-                   "#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n#endif\n");
+            Append(code, "#if GS_SIMD >= ", lv, "\n", wide,
+                   "#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
+                   " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody,
+                   "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n", base, "#endif\n");
         else
             Append(code, "#if GS_SIMD >= ", lv, "\n", wide, "GS_SIMD_TARGET", lv, " static ", ret, " ",
                    versions[lv], "(", params, ") {\n", fnbody, "}\n", base, "#endif\n");
