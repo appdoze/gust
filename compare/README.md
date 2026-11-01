@@ -64,6 +64,10 @@ was written for this comparison, under Gust's licence (Apache-2.0).
 
 ## Library operations
 
+`concurrency/` measures starting threads and passing messages, in Gust, Rust's
+std and Go, whose goroutines are not threads and set the mark for starting one;
+`ci_measure.py --concurrency` runs it.
+
 `library/` measures what programs lean on beyond the eight benchmarks: floats and
 integers to text and back, searching, replacing, splitting, sorting, array growth
 and files, in Gust, Rust and Go, and JSON, base64 and regular expressions in Gust

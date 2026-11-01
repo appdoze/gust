@@ -1,0 +1,16 @@
+first true
+all true
+empty false 0
+again true
+again true
+again true
+sizes 300 false 0
+true true
+large 100
+true true true false
+1 true false
+2 3 5
+0 false
+threads true
+wakeups 40
+mailbox 2000

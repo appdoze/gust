@@ -1,0 +1,6 @@
+globals 3000
+mailboxes 200
+contained 100 100
+burst 300
+burst 300
+main's global 7

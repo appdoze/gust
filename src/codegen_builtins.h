@@ -264,7 +264,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 L(cnt, " = *(int64_t *)(", nn, " + 1);");
                 L("GS_MEMCPY(", Top(stk), ", ", image, ", (size_t)", n, ");");
                 Bump(stk, n);
-                L("free(", nn, ");");
+                L("gs_qfree(", nn, ");");
                 ind--;
                 L("}");
                 return poll ? vector<string> { hv, got } : vector<string> { hv };
@@ -284,7 +284,7 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 ind++;
                 L("GS_MEMCPY(", Top(stk), ", ", nn, " + 1, (size_t)", nn, "->size);");
                 Bump(stk, cat(nn, "->size"));
-                L("free(", nn, ");");
+                L("gs_qfree(", nn, ");");
                 ind--;
                 if (poll) {
                     // A missed poll still yields a valid (zero) value.
@@ -303,14 +303,14 @@ inline vector<string> CodeGen::EmitBuiltin(Call *c, Dst d0) {
                 // A value of no bytes (§3.4): the node holds none to fill the
                 // object C gives it.
                 L("GS_MEMZERO(&", tv, ", sizeof(", tv, "));");
-                L("free(", nn, ");");
+                L("gs_qfree(", nn, ");");
             } else if (poll) {
                 L("GS_MEMZERO(&", tv, ", sizeof(", tv, "));");
                 L("if (", nn, ") { GS_MEMCPY(&", tv, ", ", nn, " + 1, sizeof(", tv,
-                  ")); free(", nn, "); }");
+                  ")); gs_qfree(", nn, "); }");
             } else {
                 L("GS_MEMCPY(&", tv, ", ", nn, " + 1, sizeof(", tv, "));");
-                L("free(", nn, ");");
+                L("gs_qfree(", nn, ");");
             }
             return poll ? vector<string> { tv, got } : vector<string> { tv };
         }

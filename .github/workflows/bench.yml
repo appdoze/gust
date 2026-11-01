@@ -50,6 +50,6 @@ jobs:
       # MIR on Linux, where its 1.5x goal was set against gcc.
       - name: Measure
         run: >-
-          python compare/ci_measure.py --out cmpb --runs 7 --library
+          python compare/ci_measure.py --out cmpb --runs 7 --library --concurrency
           --gust build/${{ runner.os == 'Windows' && 'Release/gust.exe' || 'gust' }}
           ${{ runner.os == 'Windows' && '--no-mir' || '--instructions' }}

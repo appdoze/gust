@@ -165,7 +165,17 @@ static void wait_quiescent(void) {
     gs_mutex_unlock(&gs_threads_mutex);
 }
 
+/* A thread waits a moment for its next worker, holding a few regions, and
+   gives them back as it ends: everything is gone that long after a worker. */
 static void check_baseline(long allocations, long regions) {
+    for (int tries = 0; tries < 5000; tries++) {
+        if (counter_add(&live_allocations, 0) == allocations && counter_add(&live_regions, 0) == regions) break;
+        #ifdef _WIN32
+            Sleep(1);
+        #else
+            usleep(1000);
+        #endif
+    }
     check(counter_add(&live_allocations, 0) == allocations,
           "all worker records, arguments and stack blocks released");
     check(counter_add(&live_regions, 0) == regions, "all worker reservations released");

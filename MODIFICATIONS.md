@@ -651,6 +651,17 @@ flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
 
 ## Runtime
 
+- `thread_spawn` reuses threads. A thread whose worker has ended waits 50 ms
+  for the next one, up to 64 of them, and everything of a worker but its native
+  stack's pages is set up and released as on a new thread; one that aborted is
+  not kept, its stack possibly having overflowed. A spawn and wait of an empty
+  worker fell from 90 microseconds to about 1, near a goroutine's. A thread also
+  keeps up to four of its worker's data stack regions, with no more than the
+  first 64 KB of each in memory, so a worker with a data stack costs 2 microseconds
+  rather than 42 (a goroutine doing the same costs 8 and a Rust thread 108). Threads
+  ending still leave nothing behind 50 ms later. `test/threads/thread_reuse.goose`,
+  `compare/concurrency`.
+
 - `src/runtime/runtime_net.h` (new), `src/runtime/runtime_ext.h`,
   `src/main.cpp`, `CMakeLists.txt` (and `src/runtime_inline.h`,
   regenerated): the sockets and poller behind `net`, part of the runtime
@@ -673,6 +684,16 @@ flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
   most 32 connections a turn and honours `Limits.pool_conns`, a limit over
   every worker on the listener, which `examples/api/http.gust` uses in
   place of an even split of the pool's limit.
+- Typed queues and mailboxes (`src/runtime/runtime_threads.h`,
+  `src/codegen_builtins.h`): messages of up to 256 bytes all of one size wait
+  in a ring, where each had been a `malloc` by the sender and a `free` by the
+  receiver; a get hands out a copy in thread-local storage (`gs_qfree`). A
+  receiver looks at the count before it takes the lock and spins a little
+  before it sleeps, and a sender signals only where one sleeps. One producer to
+  three consumers ran 1,000,000 messages in 0.61 s and takes 0.11 s (Rust's
+  std 0.10, Go 0.08); a round trip between two threads went from 1.3 to 0.35
+  microseconds (Rust's std 1.2, Go 0.6). Order, limits and refusals are as
+  before; a queue that sees two sizes falls back to nodes, in order.
 - `src/runtime/runtime_net.h`, `stdlib/net.goose`: a connection costs
   fewer system calls. On Linux an accept takes `accept4` with
   `SOCK_NONBLOCK | SOCK_CLOEXEC`, as Go's and tokio's do, where three
