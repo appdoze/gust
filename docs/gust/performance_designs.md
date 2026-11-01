@@ -17,9 +17,12 @@ instructions, and fill to 7/8. Two results follow from the difference:
   integer entries took 41 MB in Gust and 33 MB in Rust (the growth test
   beside `compare/`), the doubling having come sooner.
 * On the faster of the hosted runner types, `compare/`'s hashmap ran at
-  1.11x Rust's time (Bench run 41256033182) though its hash is cheaper
-  than Rust's SipHash: half its lookups miss, and a miss walks slots until
-  an unused one.
+  1.11x Rust's time (Bench run 41257002851) though its hash is cheaper
+  than Rust's SipHash: cachegrind counted 0.46x Rust's instructions and
+  3.3x its mispredicted branches (8.95 million against 2.73). Half the
+  lookups miss, and each probe's walk ends where an unused slot happens to
+  be, a branch the predictor cannot learn; a group's test settles eight
+  slots with one.
 
 **The design.** The slot array becomes an array of groups, Go's layout:
 

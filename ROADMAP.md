@@ -464,20 +464,24 @@ commands, with no callbacks kept as objects; the samples' runner plays it off sc
 - Release 1.0 with a published benchmark and safety report (`compare/`, rerun).
 
 **Exit:** no known soundness bugs; ahead of Rust on every benchmark in `compare/`; 1.0 tagged.
-**(Ahead on all eight, with clang, Gust's default, on hosted runners: `compare/ci_measure.py`,
-the fastest of seven alternating runs of each build, run 41253296406, Gust's time over
-Rust's (rustc -O3, fat LTO). Ubuntu: n-body 0.25x, raytrace 0.93x, interp 0.63x, sort 0.98x,
-astar 0.85x, bintrees 0.17x, hashmap 0.85x, strings 0.59x, geomean 0.57x. Windows: 0.26x,
-0.91x, 0.60x, 0.88x, 0.85x, 0.06x, 0.77x, 0.54x, geomean 0.47x. With gcc, raytrace (1.12x to
-1.16x), astar (1.05x to 1.10x) and, on Ubuntu, sort (1.20x) are still behind, and with MSVC
-raytrace (1.37x), whose lanes are SSE2's alone. Peak memory, Gust's over Rust's, geomean
-0.84x on both: behind on Ubuntu's n-body and raytrace (1.04x, 1.07x), where Gust's baseline
-is a tenth of a megabyte above Rust's, and on Windows' hashmap (1.03x). The compare program's
-executable is 74 KB against Rust's 2.15 MB on Ubuntu and 188 KB on Windows (65 KB with
-MSVC), a hello world 23 to 25 KB against Rust's 4.5 MB and 131 KB and Go's 2.2 MB, and a
-rebuild of it takes 0.7 to 0.9 s against rustc's 3.1 s on Ubuntu and 28 s on Windows. No
-soundness bug is known with the Windows commit fix, but the review has not happened
-(`docs/gust/soundness_review.md` keeps the list), and 1.0 is not tagged.)**
+**(Ahead on seven of eight, with clang, Gust's default, on hosted runners: `compare/ci_measure.py`,
+the fastest of seven alternating runs of each build, run 41257002851, Gust's time over
+Rust's (rustc -O3, fat LTO). Ubuntu: n-body 0.25x, raytrace 0.94x, interp 0.51x, sort 0.93x,
+astar 0.77x, bintrees 0.20x, hashmap 1.11x, strings 0.67x, geomean 0.58x. Windows: 0.26x,
+0.91x, 0.60x, 0.88x, 0.85x, 0.06x, 0.77x, 0.53x, geomean 0.47x. hashmap is behind on the
+faster runner type (0.77x to 0.85x on the others): cachegrind counts 0.46x Rust's
+instructions there but 3.3x its mispredicted branches, the linear probe's exits, which
+`docs/gust/performance_designs.md`'s dictionary in groups is for. gcc, which now builds the
+AVX versions too, is level with clang on Ubuntu's n-body (0.25x) and ahead on raytrace
+(0.82x); with gcc sort (1.21x on Ubuntu) and astar (1.17x on Windows' MinGW) are behind, and
+with MSVC raytrace (1.37x), whose lanes are SSE2's alone. Peak memory, Gust's over Rust's:
+geomean 0.76x on Ubuntu, where a program no longer loads libm.so, and 0.84x on Windows,
+behind there only on hashmap (1.03x). The compare program's executable is 74 KB against
+Rust's 2.15 MB on Ubuntu and 188 KB on Windows (65 KB with MSVC), a hello world 23 to 25 KB
+against Rust's 4.5 MB and 131 KB and Go's 2.2 MB, and a rebuild of it takes 0.6 to 0.9 s
+against rustc's 11.9 to 15.2 s. No soundness bug is known with the Windows commit fix, but the
+review has not happened (`docs/gust/soundness_review.md` keeps the list), and 1.0 is not
+tagged.)**
 
 ## Upstream policy
 
