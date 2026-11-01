@@ -458,8 +458,17 @@ static int64_t gs_find_pair(sl_u8 s, const void *a, int64_t d, const void *b) {
 }
 
 /* std's popcount, clz and ctz (64 for zero): the instruction where the C
-   compiler has one, and counting under TinyCC. MSVC's popcount is an
-   instruction past x86-64's baseline, which /arch:AVX and up promise. */
+   compiler has one, and arithmetic without a branch elsewhere (TinyCC and
+   MIR among them), as fast whatever the word. MSVC's popcount is an
+   instruction past x86-64's baseline, which /arch:AVX and up promise.
+
+   The arithmetic: popcount adds the bits in fields of 2, 4 and 8, and one
+   multiply sums the bytes. ctz and clz turn x into the ones from bit 0 up
+   to its lowest one bit (x ^ (x - 1)) or to its highest (x smeared right),
+   and Kim Walisch's de Bruijn multiply sends each of those 64 words to a
+   slot of its own in gs_bit_index, which holds that bit's index. Zero
+   comes out as bit 63 for ctz and bit 0 for clz, one short of 64 either
+   way, which adding (x == 0), a setcc, makes up. */
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
 #endif
@@ -469,46 +478,43 @@ static int64_t gs_popcount(uint64_t x) {
 #elif defined(_MSC_VER) && defined(_M_X64) && defined(__AVX__)
     return (int64_t)__popcnt64(x);
 #else
-    int64_t n = 0;
-    while (x) {
-        x &= x - 1;
-        n++;
-    }
-    return n;
+    x -= (x >> 1) & 0x5555555555555555ull;
+    x = (x & 0x3333333333333333ull) + ((x >> 2) & 0x3333333333333333ull);
+    x = (x + (x >> 4)) & 0x0f0f0f0f0f0f0f0full;
+    return (int64_t)((x * 0x0101010101010101ull) >> 56);
 #endif
 }
-static int64_t gs_clz(uint64_t x) {
 #if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
-    return x ? __builtin_clzll(x) : 64;
+static int64_t gs_clz(uint64_t x) { return x ? __builtin_clzll(x) : 64; }
+static int64_t gs_ctz(uint64_t x) { return x ? __builtin_ctzll(x) : 64; }
 #elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
+static int64_t gs_clz(uint64_t x) {
     unsigned long i;
     return _BitScanReverse64(&i, x) ? 63 - (int64_t)i : 64;
-#else
-    int64_t n = 0;
-    if (!x) return 64;
-    while (!(x >> 63)) {
-        x <<= 1;
-        n++;
-    }
-    return n;
-#endif
 }
 static int64_t gs_ctz(uint64_t x) {
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__)
-    return x ? __builtin_ctzll(x) : 64;
-#elif defined(_MSC_VER) && (defined(_M_X64) || defined(_M_ARM64))
     unsigned long i;
     return _BitScanForward64(&i, x) ? (int64_t)i : 64;
-#else
-    int64_t n = 0;
-    if (!x) return 64;
-    while (!(x & 1)) {
-        x >>= 1;
-        n++;
-    }
-    return n;
-#endif
 }
+#else
+static const uint8_t gs_bit_index[64] = {
+    0,  47, 1,  56, 48, 27, 2,  60, 57, 49, 41, 37, 28, 16, 3,  61,
+    54, 58, 35, 52, 50, 42, 21, 44, 38, 32, 29, 23, 17, 11, 4,  62,
+    46, 55, 26, 59, 40, 36, 15, 53, 34, 51, 20, 43, 31, 22, 10, 45,
+    25, 39, 14, 33, 19, 30, 9,  24, 13, 18, 8,  12, 7,  6,  5,  63,
+};
+#define GS_BIT_INDEX(ones) ((int64_t)gs_bit_index[((ones) * 0x03f79d71b4cb0a89ull) >> 58])
+static int64_t gs_clz(uint64_t x) {
+    uint64_t s = x | x >> 1;
+    s |= s >> 2;
+    s |= s >> 4;
+    s |= s >> 8;
+    s |= s >> 16;
+    s |= s >> 32;
+    return 63 - GS_BIT_INDEX(s) + (x == 0);
+}
+static int64_t gs_ctz(uint64_t x) { return GS_BIT_INDEX(x ^ (x - 1)) + (x == 0); }
+#endif
 
 GS_API uint8_t gs_os_read_file(sl_u8 path, gs_rref out);
 GS_API uint8_t gs_os_write_file(sl_u8 path, sl_u8 data);

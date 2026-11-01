@@ -136,7 +136,10 @@ fn swap<T>(a: T&, b: T&)            // swap(x, y)
 
 `popcount`, `clz` and `ctz` are implemented in the runtime. Each is a single
 instruction where the C compiler has one (MSVC's `popcount` needs
-`/arch:AVX` or higher for that), and a loop under TinyCC.
+`/arch:AVX` or higher for that), and a few operations without a branch
+elsewhere, as under TinyCC and MIR (`gust run`, `--mir`): `ctz` and `clz`
+a de Bruijn multiply and a table lookup, `popcount` additions in ever
+wider fields.
 
 `rem` is the remainder of truncating division: `rem(-7, 3) == -1`, paired
 with `-7 / 3 == -2`. `div_euclid` is the quotient paired with Euclidean `%`:

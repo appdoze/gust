@@ -536,6 +536,22 @@ git log upstream/master..main
   libm.so, a third of a megabyte resident on Linux, where `compare/`'s
   baseline was a tenth of a megabyte above Rust's.
 
+- `src/runtime/runtime_ext.h` (and `src/runtime_inline.h`, regenerated),
+  `docs/stdlib.md`: std's `popcount`, `clz` and `ctz` take no branch where
+  the C compiler has no instruction for them (TinyCC, MIR, and MSVC's
+  `popcount` below `/arch:AVX`), where each was a loop over the bits: a
+  dictionary probe built on `ctz` had `compare/`'s hashmap take 2.3x its
+  time under `gust run` and 1.9x under `--mir`. `ctz` and `clz` reduce a
+  word to the ones up to its lowest one bit, or smeared down from its
+  highest, which Kim Walisch's de Bruijn multiply sends to a 64-byte table
+  of bit indexes, plus a setcc for 64 at zero; `popcount` sums in fields of
+  2, 4 and 8 bits and one multiply. Per call, over words whose lowest or
+  highest one bit is anywhere, under `gust run`: `ctz` 47 to 3 ns, `clz`
+  46 to 5, `popcount` 23 to 4; under `--mir`: 23 to 1.5, 24 to 2.7, 16 to
+  2. Dense random words, where the loops stopped soonest, gain too.
+  `test/stdlib/stdlib_bits.goose` (new) checks all three against counting
+  bit by bit, for zero, each bit, runs, every pair of bits and random words.
+
 - `stdlib/dictionary.goose`: a slot's tag is one byte, the top seven bits
   of the key's hash, where it was the low 31 with the home slot in them, so
   growth and removal hash the keys they move again. A slot of `i64` keys and

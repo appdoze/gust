@@ -1,0 +1,6 @@
+zero and all ones: 2 values, 0 wrong, sums 64 64 64
+0 64 64 64 0 0
+single bits: 64 values, 0 wrong, sums 64 2016 2016
+runs of ones: 256 values, 0 wrong, sums 10145 2081 2207
+pairs of bits: 4096 values, 0 wrong, sums 8128 85344 85344
+random words: 120000 values, 0 wrong, sums 2497382 1604557 1098291
