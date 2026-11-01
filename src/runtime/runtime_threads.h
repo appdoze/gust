@@ -628,6 +628,13 @@ static GS_TLS struct {
    sleep and a wakeup would cost the two threads, as most waits between a
    busy sender's messages are shorter. */
 #define GS_QSPIN 2000
+/* And how long one that lost a race for a message waits before it looks again.
+   A message costs at least the time for the lock's line to go from core to core
+   and back, and each receiver going for it adds another trip: with a sender and
+   three receivers on Linux, this took a million messages from 0.49 s to 0.16 s,
+   and left a sender and one receiver as they were. Another receiver is at work,
+   so nothing waits on this one meanwhile. */
+#define GS_QLOST 1024
 
 /* count outside the lock, for that look alone; it is written under the lock. */
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -799,6 +806,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
                 return n;
             }
             gs_mutex_unlock(&s->mutex);
+            for (int r = 0; r < GS_QLOST; r++) gs_pf_relax();
         }
         gs_pf_relax();
     }

@@ -91,6 +91,27 @@ that collide, cost at most that many compares per operation; there is nothing
 quadratic left to reach for. A key type whose `hash` does not use `hash_combine`
 can still be made to collide, since nothing gives it the key.
 
+## A queue with no lock between its sender and its receivers (not built)
+
+**Where it falls short.** A typed queue has one lock, which the sender and the
+receivers all take for every message, so its cache line goes from core to core and
+back for each. With a sender and three receivers on a 4-CPU Linux runner a million
+messages take 0.16 s, against 0.05 s for Go and Rust. Pinned to the two hyperthreads
+of one core the same run takes a quarter of what two cores do on Intel, which is what
+shows that this and nothing in the kernel is the cost: the run spends no time in the
+system. Real jobs take long enough that this rarely shows.
+
+**What others do.** Rust's channel is a linked list of blocks with its ends apart, and
+Go's sender fills a buffer while the receivers are parked. Neither moves a line per
+message.
+
+**The design.** Two locks, as in Michael and Scott's two-lock queue: one for the
+sender's end and one for the receivers', on lines of their own, each end keeping its
+last sight of the other's index and looking again only when that runs out. With 8-byte
+messages one slot line moves per eight messages. Growth, the change to nodes and a
+limit's change take both, sender's first. A sleeping receiver needs a store and a fence
+on each side, so that a send can't miss it, which is the part to get right.
+
 ## MSVC's AVX versions, in a translation unit of their own
 
 **Where it falls short.** MSVC builds no simd versions: it has no

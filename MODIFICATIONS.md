@@ -688,6 +688,12 @@ flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
   rather than 42 (a goroutine doing the same costs 8 and a Rust thread 108). Threads
   ending still leave nothing behind 50 ms later. `test/threads/thread_reuse.goose`,
   `compare/concurrency`.
+- A receiver at a typed queue looks for a message for about as long as a sleep and
+  a wakeup would cost, and one that loses a race for a message waits before it looks
+  again, as each receiver going for a message is another trip for the lock's cache
+  line from core to core: a sender and three receivers on Linux took a million
+  messages from 0.49 s to 0.16 s. Go and Rust still take 0.05 s, for which see
+  `docs/gust/performance_designs.md`.
 
 - `src/runtime/runtime_net.h` (new), `src/runtime/runtime_ext.h`,
   `src/main.cpp`, `CMakeLists.txt` (and `src/runtime_inline.h`,

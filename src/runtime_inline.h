@@ -4580,6 +4580,13 @@ R"GSRT(static GS_TLS struct {
    sleep and a wakeup would cost the two threads, as most waits between a
    busy sender's messages are shorter. */
 #define GS_QSPIN 2000
+/* And how long one that lost a race for a message waits before it looks again.
+   A message costs at least the time for the lock's line to go from core to core
+   and back, and each receiver going for it adds another trip: with a sender and
+   three receivers on Linux, this took a million messages from 0.49 s to 0.16 s,
+   and left a sender and one receiver as they were. Another receiver is at work,
+   so nothing waits on this one meanwhile. */
+#define GS_QLOST 1024
 
 /* count outside the lock, for that look alone; it is written under the lock. */
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -4751,6 +4758,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
                 return n;
             }
             gs_mutex_unlock(&s->mutex);
+            for (int r = 0; r < GS_QLOST; r++) gs_pf_relax();
         }
         gs_pf_relax();
     }
@@ -4785,7 +4793,8 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
     return n;
 }
 
-GS_API gs_qnode *gs_qpoll(gs_queue *q) { return gs_qwait(q, 0); }
+)GSRT"
+R"GSRT(GS_API gs_qnode *gs_qpoll(gs_queue *q) { return gs_qwait(q, 0); }
 
 GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
     if (n <= 0) gs_abort(GS_E_QBOUND, file, line);
@@ -4800,8 +4809,7 @@ GS_API void gs_qlimit(gs_queue *q, int64_t n, const char *file, int line) {
 GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
     struct gs_qstate *s = *q;
     gs_qlock(s);
-)GSRT"
-R"GSRT(    struct gs_qbox_entry *b = s->boxes;
+    struct gs_qbox_entry *b = s->boxes;
     while (b && b->id != id) b = b->next;
     if (!b) {
         b = (struct gs_qbox_entry *)malloc(sizeof(struct gs_qbox_entry));
