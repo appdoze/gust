@@ -4170,10 +4170,12 @@ static void gs_pf_relax(void) {
 /* A word another thread writes under a lock, read outside it, for a spin. */
 #if defined(_MSC_VER) && !defined(__clang__)
 #define GS_SPIN_LOAD(p) (*(void *volatile *)(p))
+#define GS_SPIN_STORE(p, v) (*(void *volatile *)(p) = (v))
 #define GS_SPIN_LOAD64(p) (*(volatile int64_t *)(p))
 #define GS_SPIN_STORE64(p, v) (*(volatile int64_t *)(p) = (v))
 #else
 #define GS_SPIN_LOAD(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define GS_SPIN_STORE(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
 #define GS_SPIN_LOAD64(p) __atomic_load_n((p), __ATOMIC_RELAXED)
 #define GS_SPIN_STORE64(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
 #endif
@@ -4232,7 +4234,7 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
 #define GS_THREAD_KEEP_MS 50
 #define GS_THREAD_SPIN 2000
 #define GS_THREAD_SPINNERS 2
-static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; under the mutex */
+static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; written under the mutex */
 static int64_t gs_threads_idle;     /* threads that will take one; under the mutex */
 static int64_t gs_threads_sleeping; /* those of them on gs_threads_more; under the mutex */
 static int64_t gs_threads_ended;    /* workers ended; written under the mutex */
@@ -4295,7 +4297,7 @@ static void *gs_thread_main(void *p)
             /* A starter counts this thread out as it leaves one here. */
             if (gs_thread_next) {
                 t = gs_thread_next;
-                gs_thread_next = t->handed;
+                GS_SPIN_STORE(&gs_thread_next, t->handed);
             } else {
                 gs_threads_idle--;
             }
@@ -4337,7 +4339,7 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
     if (gs_threads_idle > 0) {
         gs_threads_idle--;
         t->handed = gs_thread_next;
-        gs_thread_next = t;
+        GS_SPIN_STORE(&gs_thread_next, t);
         if (gs_threads_sleeping) gs_cond_signal(&gs_threads_more);
         gs_mutex_unlock(&gs_threads_mutex);
         return id;
@@ -4348,13 +4350,13 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
         failed = handle == NULL;
         /* Closing the handle does not stop the worker. Completion is tracked
            above, so callers never need to retain or join a native handle. */
-        if (handle && !CloseHandle(handle)) gs_panic("cannot close thread handle");
+)GSRT"
+R"GSRT(        if (handle && !CloseHandle(handle)) gs_panic("cannot close thread handle");
     #else
         pthread_t handle;
         pthread_attr_t attr;
         failed = pthread_attr_init(&attr);
-)GSRT"
-R"GSRT(        if (!failed) {
+        if (!failed) {
             failed = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
             if (!failed) failed = pthread_create(&handle, &attr, gs_thread_main, t);
             pthread_attr_destroy(&attr);
@@ -4558,11 +4560,11 @@ GS_API void gs_free_msg(uint8_t *msg) {
    and each end keeps what it last saw of the other's count, looking again only when
    that runs out. What says how messages are held (the ring, its size, the message
    size, the limit) changes under both locks, so either is enough to read it. The lock
-   order is head, then tail: a sender holding tail never waits for head, and goes back
+)GSRT"
+R"GSRT(   order is head, then tail: a sender holding tail never waits for head, and goes back
    for both in that order where it has to.
 
-)GSRT"
-R"GSRT(   Small messages all of one size, the usual kind, wait in a ring (esize, their size; 0
+   Small messages all of one size, the usual kind, wait in a ring (esize, their size; 0
    until the first message, -1 once two sizes have shown it is not that kind), so that
    a message costs no allocation here and no free on another thread. Any other kind
    waits in a list of nodes, under both locks.
@@ -4757,13 +4759,13 @@ static uint8_t gs_qput_slow(struct gs_qstate *s, const void *data, int64_t size)
         n->size = size;
         memcpy(n + 1, data, (size_t)size);
         gs_qlock_both(s);
-        if (s->tail - s->head >= s->limit) {
+)GSRT"
+R"GSRT(        if (s->tail - s->head >= s->limit) {
             gs_qunlock_both(s);
             free(n);
             return 0;
         }
-)GSRT"
-R"GSRT(        if (s->last) s->last->next = n; else s->first = n;
+        if (s->last) s->last->next = n; else s->first = n;
         s->last = n;
         GS_QSEQ_STORE(&s->tail, s->tail + 1);
         gs_qunlock_both(s);
