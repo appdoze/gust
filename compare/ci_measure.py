@@ -196,6 +196,50 @@ def print_times(gust, out, exe):
         print(f"  {n:<12}{t:8.3f}")
 
 
+def library_times(gust, out, exe, runs):
+    """compare/library in Gust, Rust and Go: each bench's builds in turn, the
+    fastest of each, and every checksum compared."""
+    src = os.path.join(HERE, "library")
+    progs = {}
+    for cc in ("clang", "gcc") + (("msvc",) if os.name == "nt" else ()):
+        path = os.path.join(out, f"library-{cc}{exe}")
+        if build([gust, "build", "-q", "--cc", cc, os.path.join(src, "library.goose"), "-o", path])[0]:
+            progs[f"gust/{cc}"] = path
+    if shutil.which("rustc"):
+        path = os.path.join(out, f"library-rust{exe}")
+        if build(["rustc", "-C", "debuginfo=0", "-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1",
+                  "-o", path, os.path.join(src, "library.rs")])[0]:
+            progs["rust"] = path
+    if shutil.which("go"):
+        path = os.path.join(out, f"library-go{exe}")
+        if build(["go", "build", "-o", path, "."], cwd=os.path.join(src, "go"))[0]:
+            progs["go"] = path
+    names = list(progs)
+    benches = ["fmtf", "parsef", "fmti", "parsei", "find", "replace", "splitjoin", "lower", "sortstr", "sortint",
+               "push", "fileio", "jsonwrite", "jsonparse", "base64", "regex"]
+    print("\nlibrary operations, seconds (fastest of the runs)")
+    print("bench     " + "".join(f"{n:>12}" for n in names) + "  gust vs rust   vs go")
+    base = next((n for n in names if n.startswith("gust/")), None)
+    for b in benches:
+        best, sums = {}, {}
+        for _ in range(runs):
+            for n in names:
+                r = subprocess.run([progs[n], "1", b], capture_output=True, text=True, cwd=out)
+                if r.returncode != 0:
+                    sys.exit(f"{n} {b} failed:\n{r.stdout}{r.stderr}")
+                for line in r.stdout.splitlines():
+                    if line.startswith("bench"):
+                        f = line.split("\t")
+                        best[n] = min(best.get(n, math.inf), float(f[2]))
+                        sums[n] = float(f[3])
+        if len(set(sums.values())) > 1:
+            sys.exit(f"{b}: the checksums differ: {sums}")
+        rel = ""
+        for other in ("rust", "go"):
+            rel += f"{best[base] / best[other]:8.2f}x" if base in best and other in best else f"{'-':>9}"
+        print(f"{b:<10}" + "".join(f"{best[n]:12.4f}" if n in best else f"{'-':>12}" for n in names) + "  " + rel)
+
+
 def resident_maps(gust, out):
     """Linux: where a sleeping hello world's resident memory is, by mapping,
     in Gust, C (cc -O2) and Rust: what each one's baseline is made of."""
@@ -237,6 +281,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--runs", type=int, default=7)
     ap.add_argument("--no-mir", action="store_true")
+    ap.add_argument("--library", action="store_true", help="also compare/library, in Gust, Rust and Go")
     ap.add_argument("--instructions", action="store_true", help="also count instructions under cachegrind (Linux)")
     args = ap.parse_args()
     gust = os.path.abspath(args.gust)
@@ -344,6 +389,8 @@ def main():
         print(f"  {n:<12}{s:>10}  {t:6.2f} s")
     startup_times(out, exe)
     print_times(gust, out, exe)
+    if args.library:
+        library_times(gust, out, exe, min(args.runs, 5))
     if sys.platform.startswith("linux"):
         resident_maps(gust, out)
 
