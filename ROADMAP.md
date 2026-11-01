@@ -472,7 +472,7 @@ astar 0.81x, bintrees 0.14x, hashmap 0.53x, strings 0.46x, geomean 0.50x. Window
 ahead with the dictionary in groups, its mispredicted branches 1.10x Rust's rather than 3.3x
 (`docs/gust/performance_designs.md`). With gcc, sort (1.15x), astar (1.06x) and raytrace
 (1.03x) are behind on Ubuntu, and raytrace (1.12x) and astar (1.10x) on Windows' MinGW; with
-MSVC raytrace is (1.12x, from 1.37x before its AVX versions). Peak memory, Gust's over Rust's:
+MSVC raytrace (1.12x, from 1.37x before its AVX versions). Peak memory, Gust's over Rust's:
 geomean 0.72x on Ubuntu, where a program no longer loads libm.so, and 0.84x on Windows, behind
 there only on hashmap (1.03x) and level on astar. The compare program's executable is 72 KB
 against Rust's 2.15 MB on Ubuntu and 85 KB against 188 KB on Windows, a hello world 15 and 25

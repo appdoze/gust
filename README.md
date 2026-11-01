@@ -96,7 +96,7 @@ Serving a JSON API, mixed load over 64 connections on a 4-CPU Linux runner, one
 | Go's net/http | 55k | 3.29 ms | 12.8 MB |
 
 Where it is behind: tokio has the lower p99 there and answers a health check 3%
-faster, and with a new connection per request Gust's 17.6k a second is 6% under
+faster, and with a new connection per request Gust's 17.6k a second is 5 to 6% under
 Go's and tokio's. Sorting integers takes 1.15x to 1.35x Rust's time, gcc builds
 are behind Rust on sort, A* and ray tracing, and an MSVC build on ray tracing. Go's
 goroutines start a hundred at once faster than threads can, 20x on Linux, and a
