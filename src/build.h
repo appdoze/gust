@@ -65,6 +65,19 @@ struct Builder {
         vector<string> f = { "-O2" };
         if (tc.name == "clang" || tc.name == "gcc")
             f.push_back("-ffunction-sections"), f.push_back("-fdata-sections");
+        #ifdef __linux__
+            // Gust: not what a distribution's compiler turns on by default
+            // for C (Ubuntu's gcc all of it): stack protectors, CET's landing
+            // pads, stack-clash probes and fortified copies guard against
+            // what a checked language's own code does not do, as Rust's
+            // default builds reckon; and unwind tables, which nothing here
+            // unwinds. The flags are gcc 8's and clang 11's.
+            if ((tc.name == "gcc" && atoi(tc.version.c_str()) >= 8) ||
+                (tc.name == "clang" && atoi(tc.version.c_str()) >= 11))
+                for (auto x : { "-fno-stack-protector", "-fcf-protection=none", "-fno-stack-clash-protection",
+                                "-U_FORTIFY_SOURCE", "-fno-asynchronous-unwind-tables" })
+                    f.push_back(x);
+        #endif
         return f;
     }
 
@@ -84,9 +97,11 @@ struct Builder {
         #elif defined(_WIN32)
             if (tc.name == "clang" && tc.target.find("windows-gnu") == string::npos)
                 return ucrtdll ? vector<string> { "-Wl,/NODEFAULTLIB:libucrt.lib", "-lucrt" } : vector<string> {};
-            return { "-Wl,--gc-sections" };
+            return { "-Wl,--gc-sections", "-s" };
         #else
-            return { "-Wl,--gc-sections" };
+            // Without the symbol table, and (Linux) with the headers, read-only
+            // data and code in fewer page-aligned segments.
+            return { "-Wl,--gc-sections", "-s", "-Wl,-z,noseparate-code" };
         #endif
     }
 

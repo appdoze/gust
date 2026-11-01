@@ -478,6 +478,10 @@ static GS_NORETURN void gs_park(void) {
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
+#include <sys/resource.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 
 /* The calling thread's native stack, from GS_NATIVE_SLOP below its lowest
    usable address up to its top: a fault in there is that stack overflowing,
@@ -606,7 +610,18 @@ static void gs_native_stack_init(void) {
         pthread_attr_t attr;
         void *base;
         size_t size;
-        if (!pthread_getattr_np(pthread_self(), &attr)) {
+        struct rlimit rl;
+        /* Gust: on the main thread glibc's pthread_getattr_np reads
+           /proc/self/maps through stdio and sscanf, a good part of the C
+           library resident and the slowest step of a program's start. The
+           limit says as much: the stack reaches at most that far below its
+           top, which is above this frame, and the kernel keeps other
+           mappings out of that room (1 GB taken for an unlimited stack). */
+        if (syscall(SYS_gettid) == getpid() && !getrlimit(RLIMIT_STACK, &rl)) {
+            size = rl.rlim_cur == RLIM_INFINITY ? (size_t)1 << 30 : (size_t)rl.rlim_cur;
+            hi = (uintptr_t)&ss;
+            lo = hi > size ? hi - size : 0;
+        } else if (!pthread_getattr_np(pthread_self(), &attr)) {
             if (!pthread_attr_getstack(&attr, &base, &size)) {
                 lo = (uintptr_t)base;
                 hi = lo + size;

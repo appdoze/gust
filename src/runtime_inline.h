@@ -2022,6 +2022,10 @@ static GS_NORETURN void gs_park(void) {
 #include <unistd.h>
 #include <signal.h>
 #include <pthread.h>
+#include <sys/resource.h>
+#ifdef __linux__
+#include <sys/syscall.h>
+#endif
 
 /* The calling thread's native stack, from GS_NATIVE_SLOP below its lowest
    usable address up to its top: a fault in there is that stack overflowing,
@@ -2131,9 +2135,9 @@ static size_t gs_sigstack_size(void) {
 }
 
 /* Run by each thread program's thread as it starts: an alternate stack for
-   the fault handler, unless the thread has one (ASan gives every thread its
 )GSRT"
-R"GSRT(   own), and the bounds of the thread's stack. */
+R"GSRT(   the fault handler, unless the thread has one (ASan gives every thread its
+   own), and the bounds of the thread's stack. */
 static void gs_native_stack_init(void) {
     stack_t ss;
     uintptr_t lo = 0, hi = 0;
@@ -2151,7 +2155,18 @@ static void gs_native_stack_init(void) {
         pthread_attr_t attr;
         void *base;
         size_t size;
-        if (!pthread_getattr_np(pthread_self(), &attr)) {
+        struct rlimit rl;
+        /* Gust: on the main thread glibc's pthread_getattr_np reads
+           /proc/self/maps through stdio and sscanf, a good part of the C
+           library resident and the slowest step of a program's start. The
+           limit says as much: the stack reaches at most that far below its
+           top, which is above this frame, and the kernel keeps other
+           mappings out of that room (1 GB taken for an unlimited stack). */
+        if (syscall(SYS_gettid) == getpid() && !getrlimit(RLIMIT_STACK, &rl)) {
+            size = rl.rlim_cur == RLIM_INFINITY ? (size_t)1 << 30 : (size_t)rl.rlim_cur;
+            hi = (uintptr_t)&ss;
+            lo = hi > size ? hi - size : 0;
+        } else if (!pthread_getattr_np(pthread_self(), &attr)) {
             if (!pthread_attr_getstack(&attr, &base, &size)) {
                 lo = (uintptr_t)base;
                 hi = lo + size;
@@ -2314,7 +2329,8 @@ GS_API uint8_t gs_trim_memory(void) {
     uintptr_t page = (uintptr_t)gs_page_size;
     int ok = 1;
     for (long i = 0; i < gs_nregions; i++) {
-        gs_region *r = &gs_regions[i];
+)GSRT"
+R"GSRT(        gs_region *r = &gs_regions[i];
         uintptr_t base = (uintptr_t)r->base, top = (uintptr_t)r->stack->top;
         /* A top outside its own region is a compiler or runtime bug, not
            something the OS refused: carrying on could discard live data. */
@@ -2328,8 +2344,7 @@ GS_API uint8_t gs_trim_memory(void) {
         if ((uintptr_t)r->committed < end) end = (uintptr_t)r->committed;
 #endif
         if (start >= end) continue;
-)GSRT"
-R"GSRT(        size_t len = (size_t)(end - start);
+        size_t len = (size_t)(end - start);
 #ifdef _WIN32
         /* The access-fault handler commits the pages again on growth. */
         if (VirtualFree((void *)start, len, MEM_DECOMMIT))
@@ -2511,7 +2526,8 @@ static void gs_sp_fix(gs_sppath *p, int64_t l, int64_t was, int64_t now) {
 
 /* Descends to the leaf holding the last span that starts at or before idx,
    and returns its position there, or -1 where no span does. */
-static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
+)GSRT"
+R"GSRT(static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
     int64_t l, i = GS_SPHEAD(p)->root, k;
     gs_spleaf *lf;
     p->h = GS_SPHEAD(p)->height;
@@ -2535,8 +2551,7 @@ static void gs_sp_newroot(gs_sppath *p, int64_t a, int64_t b, int leaf) {
     gs_spinner *rn = GS_SPINNER(p, r);
     rn->n = 2;
     rn->key[0] = gs_sp_key(p, a, leaf);
-)GSRT"
-R"GSRT(    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
+    rn->max[0] = gs_sp_max(p, a, leaf, INT64_MAX);
     rn->child[0] = a;
     rn->key[1] = gs_sp_key(p, b, leaf);
     rn->max[1] = gs_sp_max(p, b, leaf, INT64_MAX);
@@ -2743,7 +2758,8 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
         if (c == mx) {
             const int64_t *v = l == p.h ? lf->cnt : GS_SPINNER(&p, p.node[l])->max;
             int64_t w = l == p.h ? lf->n : GS_SPINNER(&p, p.node[l])->n;
-            nm = before[l] > now ? before[l] : now;
+)GSRT"
+R"GSRT(            nm = before[l] > now ? before[l] : now;
             for (; j < w && nm < c; j++)
                 if (v[j] > nm) nm = v[j];
         }
@@ -2765,8 +2781,7 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
    to it is only made where its first span touches the run. */
 typedef struct {
     gs_spleaf *lf, *nl;
-)GSRT"
-R"GSRT(    int64_t k, nk;
+    int64_t k, nk;
     gs_sppath *np;
 } gs_spnear;
 
@@ -2964,7 +2979,8 @@ static void gs_scan_init(void) {
 }
 
 /* A set's block test, held in registers: the bytes or range it compares
-   with and all ones where the result is complemented, or its tables. */
+)GSRT"
+R"GSRT(   with and all ones where the result is complemented, or its tables. */
 typedef struct { __m128i a, b, c, flip; } gs_bsm;
 
 static GS_INLINE void gs_bsm_init(gs_bsm *m, const gs_byteset *s, int tables) {
@@ -2983,8 +2999,7 @@ static GS_INLINE void gs_bsm_init(gs_bsm *m, const gs_byteset *s, int tables) {
 
 /* The members among the 16 bytes of x, as 0xff bytes, for a set of kind k
    from 1 to 4, a constant wherever this is inlined. A range holds x where
-)GSRT"
-R"GSRT(   x - lo, wrapping, is at most its width. */
+   x - lo, wrapping, is at most its width. */
 static GS_INLINE __m128i gs_bsm_test(const gs_bsm *m, int k, __m128i x) {
     __m128i r, t;
     if (k == 1) {
@@ -3134,7 +3149,8 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
                         uint64_t budget, int64_t mainregions, int64_t workerregions) {
     gs_argc = argc;
     gs_argv = argv;
-    /* A region's usable part is whole pages: the guard gap behind it has to
+)GSRT"
+R"GSRT(    /* A region's usable part is whole pages: the guard gap behind it has to
        start on a page to be protected, and on Windows a stack would run on
        unseen through the rest of a part page committed at its end, past the
        GS_STACK_RESERVE bytes the compiler's checks go by. */
@@ -3149,8 +3165,7 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
     /* The workers the budget holds beside the main program, each at the
        most regions one can take: what hardware_threads() reports at most.
        At least one, so a program sized by it still runs; the regions the
-)GSRT"
-R"GSRT(       platform then refuses are retried smaller (gs_reserve_region). */
+       platform then refuses are retried smaller (gs_reserve_region). */
     if (workerregions > 0) {
         uint64_t per = reserve + gap;
         uint64_t total = per ? budget / per : 0;
@@ -3336,7 +3351,8 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
         ++*k;
     }
     /* Each digit d leaves the remainder r: stop where the digits so far
-       followed by d (r within *mm) or by d + 1 (r + mp past s) read back. */
+)GSRT"
+R"GSRT(       followed by d (r within *mm) or by d + 1 (r + mp past s) read back. */
     for (;;) {
         int d = 0, low, high;
         gs_big_mul(&r, 10);
@@ -3362,8 +3378,7 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
             c = gs_big_cmp(&t, &s);
             high = c > 0 || (c == 0 && (d & 1));
         }
-)GSRT"
-R"GSRT(        dig[n++] = (char)('0' + d + high);
+        dig[n++] = (char)('0' + d + high);
         return n;
     }
 }
