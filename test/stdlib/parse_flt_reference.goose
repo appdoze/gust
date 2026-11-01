@@ -1,14 +1,11 @@
-// runtime-debug: std parse_flt reads up to 19 digits without an exponent
-// on a path of its own. reference_parse_flt below is the general algorithm
-// alone, counting only significant mantissa digits; the two must agree to
-// the bit, and on the flag, for every input: edge cases, then a few hundred
+// runtime-debug: std parse_flt settles what one exact operation can on paths
+// of its own. reference_parse_flt below is the general reader alone (the
+// runtime's, correctly rounded), counting only significant mantissa digits; the
+// two must agree to the bit, and on the flag, for every input: edge cases, then a few hundred
 // thousand generated ones biased to what the parser decides on (signs,
 // points, exponents, lengths around 18 and 19 digits, runs of 0 and 9, a
 // stray byte).
 import std;
-
-let reference_pow10: f64[23] = [1e0, 1e1, 1e2, 1e3, 1e4, 1e5, 1e6, 1e7, 1e8, 1e9, 1e10, 1e11,
-                                1e12, 1e13, 1e14, 1e15, 1e16, 1e17, 1e18, 1e19, 1e20, 1e21, 1e22];
 
 fn reference_parse_flt(s: u8[:]) -> f64, bool {
     var i = 0;
@@ -21,9 +18,10 @@ fn reference_parse_flt(s: u8[:]) -> f64, bool {
     var mdigits = 0;
     var exp10 = 0;
     var digits = 0;
+    var truncated = false;
     while i < s.len && s[i] >= '0' && s[i] <= '9' {
         if mdigits < 19 { mant = mant * 10 + (s[i] - '0'); if mant != 0 { mdigits += 1; } }
-        else { exp10 += 1; }
+        else { exp10 += 1; truncated = true; }
         digits += 1;
         i += 1;
     }
@@ -34,6 +32,8 @@ fn reference_parse_flt(s: u8[:]) -> f64, bool {
                 mant = mant * 10 + (s[i] - '0');
                 if mant != 0 { mdigits += 1; }
                 exp10 -= 1;
+            } else {
+                truncated = true;
             }
             digits += 1;
             i += 1;
@@ -57,12 +57,9 @@ fn reference_parse_flt(s: u8[:]) -> f64, bool {
         if edigits == 0 { return 0.0, false; }
         exp10 += if eneg { -e } else { e };
     }
-    var v: f64 = mant;
-    var e = exp10;
-    while e > 22 { v *= 1e22; e -= 22; }
-    while e < -22 { v /= 1e22; e += 22; }
-    if e > 0 { v *= reference_pow10[e]; } else if e < 0 { v /= reference_pow10[-e]; }
     if i != s.len { return 0.0, false; }
+    var v = 0.0;
+    if mant != 0 { v = parse_flt_exact(s, mant, exp10, truncated); }
     if neg { v = -v; }
     return v, true;
 }

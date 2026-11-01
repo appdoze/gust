@@ -83,12 +83,14 @@ fn swap<T>(a: T&, b: T&) {
 // One overload per scalar type: a u8 widens equally well into i64 and u64,
 // so a single generic would be ambiguous. Integers get a multiply-xorshift
 // mix (the low bits pick a `dictionary` group, the top seven are its tag). A
-// negative integer mixes as its two's-complement bits, and a float as its
-// count of 1/65536ths, truncated and wrapped to 64 bits: `as!`, since those
-// conversions change the value on purpose.
+// negative integer mixes as its two's-complement bits, a float as its bits
+// (Gust: its count of 1/65536ths had given every small float one hash). Gust:
+// the high half is folded down first, as multiplying moves bits only up, and
+// keys that differ only above bit 32 had left a dictionary's low bits alike.
+extern fn flt_bits(x: f64) -> u64 = "gs_flt_bits";
 
 fn hash_mix(x: u64) -> u64 {
-    var h = x * 11400714819323198485;
+    var h = (x ^ (x >> 32)) * 11400714819323198485;
     h = h ^ (h >> 32);
     return h;
 }
@@ -102,8 +104,8 @@ fn hash(x: u16) -> u64 { hash_mix(x) }
 fn hash(x: u32) -> u64 { hash_mix(x) }
 fn hash(x: u64) -> u64 { hash_mix(x) }
 fn hash(x: bool) -> u64 { if x { return hash_mix(1); } return hash_mix(2); }
-fn hash(x: f32) -> u64 { hash_mix((x * 65536.0) as! u64) }
-fn hash(x: f64) -> u64 { hash_mix((x * 65536.0) as! u64) }
+fn hash(x: f32) -> u64 { hash_mix(flt_bits(x)) }
+fn hash(x: f64) -> u64 { hash_mix(flt_bits(x)) }
 
 // The 8 bytes of s from i, and the 4 bytes, little-endian; C compilers turn
 // each into one load.
@@ -1056,29 +1058,16 @@ fn parse_uleb(s: u8[:]) -> i64, i64 {
     return 0, 0;
 }
 
-// v with a fixed number of decimals, rounded half up; infinities and NaN
-// in their text form (§3.7).
+// v with a fixed number of decimals: its exact value rounded there, half up,
+// at any size; infinities and NaN in their text form (§3.7).
+extern fn format_flt_exact(out: u8[>..]&, v: f64, decimals: i64) = "gs_fmt_fixed";
+
 fn format_flt(out: u8[>..]&, v: f64, decimals: i64) {
     if v != v || v - v != 0.0 {
         format(out, v);
         return;
     }
-    var x = v;
-    if x < 0.0 {
-        out.push('-');
-        x = -x;
-    }
-    var scale = 1.0;
-    for i in decimals { scale *= 10.0; }
-    // x is not negative, so truncation is floor and adding 0.5 first rounds
-    // half up: `as!`, since dropping the fraction is the point.
-    let scaled = (x * scale + 0.5) as! i64;
-    let iscale = scale as i64;
-    format_uint(out, (scaled / iscale) as u64, 10, 0, ' ');
-    if decimals > 0 {
-        out.push('.');
-        format_uint(out, (scaled % iscale) as u64, 10, decimals, '0');
-    }
+    format_flt_exact(out, v, decimals);
 }
 
 // An optionally signed whole-string integer; false on anything else, including a value outside i64.
