@@ -540,6 +540,13 @@ git log upstream/master..main
   most 32 connections a turn and honours `Limits.pool_conns`, a limit over
   every worker on the listener, which `examples/api/http.gust` uses in
   place of an even split of the pool's limit.
+- `src/runtime/runtime_net.h`, `stdlib/net.goose`: a connection costs
+  fewer system calls. On Linux an accept takes `accept4` with
+  `SOCK_NONBLOCK | SOCK_CLOEXEC`, as Go's and tokio's do, where three
+  `fcntl` calls followed it, and `net::serve` reads a connection as it opens
+  it, so that a request that came with it is served in the same turn. In
+  the API benchmark's connection-per-request scenario on a hosted Linux
+  runner, Gust's rate over Go's went from 0.95 to 0.98.
 - `src/runtime/runtime_net.h`, `stdlib/net.goose`, `examples/api/http.gust`:
   a stop wakes every poller's wait at once, through a pipe in each epoll or
   kqueue set that the stop (a signal handler may) writes a byte to, and an
