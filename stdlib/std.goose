@@ -517,9 +517,10 @@ fn reverse<T>(xs: T[:]) {
     }
 }
 
-// ASCII, in place.
-fn to_lower(s: u8[:]) { for &c in s { if c >= 'A' && c <= 'Z' { c += 32; } } }
-fn to_upper(s: u8[:]) { for &c in s { if c >= 'a' && c <= 'z' { c -= 32; } } }
+// ASCII, in place. Gust: without a branch (the u8 subtraction wraps below the
+// letter), which is what a C compiler's vectorizer can take.
+fn to_lower(s: u8[:]) { for &c in s { c += if c - 'A' < 26 { 32 } else { 0 }; } }
+fn to_upper(s: u8[:]) { for &c in s { c -= if c - 'a' < 26 { 32 } else { 0 }; } }
 
 // ---- arrays: sorting -----------------------------------------------------------
 // The sort_ helpers take the comparator as F, "a goes before b", and are
