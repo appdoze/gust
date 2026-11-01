@@ -2,8 +2,8 @@
 
 Designs that the comparison against Rust, Go and Goose points to, with
 the measurements behind each, and the tools the measurements came from.
-The dictionary in groups, the keyed hash and MSVC's AVX versions are built; the
-queue with no lock between its ends is not.
+All of them are built: the dictionary in groups, the keyed hash, the queue with no
+lock between its ends and MSVC's AVX versions.
 
 ## A dictionary in groups (Swiss table)
 
@@ -91,7 +91,7 @@ that collide, cost at most that many compares per operation; there is nothing
 quadratic left to reach for. A key type whose `hash` does not use `hash_combine`
 can still be made to collide, since nothing gives it the key.
 
-## A queue with no lock between its sender and its receivers (not built)
+## A queue with no lock between its sender and its receivers
 
 **Where it falls short.** A typed queue has one lock, which the sender and the
 receivers all take for every message, so its cache line goes from core to core and
@@ -109,8 +109,18 @@ message.
 sender's end and one for the receivers', on lines of their own, each end keeping its
 last sight of the other's index and looking again only when that runs out. With 8-byte
 messages one slot line moves per eight messages. Growth, the change to nodes and a
-limit's change take both, sender's first. A sleeping receiver needs a store and a fence
-on each side, so that a send can't miss it, which is the part to get right.
+limit's change take both, receivers' first. A sleeping receiver needs a store and a fence
+on each side, so that a send can't miss it, which is the part to get right: every
+interleaving of it was explored for up to three threads on each end, about 608,000 states,
+along with three broken forms of it, each of which the check caught. Under
+ThreadSanitizer the stress test `test/threads/queue_stress.goose` reports nothing.
+
+**What it gave.** On one 4-CPU runner, one lock against two: a sender and three
+receivers 0.095 s to 0.069 s, and messages back and forth 0.035 s to 0.025 s. That is
+less than the design hoped for: Go took 0.041 s and Rust 0.054 s there, since three
+receivers still pass the one lock on their end among them. So this closes most of the gap
+and not all of it. A thread also remembers the mailboxes it has asked for, which never
+move, rather than taking a lock every thread of that type asks for each message.
 
 ## MSVC's AVX versions, in a translation unit of their own
 

@@ -220,10 +220,12 @@ static void gs_pf_relax(void) {
 /* A word another thread writes under a lock, read outside it, for a spin. */
 #if defined(_MSC_VER) && !defined(__clang__)
 #define GS_SPIN_LOAD(p) (*(void *volatile *)(p))
+#define GS_SPIN_STORE(p, v) (*(void *volatile *)(p) = (v))
 #define GS_SPIN_LOAD64(p) (*(volatile int64_t *)(p))
 #define GS_SPIN_STORE64(p, v) (*(volatile int64_t *)(p) = (v))
 #else
 #define GS_SPIN_LOAD(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define GS_SPIN_STORE(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
 #define GS_SPIN_LOAD64(p) __atomic_load_n((p), __ATOMIC_RELAXED)
 #define GS_SPIN_STORE64(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
 #endif
@@ -282,7 +284,7 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
 #define GS_THREAD_KEEP_MS 50
 #define GS_THREAD_SPIN 2000
 #define GS_THREAD_SPINNERS 2
-static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; under the mutex */
+static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; written under the mutex */
 static int64_t gs_threads_idle;     /* threads that will take one; under the mutex */
 static int64_t gs_threads_sleeping; /* those of them on gs_threads_more; under the mutex */
 static int64_t gs_threads_ended;    /* workers ended; written under the mutex */
@@ -345,7 +347,7 @@ static void *gs_thread_main(void *p)
             /* A starter counts this thread out as it leaves one here. */
             if (gs_thread_next) {
                 t = gs_thread_next;
-                gs_thread_next = t->handed;
+                GS_SPIN_STORE(&gs_thread_next, t->handed);
             } else {
                 gs_threads_idle--;
             }
@@ -387,7 +389,7 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
     if (gs_threads_idle > 0) {
         gs_threads_idle--;
         t->handed = gs_thread_next;
-        gs_thread_next = t;
+        GS_SPIN_STORE(&gs_thread_next, t);
         if (gs_threads_sleeping) gs_cond_signal(&gs_threads_more);
         gs_mutex_unlock(&gs_threads_mutex);
         return id;
