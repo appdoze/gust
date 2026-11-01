@@ -16,8 +16,9 @@ fn clamp<T>(x: T, lo: T, hi: T) -> T {
 }
 
 fn abs<T>(x: T) -> T { if x < 0 { return -x; } return x; }
-fn abs(x: f32) -> f32 { if x < 0.0 { return -x; } return x; }
-fn abs(x: f64) -> f64 { if x < 0.0 { return -x; } return x; }
+// 0 - x rather than -x, for -0.0's sake.
+fn abs(x: f32) -> f32 { if x <= 0.0 { return 0.0 - x; } return x; }
+fn abs(x: f64) -> f64 { if x <= 0.0 { return 0.0 - x; } return x; }
 
 // Truncating remainder pairs with `/`. The product stays between a and
 // zero; divisor -1 has remainder zero even when its quotient cannot fit.
@@ -278,7 +279,18 @@ fn rand_u64(r: rng&) -> u64 {
 }
 
 // Uniform in [0, n).
-fn rand_int(r: rng&, n: i64) -> i64 { (rand_u64(r) % (n as u64)) as i64 }
+fn rand_int(r: rng&, n: i64) -> i64 {
+    let m = n as u64;
+    var x = rand_u64(r);
+    // A remainder favours the low values by about n in 2^64: nothing to see
+    // below 2^32, but as much as two to one near 2^63. So there the values
+    // past the last whole multiple of n are drawn again.
+    if m >> 32 != 0 {
+        let extra = (0 - m) % m;
+        while x > 0 - extra - 1 { x = rand_u64(r); }
+    }
+    return (x % m) as i64;
+}
 
 // Uniform in [0, 1).
 fn rand_flt(r: rng&) -> f64 { (rand_u64(r) >> 11) * (1.0 / 9007199254740992.0) }
@@ -1101,12 +1113,26 @@ fn format_uint<B>(out: B&, v: u64, base: i64, width: i64, padc: u8) {
     each_rev(digits) { out.push(it); };
 }
 
-// The sign goes in front of any padding: -0042. The magnitude is taken in
-// unsigned arithmetic, which holds i64.min's.
+// The sign goes in front of zeros, -0042, and after any other padding,
+// `  -42`. The magnitude is taken in unsigned arithmetic, which holds
+// i64.min's.
 fn format_int<B>(out: B&, v: i64, base: i64, width: i64, padc: u8) {
     if v < 0 {
+        let m = 0 - v as! u64;
+        if padc != '0' && width > 1 {
+            var digits = 1;
+            var left = m;
+            while left >= base as u64 {
+                left /= base as u64;
+                digits++;
+            }
+            for i in width - digits - 1 { out.push(padc); }
+            out.push('-');
+            format_uint(out, m, base, 0, padc);
+            return;
+        }
         out.push('-');
-        format_uint(out, 0 - v as! u64, base, width - 1, padc);
+        format_uint(out, m, base, width - 1, padc);
     } else {
         format_uint(out, v as u64, base, width, padc);
     }
@@ -1455,7 +1481,10 @@ fn format_replaced(out: u8[>..]&, s: u8[:], old: u8[:], with: u8[:]) {
     out.append(s[start..]);
 }
 
-// F(codepoint) for each UTF-8 sequence; malformed bytes yield 0xFFFD.
+// F(codepoint) for each UTF-8 sequence. A byte that does not start a well-formed
+// one gives 0xFFFD and is passed alone, as in Go: a sequence that stops short
+// does not swallow what follows it, and an overlong encoding, a surrogate or
+// anything past U+10FFFF is never a code point.
 fn each_utf8<F>(s: u8[:]) {
     var i = 0;
     while i < s.len {
@@ -1464,25 +1493,38 @@ fn each_utf8<F>(s: u8[:]) {
         var n = 1;
         if b < 0x80 {
             cp = b;
-        } else if b >= 0xC0 && b < 0xE0 && i + 1 < s.len {
-            cp = ((b & 0x1F) << 6) | ((s[i + 1] as i64) & 0x3F);
-            n = 2;
-        } else if b >= 0xE0 && b < 0xF0 && i + 2 < s.len {
-            cp = ((b & 0x0F) << 12) | (((s[i + 1] as i64) & 0x3F) << 6) |
-                 ((s[i + 2] as i64) & 0x3F);
-            n = 3;
-        } else if b >= 0xF0 && b < 0xF8 && i + 3 < s.len {
-            cp = ((b & 0x07) << 18) | (((s[i + 1] as i64) & 0x3F) << 12) |
-                 (((s[i + 2] as i64) & 0x3F) << 6) | ((s[i + 3] as i64) & 0x3F);
-            n = 4;
+        } else if b >= 0xC2 && b < 0xE0 {
+            if i + 1 < s.len && (s[i + 1] & 0xC0) == 0x80 {
+                cp = ((b & 0x1F) << 6) | ((s[i + 1] as i64) & 0x3F);
+                n = 2;
+            }
+        } else if b >= 0xE0 && b < 0xF0 {
+            if i + 2 < s.len && (s[i + 1] & 0xC0) == 0x80 && (s[i + 2] & 0xC0) == 0x80 {
+                let c = ((b & 0x0F) << 12) | (((s[i + 1] as i64) & 0x3F) << 6) | ((s[i + 2] as i64) & 0x3F);
+                if c >= 0x800 && (c < 0xD800 || c > 0xDFFF) {
+                    cp = c;
+                    n = 3;
+                }
+            }
+        } else if b >= 0xF0 && b < 0xF5 {
+            if i + 3 < s.len && (s[i + 1] & 0xC0) == 0x80 && (s[i + 2] & 0xC0) == 0x80 && (s[i + 3] & 0xC0) == 0x80 {
+                let c = ((b & 0x07) << 18) | (((s[i + 1] as i64) & 0x3F) << 12) |
+                        (((s[i + 2] as i64) & 0x3F) << 6) | ((s[i + 3] as i64) & 0x3F);
+                if c >= 0x10000 && c <= 0x10FFFF {
+                    cp = c;
+                    n = 4;
+                }
+            }
         }
         F(cp);
         i += n;
     }
 }
 
-// The UTF-8 bytes of a code point.
-fn push_utf8(out: u8[>..]&, cp: i64) {
+// The UTF-8 bytes of a code point; of 0xFFFD for what is not one, so that this
+// never writes malformed text.
+fn push_utf8(out: u8[>..]&, code: i64) {
+    let cp = if code < 0 || code > 0x10FFFF || (code >= 0xD800 && code <= 0xDFFF) { 0xFFFD } else { code };
     if cp < 0x80 {
         out.push(cp as u8);
     } else if cp < 0x800 {

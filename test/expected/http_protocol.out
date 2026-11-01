@@ -1,0 +1,16 @@
+get: HTTP/1.1 200 OK|Content-Type: application/json|Content-Length: 5||hello closed false
+head: HTTP/1.1 200 OK|Content-Type: application/json|Content-Length: 5|| closed false
+head then get: HTTP/1.1 200 OK|Content-Type: application/json|Content-Length: 5||HTTP/1.1 200 OK|Content-Type: application/json|Content-Length: 5||hello closed false
+http 1.0: HTTP/1.1 200 OK|Content-Type: application/json|Connection: close|Content-Length: 5||hello closed true
+http 1.0 keep-alive: HTTP/1.1 200 OK|Content-Type: application/json|Connection: keep-alive|Content-Length: 5||hello closed false
+close: HTTP/1.1 200 OK|Content-Type: application/json|Connection: close|Content-Length: 5||hello closed true
+expect first: HTTP/1.1 100 Continue||
+expect: HTTP/1.1 200 OK|Content-Type: application/json|Content-Length: 5||abcde closed false
+expect with the body: HTTP/1.1 200 OK|Content-Type: application/json|Content-Length: 5||abcde closed false
+expect in 1.0 first: 
+expect in 1.0: HTTP/1.1 200 OK|Content-Type: application/json|Connection: close|Content-Length: 5||abcde closed true
+expect what: HTTP/1.1 417 Expectation Failed|Content-Type: application/json|Connection: close|Content-Length: 31||{"detail":"Expectation Failed"} closed true
+space before colon: HTTP/1.1 400 Bad Request|Content-Type: application/json|Connection: close|Content-Length: 24||{"detail":"Bad Request"} closed true
+large 200 50000
+too large true
+client head 200 0

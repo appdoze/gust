@@ -636,6 +636,29 @@ flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
   stop. `test/stdlib/stdlib_net.goose`, `test/threads/net_serve.goose`
   (new).
 
+- `each_utf8` took any bytes after a lead byte as its sequence: `a\xE2\x82b` lost
+  its `b`, a quote after `\xC3` went with it, and overlong encodings, surrogates
+  and values past U+10FFFF came through as code points. It now passes a byte that
+  starts no well-formed sequence alone, as 0xFFFD, as Go does. `push_utf8` writes
+  0xFFFD for what is not a code point, so it never writes malformed text.
+  `format_int` puts the sign after padding that is not zeros (`   -42`, not
+  `-   42`). `abs(-0.0)` is `0.0`. `rand_int` draws again past the last whole
+  multiple of a range above 2^32, where a remainder gave 56% of its values to the
+  lower half; below 2^32 it gives the sequence it always gave.
+  `test/stdlib/text_edges.goose`.
+- `http`'s server refuses what a proxy in front of it could read differently, the
+  way a request gets smuggled inside another (RFC 9112 §11.2): a space before a
+  header's colon, which left `Content-Length : 27` an unknown header and the body
+  the next request; a line folded onto the one before; a bare CR or LF; control
+  bytes in a method, target or header. It answers HEAD with the headers alone
+  (a body went out before, which a client then read as the next response), and a
+  GET route answers it, as Go's. A client waiting on `Expect: 100-continue` is told
+  to send, where curl sat out a second before any body past 1 KB; another
+  expectation gets a 417. An HTTP/1.0 client asking for keep-alive is told it got
+  it. `serve` takes a body limit, 8 KB if not given. The client's `unchunk` no
+  longer overflows on a chunk size near 2^63, which ended the program, and takes a
+  reply to HEAD as having no body. `test/stdlib/http_strict_head.goose`,
+  `test/threads/http_protocol.goose`.
 - `dictionary` defends itself against keys chosen to collide. Whoever knows a
   hash can make every insert walk past all the keys before it: 16,000 crafted
   24-byte keys took a second, and four times as many twenty times as long. An

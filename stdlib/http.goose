@@ -95,7 +95,8 @@ fn unchunk(raw: const u8[:], body: u8[>..]&) -> i64 {
             body.append(parts);
             return at;
         }
-        if at + size + 2 > raw.len { return -1; }
+        // Written so that no size the reply gives can overflow it.
+        if size > raw.len - at - 2 { return -1; }
         parts.append(raw[at..at + size]);
         if raw[at + size] != '\r' || raw[at + size + 1] != '\n' { return PROTOCOL; }
         at += size + 2;
@@ -115,7 +116,7 @@ fn ready(p: net::Poller, c: net::Conn, events: i64, timeout_ms: i64) -> i64 {
 }
 
 // The exchange on a connection made: the request out, then the reply in.
-fn exchange(p: net::Poller, c: net::Conn, req: const u8[:], body: u8[>..]&, timeout_ms: i64) -> i64 {
+fn exchange(p: net::Poller, c: net::Conn, req: const u8[:], body: u8[>..]&, timeout_ms: i64, head_only: bool = false) -> i64 {
     var sent = 0;
     while sent < req.len {
         let n = net::send(p, c, req[sent..]);
@@ -150,8 +151,8 @@ fn exchange(p: net::Poller, c: net::Conn, req: const u8[:], body: u8[>..]&, time
                 headend = at + 4;
                 status, length, chunked = reply_head(raw[..at + 2]);
                 if status < 0 { return status; }
-                // A reply that has no body by its status.
-                if (status >= 100 && status < 200) || status == 204 || status == 304 { return status; }
+                // A reply that has no body by its status, or by the request.
+                if head_only || (status >= 100 && status < 200) || status == 204 || status == 304 { return status; }
             }
         }
         if headend >= 0 {
@@ -193,7 +194,7 @@ fn request(method: const u8[:], host: const u8[:], port: i64, path: const u8[:],
     }
     req.append("\r\n");
     req.append(payload);
-    let status = exchange(p, c, req, body, timeout_ms);
+    let status = exchange(p, c, req, body, timeout_ms, method == "HEAD");
     net::close(p);
     return status;
 }
@@ -235,8 +236,9 @@ fn post(host: const u8[:], port: i64, path: const u8[:], payload: const u8[:], c
 // connection's memory is bounded by the limits below.
 
 // What a client may send, as Go's http.Server has MaxHeaderBytes and a
-// handler http.MaxBytesReader: the request line and headers, the body, and
-// how long a connection may sit idle between requests.
+// handler http.MaxBytesReader: the request line and headers, the body (unless
+// serve is told otherwise), and how long a connection may sit idle between
+// requests.
 const MAX_HEAD = 8192;
 const MAX_BODY = 8192;
 const IDLE_MS = 5000;
@@ -260,6 +262,7 @@ struct Request {
     body: const u8[:],
     keep_alive: bool,
     http11: bool,                // HTTP/1.1, which can take a chunked response
+    expect_continue: bool = false, // the client waits to be told to send the body
     // The loop's: when the request should be done (0.0 for no limit), and
     // whether the server is stopping, for a handler doing long work to cut
     // it short (net::Ctl).
@@ -290,6 +293,7 @@ fn reason(status: i64) -> const u8[:] {
         408 => "Request Timeout",
         409 => "Conflict",
         413 => "Content Too Large",
+        417 => "Expectation Failed",
         422 => "Unprocessable Content",
         431 => "Request Header Fields Too Large",
         500 => "Internal Server Error",
@@ -312,6 +316,19 @@ fn has_token(value: const u8[:], token: const u8[:]) -> bool {
     return false;
 }
 
+// What may be in a method or a header's name (RFC 9110 §5.6.2's token), and
+// in a header's value: any byte but the controls, a tab being allowed. Nothing
+// else is let through, since what a proxy in front makes of a stray space
+// before a colon, a bare CR or a bare LF may differ from what this does, and
+// that is how a request gets smuggled inside another (RFC 9112 §11.2).
+fn token_byte(c: u8) -> bool {
+    if c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' { return true; }
+    return c == '-' || c == '_' || c == '.' || c == '!' || c == '#' || c == '$' || c == '%' || c == '&'
+        || c == '\'' || c == '*' || c == '+' || c == '^' || c == '`' || c == '|' || c == '~';
+}
+
+fn value_byte(c: u8) -> bool { (c >= 32 && c != 127) || c == '\t' }
+
 // Where the head ends (just past its blank line) in b, searching from
 // `from`; -1 if it is not there yet.
 fn head_end(b: const u8[:], from: i64) -> i64 {
@@ -323,14 +340,14 @@ fn head_end(b: const u8[:], from: i64) -> i64 {
     return -1;
 }
 
-// A Content-Length value: digits only, at most MAX_BODY; -1 if malformed,
-// MAX_BODY + 1 if larger.
-fn content_length(v: const u8[:]) -> i64 {
+// A Content-Length value: digits only, at most max_body; -1 if malformed,
+// max_body + 1 if larger.
+fn content_length(v: const u8[:], max_body: i64) -> i64 {
     if v.len == 0 { return -1; }
     var n = 0;
     for c in v {
         if c < '0' || c > '9' { return -1; }
-        n = min(n * 10 + (c - '0'), MAX_BODY + 1);
+        n = min(n * 10 + (c - '0'), max_body + 1);
     }
     return n;
 }
@@ -338,20 +355,21 @@ fn content_length(v: const u8[:]) -> i64 {
 // The request in head (its request line and headers, through the blank
 // line), with its body still empty, and the body's length; or a status to
 // refuse it with (0 when it is fine).
-fn parse_head(head: const u8[:]) -> Request, i64, i64 {
+fn parse_head(head: const u8[:], max_body: i64 = MAX_BODY) -> Request, i64, i64 {
     var req = Request { method: "", path: "", query: "", body: "", keep_alive: false, http11: false };
     // The request line: METHOD SP target SP HTTP/1.x CRLF.
-    var eol = 0;
-    while eol < head.len && head[eol] != '\r' { eol++; }
-    let line = head[0..eol];
     var sp1 = 0;
-    while sp1 < line.len && line[sp1] != ' ' { sp1++; }
+    while sp1 < head.len && token_byte(head[sp1]) { sp1++; }
+    if sp1 == 0 || sp1 >= head.len || head[sp1] != ' ' { return req, 0, 400; }
     var sp2 = sp1 + 1;
-    while sp2 < line.len && line[sp2] != ' ' { sp2++; }
-    if sp1 == 0 || sp2 >= line.len || sp2 == sp1 + 1 { return req, 0, 400; }
-    req.method = line[0..sp1];
-    let target = line[sp1 + 1..sp2];
-    let version = line[sp2 + 1..line.len];
+    while sp2 < head.len && head[sp2] > ' ' && head[sp2] != 127 { sp2++; }
+    if sp2 == sp1 + 1 || sp2 >= head.len || head[sp2] != ' ' { return req, 0, 400; }
+    var eol = sp2 + 1;
+    while eol < head.len && head[eol] != '\r' { eol++; }
+    if eol + 1 >= head.len || head[eol + 1] != '\n' { return req, 0, 400; }
+    req.method = head[0..sp1];
+    let target = head[sp1 + 1..sp2];
+    let version = head[sp2 + 1..eol];
     if target[0] != '/' { return req, 0, 400; }
     var q = 0;
     while q < target.len && target[q] != '?' { q++; }
@@ -369,17 +387,17 @@ fn parse_head(head: const u8[:]) -> Request, i64, i64 {
     var hosts = 0;
     var at = eol + 2;
     while at < head.len - 2 {
-        var end = at;
-        while end < head.len && head[end] != '\r' { end++; }
-        let h = head[at..end];
+        var colon = at;
+        while colon < head.len && token_byte(head[colon]) { colon++; }
+        if colon == at || colon >= head.len || head[colon] != ':' { return req, 0, 400; }
+        var end = colon + 1;
+        while end < head.len && value_byte(head[end]) { end++; }
+        if end + 1 >= head.len || head[end] != '\r' || head[end + 1] != '\n' { return req, 0, 400; }
+        let name = head[at..colon];
+        let value = trim(head[colon + 1..end]);
         at = end + 2;
-        var colon = 0;
-        while colon < h.len && h[colon] != ':' { colon++; }
-        if colon == 0 || colon == h.len { return req, 0, 400; }
-        let name = h[0..colon];
-        let value = trim(h[colon + 1..h.len]);
         if equal_fold(name, "content-length") {
-            let n = content_length(value);
+            let n = content_length(value, max_body);
             if n < 0 || (seen_length && n != length) { return req, 0, 400; }
             length = n;
             seen_length = true;
@@ -390,27 +408,35 @@ fn parse_head(head: const u8[:]) -> Request, i64, i64 {
             else if has_token(value, "keep-alive") { req.keep_alive = true; }
         } else if equal_fold(name, "host") {
             hosts++;
+        } else if equal_fold(name, "expect") {
+            // HTTP/1.0 predates it, and its clients get no such reply.
+            if !equal_fold(value, "100-continue") { return req, 0, 417; }
+            req.expect_continue = req.http11;
         }
     }
     // RFC 9112 §3.2: an HTTP/1.1 request has exactly one Host header.
     if hosts > 1 || (hosts == 0 && req.http11) { return req, 0, 400; }
-    if length > MAX_BODY { return req, length, 413; }
+    if length > max_body { return req, length, 413; }
     return req, length, 0;
 }
 
 // The status line and the headers, through the blank line.
-fn format_head(out: u8[>..]&, res: Response&, keep_alive: bool) {
+// A connection stays open unless told otherwise in HTTP/1.1, and closes
+// unless told otherwise in HTTP/1.0.
+fn format_head(out: u8[>..]&, res: Response&, keep_alive: bool, http11: bool = true) {
     format(out, "HTTP/1.1 ", res.status, " ", reason(res.status), "\r\n");
     format(out, "Content-Type: ", res.content_type, "\r\n");
     if res.allow.len > 0 { format(out, "Allow: ", res.allow, "\r\n"); }
     if !keep_alive { out.append("Connection: close\r\n"); }
+    else if !http11 { out.append("Connection: keep-alive\r\n"); }
 }
 
-// A whole response: the head, its length, and the body.
-fn format_response(out: u8[>..]&, res: Response&, body: const u8[:], keep_alive: bool) {
-    format_head(out, res, keep_alive);
+// A whole response: the head, its length, and the body, which a reply to HEAD
+// has the length of but does not send.
+fn format_response(out: u8[>..]&, res: Response&, body: const u8[:], keep_alive: bool, http11: bool = true, head_only: bool = false) {
+    format_head(out, res, keep_alive, http11);
     format(out, "Content-Length: ", body.len, "\r\n\r\n");
-    out.append(body);
+    if !head_only { out.append(body); }
 }
 
 // A refusal's whole response, {"detail":"<reason>"}, after which the
@@ -435,6 +461,7 @@ struct Conn<S> {
     app: S,
     chunked: bool = false,       // chunks; else to the end of the connection (HTTP/1.0)
     keep: bool = false,          // the connection stays open after it
+    continued: bool = false,     // the request being read has had its 100 Continue
 }
 
 // The hex digits a chunk's size takes; a size is written with leading zeros.
@@ -445,9 +472,16 @@ const SIZE_DIGITS = 8;
 // poller, at most max_conns at once over every worker serving listener;
 // with no listener, until that connection ends. state is a copy of proto for each connection, of any
 // fixed-size type with a `conn` field, which is set to the connection's
-// number: first_id, first_id + id_step, ...
+// number: first_id, first_id + id_step, ... A request's body may be max_body
+// bytes (MAX_BODY if not given), and a connection with part of one holds that
+// much until the rest comes or REQUEST_MS is up.
 fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn, proto: S,
                   max_conns: i64, first_id: i64, id_step: i64) -> Counts {
+    return serve(listener, poller, first, proto, max_conns, first_id, id_step, MAX_BODY, H, G);
+}
+
+fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn, proto: S,
+                  max_conns: i64, first_id: i64, id_step: i64, max_body: i64) -> Counts {
     var counts = Counts { .. };
 
     // What the loop sends by itself: 503 past max_conns, 408 to a request
@@ -473,9 +507,16 @@ fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn
             return 0;
         }
         if end > MAX_HEAD { refuse(out, ctl, 431); return input.len; }
-        var req, length, status = parse_head(input[0..end]);
+        var req, length, status = parse_head(input[0..end], max_body);
         if status != 0 { refuse(out, ctl, status); return input.len; }
-        if input.len < end + length { return 0; }
+        if input.len < end + length {
+            if req.expect_continue && !c.continued {
+                c.continued = true;
+                out.append("HTTP/1.1 100 Continue\r\n\r\n");
+            }
+            return 0;
+        }
+        c.continued = false;
         let done = end + length;
         req.body = input[end..done];
         req.deadline = ctl.deadline;
@@ -485,13 +526,18 @@ fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn
         var body: u8[>..] = [];
         H(c.app, req, res, body);
         let keep = req.keep_alive && !res.close && !net::stop_requested();
+        let head_only = req.method == "HEAD";
         if res.stream {
             count(counts, res.status);
-            format_head(out, res, keep && req.http11);
+            format_head(out, res, keep && req.http11, req.http11);
             c.chunked = req.http11;
             c.keep = keep && req.http11;
             if c.chunked { out.append("Transfer-Encoding: chunked\r\n"); }
             out.append("\r\n");
+            if head_only {
+                if !c.keep { ctl.close = true; }
+                return done;
+            }
             if body.len > 0 {
                 if c.chunked { format(out, hex(body.len), "\r\n"); }
                 out.append(body);
@@ -509,7 +555,7 @@ fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn
             format(body, "{\"detail\":\"", reason(res.status), "\"}");
         }
         count(counts, res.status);
-        format_response(out, res, body, keep);
+        format_response(out, res, body, keep, req.http11, head_only);
         if !keep { ctl.close = true; }
         return done;
     }
@@ -548,7 +594,7 @@ fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn
         }
     }
 
-    let limits = net::Limits { max_conns: max_conns, pool_conns: max_conns, in_size: MAX_HEAD + MAX_BODY,
+    let limits = net::Limits { max_conns: max_conns, pool_conns: max_conns, in_size: MAX_HEAD + max_body,
                                out_queue: MAX_RESPONSE + 65536, out_total: MAX_QUEUED, idle_ms: IDLE_MS,
                                read_ms: REQUEST_MS, write_ms: SEND_TIMEOUT_MS, grace_ms: GRACE_MS, .. };
     let stats = net::serve(listener, poller, first, Conn { app: proto, .. }, limits,
@@ -575,6 +621,13 @@ fn hex(n: i64) -> u8[>..] {
     return out;
 }
 
+fn add_allowed(allow: u8[..64]&, method: const u8[:]) {
+    if !has_token(allow, method) && allow.len + 2 + method.len <= allow.cap {
+        if allow.len > 0 { allow.append(", "); }
+        allow.append(method);
+    }
+}
+
 // Gust: routing resolved at compile time. The routes are the variants of a
 // program's enum R; for each one the program writes its method and path
 // pattern, and its handler, overloaded on the variant:
@@ -587,7 +640,8 @@ fn hex(n: i64) -> u8[>..] {
 // one path segment that is not empty, which goes into the variant's field
 // of that name (param: an integer or an inline string). The first variant
 // whose pattern matches the path, whose method is the request's and whose
-// fields take their segments is handled, and route returns 0. Else, where a
+// fields take their segments is handled, and route returns 0. A GET route
+// answers HEAD too, the server sending the headers alone. Else, where a
 // pattern matches the path with another method, res.status is 405 and
 // res.allow those methods, as Go's ServeMux answers, and route returns 405;
 // else 404. The body of either is the caller's to write.
@@ -602,14 +656,14 @@ fn route<R, S>(s: S&, req: Request&, res: Response&, out: u8[>..]&) -> i64 {
         var r = default<V>();
         let m = bind(e[sp + 1..], req.path, r);
         if m != 0 {
-            if req.method == method {
+            if req.method == method || (method == "GET" && req.method == "HEAD") {
                 if m == 1 {
                     handle(r, s, req, res, out);
                     return 0;
                 }
-            } else if !has_token(allow, method) && allow.len + 2 + method.len <= allow.cap {
-                if allow.len > 0 { allow.append(", "); }
-                allow.append(method);
+            } else {
+                add_allowed(allow, method);
+                if method == "GET" { add_allowed(allow, "HEAD"); }
             }
         }
     }
