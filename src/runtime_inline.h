@@ -1530,6 +1530,7 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
    first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
@@ -2020,6 +2021,7 @@ static GS_NORETURN void gs_park(void) {
 
 #include <sys/mman.h>
 #include <unistd.h>
+#include <errno.h>
 #include <signal.h>
 #include <pthread.h>
 #include <sys/resource.h>
@@ -3484,8 +3486,35 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
     return (int64_t)(d - dst);
 }
 
-/* stdout is unbuffered (gs_rt_start): each print is this one write. */
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { fwrite(p, 1, (size_t)len, stdout); }
+/* stdout is unbuffered (gs_rt_start): each print is this one write. Gust:
+   made directly, where fwrite on an unbuffered stream takes stdio's lock and,
+   on Windows, a second write for a text of odd length (the C runtime takes
+   the stream for one with a 2-byte buffer). A partial write goes on from where
+   it stopped; a failed one is dropped, as fwrite's result was. No descriptor,
+   in a process started without a stdout, is such a failure. */
+static void gs_write_stream(FILE *stream, const uint8_t *p, int64_t len) {
+    #ifdef _WIN32
+        int fd = _fileno(stream);
+        if (fd < 0) return;
+        while (len > 0) {
+            int n = _write(fd, p, len > 0x40000000 ? 0x40000000u : (unsigned)len);
+            if (n <= 0) return;
+            p += n;
+            len -= n;
+        }
+    #else
+        int fd = fileno(stream);
+        while (len > 0) {
+            ssize_t n = write(fd, p, (size_t)len);
+            if (n < 0 && errno == EINTR) continue;
+            if (n <= 0) return;
+            p += n;
+            len -= n;
+        }
+    #endif
+}
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stderr, p, len); }
 )GSRT"
     ) },
     { "runtime_threads.h", string_view(
@@ -5109,11 +5138,11 @@ GS_API uint8_t gs_os_list_dir(sl_u8 path, gs_rref out) {
 }
 
 GS_API void gs_os_write_stdout(sl_u8 s) {
-    if (s.len > 0) fwrite(s.data, 1, (size_t)s.len, stdout);
+    gs_out_bytes(s.data, s.len);
 }
 
 GS_API void gs_os_write_stderr(sl_u8 s) {
-    if (s.len > 0) fwrite(s.data, 1, (size_t)s.len, stderr);
+    gs_err_bytes(s.data, s.len);
 }
 
 GS_API void gs_os_flush_stdout(void) { fflush(stdout); }
@@ -5179,9 +5208,9 @@ static int gs_os_resource_native(gs_os_char *buf) {
     #ifdef __APPLE__
         uint32_t capacity = GS_OS_PATH_MAX;
         if (_NSGetExecutablePath(path, &capacity) != 0) return 0;
+        /* Resolve the loader's possible relative path and symlinks. */
 )GSRT"
-R"GSRT(        /* Resolve the loader's possible relative path and symlinks. */
-        char *resolved = realpath(path, NULL);
+R"GSRT(        char *resolved = realpath(path, NULL);
         if (!resolved) return 0;
         n = strlen(resolved);
         if (n >= (size_t)GS_OS_PATH_MAX) { free(resolved); return 0; }
@@ -5393,10 +5422,10 @@ GS_API int64_t gs_os_time_ns(void) {
     uint64_t t = ((uint64_t)ft.dwHighDateTime << 32) | ft.dwLowDateTime;
     return (int64_t)(t - 116444736000000000ull) * 100;
 #else
-)GSRT"
-R"GSRT(    struct timespec ts;
+    struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);
-    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+)GSRT"
+R"GSRT(    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
 #endif
 }
 

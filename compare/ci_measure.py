@@ -154,6 +154,44 @@ def startup_times(out, exe):
             subprocess.run([path], stdout=subprocess.DEVNULL)
             best = min(best, time.perf_counter() - t0)
         print(f"  {name:<12}{best * 1000:8.3f}")
+def print_times(gust, out, exe):
+    """300,000 lines to a file, a print each: the least of five runs, of the
+    default stdout in each language (a write per line in all three)."""
+    progs = {}
+    g = os.path.join(out, "lines.goose")
+    open(g, "w").write('fn main() {\n    for i in 300000 {\n        print("line ", i, " value ", i * 3);\n    }\n}\n')
+    for cc in ("clang", "gcc") + (("msvc",) if os.name == "nt" else ()):
+        path = os.path.join(out, f"lines-gust-{cc}{exe}")
+        if build([gust, "build", "-q", "--cc", cc, g, "-o", path])[0]:
+            progs[f"gust/{cc}"] = [path]
+    if shutil.which("rustc"):
+        r = os.path.join(out, "lines.rs")
+        open(r, "w").write('fn main() {\n    for i in 0..300000i64 {\n'
+                           '        println!("line {} value {}", i, i * 3);\n    }\n}\n')
+        path = os.path.join(out, f"lines-rust{exe}")
+        if build(["rustc", "-C", "opt-level=3", "-o", path, r])[0]:
+            progs["rust"] = [path]
+    if shutil.which("go"):
+        d = os.path.join(out, "lines-go-src")
+        os.makedirs(d, exist_ok=True)
+        open(os.path.join(d, "main.go"), "w").write(
+            'package main\n\nimport "fmt"\n\nfunc main() {\n\tfor i := 0; i < 300000; i++ {\n'
+            '\t\tfmt.Println("line", i, "value", i*3)\n\t}\n}\n')
+        open(os.path.join(d, "go.mod"), "w").write("module lines\n\ngo 1.21\n")
+        path = os.path.join(out, f"lines-go{exe}")
+        if build(["go", "build", "-o", path, "."], cwd=d)[0]:
+            progs["go"] = [path]
+    best = {n: math.inf for n in progs}
+    sink = os.path.join(out, "lines.txt")
+    for _ in range(5):
+        for n, argv in progs.items():
+            with open(sink, "wb") as f:
+                t0 = time.perf_counter()
+                subprocess.run(argv, stdout=f)
+                best[n] = min(best[n], time.perf_counter() - t0)
+    print("\nprint, 300,000 lines to a file, seconds (least of 5 runs)")
+    for n, t in best.items():
+        print(f"  {n:<12}{t:8.3f}")
 
 
 def resident_maps(gust, out):
@@ -303,6 +341,7 @@ def main():
     for n, (s, t) in hello_builds(gust, out, exe).items():
         print(f"  {n:<12}{s:>10}  {t:6.2f} s")
     startup_times(out, exe)
+    print_times(gust, out, exe)
     if sys.platform.startswith("linux"):
         resident_maps(gust, out)
 
