@@ -154,6 +154,8 @@ def startup_times(out, exe):
             subprocess.run([path], stdout=subprocess.DEVNULL)
             best = min(best, time.perf_counter() - t0)
         print(f"  {name:<12}{best * 1000:8.3f}")
+
+
 def print_times(gust, out, exe):
     """300,000 lines to a file, a print each: the least of five runs, of the
     default stdout in each language (a write per line in all three)."""
