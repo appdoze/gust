@@ -67,9 +67,56 @@ static float gs_sqrtf(float x) { return __builtin_elementwise_sqrt(x); }
    inner loop then stored and reloaded each live double around every one. */
 #define gs_sqrt sqrt
 #define gs_sqrtf sqrtf
+#elif (defined(__GNUC__) || defined(_MSC_VER)) && (defined(__x86_64__) || defined(_M_X64)) && \
+    !defined(__TINYC__)
+/* Gust: gcc and MSVC on x86-64 have SSE2's square root, which sets no
+   errno: the instruction alone, and no call into libm, which Linux then
+   need not load (gs_fmod, runtime.h). */
+#include <emmintrin.h>
+static double gs_sqrt(double x) { return _mm_cvtsd_f64(_mm_sqrt_sd(_mm_set_sd(x), _mm_set_sd(x))); }
+static float gs_sqrtf(float x) { return _mm_cvtss_f32(_mm_sqrt_ss(_mm_set_ss(x))); }
 #else
 static double gs_sqrt(double x) { return sqrt(x); }
 static float gs_sqrtf(float x) { return sqrtf(x); }
+#endif
+
+/* Gust: math's floor, ceil, trunc and round (stdlib/math.goose) without
+   libm, for the same reason. Where the target rounds to an integer in one
+   instruction (SSE4.1, arm64) the compiler's builtin is that instruction.
+   Elsewhere, below 2^52 in magnitude (2^23 for f32) a float's truncation is
+   one conversion to an integer and back, adjusted by one for floor, ceil
+   and round; from there on every float is an integer already, and NaN and
+   the infinities are their own results. A zero result has x's sign, as C's
+   does. round takes halfway cases away from zero, x - trunc(x) being exact. */
+#if (defined(__GNUC__) || defined(__clang__)) && !defined(__TINYC__) && !defined(__MIRC__) && \
+    (defined(__SSE4_1__) || defined(__aarch64__))
+static double gs_floor(double x) { return __builtin_floor(x); }
+static double gs_ceil(double x) { return __builtin_ceil(x); }
+static double gs_trunc(double x) { return __builtin_trunc(x); }
+static double gs_round(double x) { return __builtin_round(x); }
+static float gs_floorf(float x) { return __builtin_floorf(x); }
+static float gs_ceilf(float x) { return __builtin_ceilf(x); }
+static float gs_truncf(float x) { return __builtin_truncf(x); }
+static float gs_roundf(float x) { return __builtin_roundf(x); }
+#else
+#define GS_ROUNDING(name, T, I, LIMIT, ADJUST)                                \
+    static T name(T x) {                                                      \
+        if (!(x > -(LIMIT) && x < (LIMIT))) return x;                         \
+        T t = (T)(I)x;                                                        \
+        ADJUST                                                                \
+        return t == 0 ? x * (T)0 : t;                                         \
+    }
+#define GS_FLOOR_ADJ if (t > x) t -= 1;
+#define GS_CEIL_ADJ if (t < x) t += 1;
+#define GS_ROUND_ADJ if (x - t >= 0.5) t += 1; else if (x - t <= -0.5) t -= 1;
+GS_ROUNDING(gs_floor, double, int64_t, 4503599627370496.0, GS_FLOOR_ADJ)
+GS_ROUNDING(gs_ceil, double, int64_t, 4503599627370496.0, GS_CEIL_ADJ)
+GS_ROUNDING(gs_trunc, double, int64_t, 4503599627370496.0, )
+GS_ROUNDING(gs_round, double, int64_t, 4503599627370496.0, GS_ROUND_ADJ)
+GS_ROUNDING(gs_floorf, float, int32_t, 8388608.0f, GS_FLOOR_ADJ)
+GS_ROUNDING(gs_ceilf, float, int32_t, 8388608.0f, GS_CEIL_ADJ)
+GS_ROUNDING(gs_truncf, float, int32_t, 8388608.0f, )
+GS_ROUNDING(gs_roundf, float, int32_t, 8388608.0f, GS_ROUND_ADJ)
 #endif
 
 /* Gust: four doubles side by side, one per lane of a loop the compiler runs
@@ -147,29 +194,59 @@ typedef long long gs_l4m __attribute__((vector_size(32)));
 #else
 #define GS_L4_INLINE static inline __attribute__((always_inline))
 #endif
-/* Lanes 0 and 1 in lo, 2 and 3 in hi. Every operation is SSE2's, which
-   rounds each lane as the scalar instruction does; a comparison's
+/* Each macro names the implementation GS_L4_ISA says: SSE2's (_sse), and
+   under gcc AVX's (_avx) in a simd version's AVX2 and AVX-512 bodies, which
+   CodeGen::EmitSimdVersions brackets with GS_L4_WIDE and GS_L4_BASE. */
+#define GS_L4_CAT2(a, b) a##b
+#define GS_L4_CAT(a, b) GS_L4_CAT2(a, b)
+#define GS_L4_BASE _sse
+#define GS_L4_ISA GS_L4_BASE
+#define gs_l4d GS_L4_CAT(gs_l4x_d, GS_L4_ISA)
+#define gs_l4m GS_L4_CAT(gs_l4x_m, GS_L4_ISA)
+#define gs_l4d_splat GS_L4_CAT(gs_l4x_splat, GS_L4_ISA)
+#define gs_l4m_splat GS_L4_CAT(gs_l4x_msplat, GS_L4_ISA)
+#define gs_l4d_uni(x) gs_l4d_splat((double)(x))
+#define gs_l4d_make GS_L4_CAT(gs_l4x_make, GS_L4_ISA)
+#define gs_l4d_get GS_L4_CAT(gs_l4x_get, GS_L4_ISA)
+#define gs_l4d_add GS_L4_CAT(gs_l4x_add, GS_L4_ISA)
+#define gs_l4d_sub GS_L4_CAT(gs_l4x_sub, GS_L4_ISA)
+#define gs_l4d_mul GS_L4_CAT(gs_l4x_mul, GS_L4_ISA)
+#define gs_l4d_div GS_L4_CAT(gs_l4x_div, GS_L4_ISA)
+#define gs_l4d_neg GS_L4_CAT(gs_l4x_neg, GS_L4_ISA)
+#define gs_l4d_lt GS_L4_CAT(gs_l4x_lt, GS_L4_ISA)
+#define gs_l4d_gt GS_L4_CAT(gs_l4x_gt, GS_L4_ISA)
+#define gs_l4d_le GS_L4_CAT(gs_l4x_le, GS_L4_ISA)
+#define gs_l4d_ge GS_L4_CAT(gs_l4x_ge, GS_L4_ISA)
+#define gs_l4d_eq GS_L4_CAT(gs_l4x_eq, GS_L4_ISA)
+#define gs_l4d_ne GS_L4_CAT(gs_l4x_ne, GS_L4_ISA)
+#define gs_l4m_and GS_L4_CAT(gs_l4x_and, GS_L4_ISA)
+#define gs_l4m_or GS_L4_CAT(gs_l4x_or, GS_L4_ISA)
+#define gs_l4m_not GS_L4_CAT(gs_l4x_not, GS_L4_ISA)
+#define gs_l4d_blend GS_L4_CAT(gs_l4x_blend, GS_L4_ISA)
+#define gs_l4m_any GS_L4_CAT(gs_l4x_any, GS_L4_ISA)
+#define gs_l4d_sqrt GS_L4_CAT(gs_l4x_sqrt, GS_L4_ISA)
+/* SSE2: lanes 0 and 1 in lo, 2 and 3 in hi. Every operation is SSE2's,
+   which rounds each lane as the scalar instruction does; a comparison's
    unordered lanes are false but for !=, as in C. */
-typedef struct { __m128d lo, hi; } gs_l4d;
-typedef struct { __m128d lo, hi; } gs_l4m;
-GS_L4_INLINE gs_l4d gs_l4d_splat(double x) {
-    gs_l4d r;
+typedef struct { __m128d lo, hi; } gs_l4x_d_sse;
+typedef struct { __m128d lo, hi; } gs_l4x_m_sse;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_splat_sse(double x) {
+    gs_l4x_d_sse r;
     r.lo = r.hi = _mm_set1_pd(x);
     return r;
 }
-GS_L4_INLINE gs_l4m gs_l4m_splat(long long x) {
-    gs_l4m r;
+GS_L4_INLINE gs_l4x_m_sse gs_l4x_msplat_sse(long long x) {
+    gs_l4x_m_sse r;
     r.lo = r.hi = _mm_castsi128_pd(_mm_set1_epi64x(x));
     return r;
 }
-#define gs_l4d_uni(x) gs_l4d_splat((double)(x))
-GS_L4_INLINE gs_l4d gs_l4d_make(double a, double b, double c, double d) {
-    gs_l4d r;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_make_sse(double a, double b, double c, double d) {
+    gs_l4x_d_sse r;
     r.lo = _mm_setr_pd(a, b);
     r.hi = _mm_setr_pd(c, d);
     return r;
 }
-GS_L4_INLINE double gs_l4d_get(gs_l4d v, int l) {
+GS_L4_INLINE double gs_l4x_get_sse(gs_l4x_d_sse v, int l) {
     __m128d h = l < 2 ? v.lo : v.hi;
     return _mm_cvtsd_f64(l & 1 ? _mm_unpackhi_pd(h, h) : h);
 }
@@ -180,47 +257,89 @@ GS_L4_INLINE double gs_l4d_get(gs_l4d v, int l) {
         r.hi = op(a.hi, b.hi);                                                \
         return r;                                                             \
     }
-GS_L4_OP(gs_l4d_add, gs_l4d, gs_l4d, _mm_add_pd)
-GS_L4_OP(gs_l4d_sub, gs_l4d, gs_l4d, _mm_sub_pd)
-GS_L4_OP(gs_l4d_mul, gs_l4d, gs_l4d, _mm_mul_pd)
-GS_L4_OP(gs_l4d_div, gs_l4d, gs_l4d, _mm_div_pd)
-GS_L4_OP(gs_l4d_lt, gs_l4m, gs_l4d, _mm_cmplt_pd)
-GS_L4_OP(gs_l4d_gt, gs_l4m, gs_l4d, _mm_cmpgt_pd)
-GS_L4_OP(gs_l4d_le, gs_l4m, gs_l4d, _mm_cmple_pd)
-GS_L4_OP(gs_l4d_ge, gs_l4m, gs_l4d, _mm_cmpge_pd)
-GS_L4_OP(gs_l4d_eq, gs_l4m, gs_l4d, _mm_cmpeq_pd)
-GS_L4_OP(gs_l4d_ne, gs_l4m, gs_l4d, _mm_cmpneq_pd)
-GS_L4_OP(gs_l4m_and, gs_l4m, gs_l4m, _mm_and_pd)
-GS_L4_OP(gs_l4m_or, gs_l4m, gs_l4m, _mm_or_pd)
-GS_L4_INLINE gs_l4d gs_l4d_neg(gs_l4d a) {
+GS_L4_OP(gs_l4x_add_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_add_pd)
+GS_L4_OP(gs_l4x_sub_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_sub_pd)
+GS_L4_OP(gs_l4x_mul_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_mul_pd)
+GS_L4_OP(gs_l4x_div_sse, gs_l4x_d_sse, gs_l4x_d_sse, _mm_div_pd)
+GS_L4_OP(gs_l4x_lt_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmplt_pd)
+GS_L4_OP(gs_l4x_gt_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpgt_pd)
+GS_L4_OP(gs_l4x_le_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmple_pd)
+GS_L4_OP(gs_l4x_ge_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpge_pd)
+GS_L4_OP(gs_l4x_eq_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpeq_pd)
+GS_L4_OP(gs_l4x_ne_sse, gs_l4x_m_sse, gs_l4x_d_sse, _mm_cmpneq_pd)
+GS_L4_OP(gs_l4x_and_sse, gs_l4x_m_sse, gs_l4x_m_sse, _mm_and_pd)
+GS_L4_OP(gs_l4x_or_sse, gs_l4x_m_sse, gs_l4x_m_sse, _mm_or_pd)
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_neg_sse(gs_l4x_d_sse a) {
     __m128d s = _mm_set1_pd(-0.0);
-    gs_l4d r;
+    gs_l4x_d_sse r;
     r.lo = _mm_xor_pd(a.lo, s);
     r.hi = _mm_xor_pd(a.hi, s);
     return r;
 }
-GS_L4_INLINE gs_l4m gs_l4m_not(gs_l4m a) {
+GS_L4_INLINE gs_l4x_m_sse gs_l4x_not_sse(gs_l4x_m_sse a) {
     __m128d s = _mm_castsi128_pd(_mm_set1_epi64x(-1));
-    gs_l4m r;
+    gs_l4x_m_sse r;
     r.lo = _mm_xor_pd(a.lo, s);
     r.hi = _mm_xor_pd(a.hi, s);
     return r;
 }
-GS_L4_INLINE gs_l4d gs_l4d_blend(gs_l4m m, gs_l4d a, gs_l4d b) {
-    gs_l4d r;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_blend_sse(gs_l4x_m_sse m, gs_l4x_d_sse a, gs_l4x_d_sse b) {
+    gs_l4x_d_sse r;
     r.lo = _mm_or_pd(_mm_and_pd(m.lo, a.lo), _mm_andnot_pd(m.lo, b.lo));
     r.hi = _mm_or_pd(_mm_and_pd(m.hi, a.hi), _mm_andnot_pd(m.hi, b.hi));
     return r;
 }
-GS_L4_INLINE int gs_l4m_any(gs_l4m m) { return _mm_movemask_pd(_mm_or_pd(m.lo, m.hi)) != 0; }
+GS_L4_INLINE int gs_l4x_any_sse(gs_l4x_m_sse m) { return _mm_movemask_pd(_mm_or_pd(m.lo, m.hi)) != 0; }
 /* SSE2's square root, without errno: the correctly rounded root, and NaN
    for a negative argument, as gs_sqrt's. */
-GS_L4_INLINE gs_l4d gs_l4d_sqrt(gs_l4d a) {
-    gs_l4d r;
+GS_L4_INLINE gs_l4x_d_sse gs_l4x_sqrt_sse(gs_l4x_d_sse a) {
+    gs_l4x_d_sse r;
     r.lo = _mm_sqrt_pd(a.lo);
     r.hi = _mm_sqrt_pd(a.hi);
     return r;
 }
+#if defined(__GNUC__) && GS_SIMD >= 1
+/* AVX: one 256-bit register per lane vector, for gcc's simd versions,
+   whose targets include the helpers' own (AVX2). The same operations lane
+   by lane, left unfused by the contraction pragma (runtime.h). */
+#include <immintrin.h>
+#define GS_L4_WIDE _avx
+#define GS_L4A_INLINE static inline __attribute__((always_inline, target("avx2")))
+typedef __m256d gs_l4x_d_avx;
+typedef __m256d gs_l4x_m_avx;
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_splat_avx(double x) { return _mm256_set1_pd(x); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_msplat_avx(long long x) { return _mm256_castsi256_pd(_mm256_set1_epi64x(x)); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_make_avx(double a, double b, double c, double d) {
+    return _mm256_setr_pd(a, b, c, d);
+}
+GS_L4A_INLINE double gs_l4x_get_avx(gs_l4x_d_avx v, int l) {
+    __m128d h = l < 2 ? _mm256_castpd256_pd128(v) : _mm256_extractf128_pd(v, 1);
+    return _mm_cvtsd_f64(l & 1 ? _mm_unpackhi_pd(h, h) : h);
+}
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_add_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_add_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_sub_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_sub_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_mul_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_mul_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_div_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_div_pd(a, b); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_lt_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_LT_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_gt_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_GT_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_le_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_LE_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_ge_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_GE_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_eq_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_EQ_OQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_ne_avx(gs_l4x_d_avx a, gs_l4x_d_avx b) { return _mm256_cmp_pd(a, b, _CMP_NEQ_UQ); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_and_avx(gs_l4x_m_avx a, gs_l4x_m_avx b) { return _mm256_and_pd(a, b); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_or_avx(gs_l4x_m_avx a, gs_l4x_m_avx b) { return _mm256_or_pd(a, b); }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_neg_avx(gs_l4x_d_avx a) { return _mm256_xor_pd(a, _mm256_set1_pd(-0.0)); }
+GS_L4A_INLINE gs_l4x_m_avx gs_l4x_not_avx(gs_l4x_m_avx a) {
+    return _mm256_xor_pd(a, _mm256_castsi256_pd(_mm256_set1_epi64x(-1)));
+}
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_blend_avx(gs_l4x_m_avx m, gs_l4x_d_avx a, gs_l4x_d_avx b) {
+    return _mm256_or_pd(_mm256_and_pd(m, a), _mm256_andnot_pd(m, b));
+}
+GS_L4A_INLINE int gs_l4x_any_avx(gs_l4x_m_avx m) { return _mm256_movemask_pd(m) != 0; }
+GS_L4A_INLINE gs_l4x_d_avx gs_l4x_sqrt_avx(gs_l4x_d_avx a) { return _mm256_sqrt_pd(a); }
+#else
+#define GS_L4_WIDE _sse
+#endif
 #endif
 
 /* math's mul_add (stdlib/math.goose): x * y + z, fused into one rounding

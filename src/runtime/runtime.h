@@ -331,9 +331,13 @@ GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
    versions are built by clang on x86-64, through its target attribute and
    inline assembly for cpuid; the contraction pragma above keeps their float
    results the baseline's, though both have FMA: only math's mul_add uses
-   it (GS_MUL_ADD_MODE, below). Elsewhere the versions are left out, and so
-   is the choice. -DGS_SIMD=0 or 1 lowers the level; nothing raises it. */
-#if defined(__clang__) && (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__)
+   it (GS_MUL_ADD_MODE, below). Gust: gcc builds them too, but on Windows,
+   where its spills of AVX registers assume a 32-byte stack alignment that
+   the Windows ABI does not give (gcc bug 54412). Elsewhere the versions are
+   left out, and so is the choice. -DGS_SIMD=0 or 1 lowers the level;
+   nothing raises it. */
+#if (defined(__clang__) || (defined(__GNUC__) && !defined(_WIN32))) && \
+    (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__) && !defined(__MIRC__)
 #ifndef GS_SIMD
 #define GS_SIMD 2
 #endif
@@ -906,15 +910,51 @@ static uint32_t gs_divu32_q(uint32_t x, uint32_t magic, uint8_t more) {
     return q >> more;
 }
 
+/* Gust: float `%` (§6.1), C's fmod, without libm. A remainder is always
+   exact, so this long division of the significands, a bit at a time, gives
+   libm's result to the bit; the C library then need not be asked, nor on
+   Linux libm.so loaded (a third of a megabyte resident) for a program that
+   uses nothing else of it (Builder::SystemLibs links it as needed). */
+static double gs_fmod(double x, double y) {
+    union { double d; uint64_t u; } a, b, r;
+    a.d = x;
+    b.d = y;
+    uint64_t sign = a.u & 0x8000000000000000ull;
+    uint64_t ux = a.u ^ sign, uy = b.u & 0x7fffffffffffffffull;
+    /* x infinite, y zero, or either NaN: NaN. */
+    if (ux >= 0x7ff0000000000000ull || uy > 0x7ff0000000000000ull || uy == 0) return (x * y) / (x * y);
+    if (ux < uy) return x;
+    int ex = (int)(ux >> 52), ey = (int)(uy >> 52);
+    uint64_t mx = ux & 0xfffffffffffffull, my = uy & 0xfffffffffffffull;
+    /* The significands with their leading one, a subnormal's shifted up to it. */
+    if (ex) mx |= 1ull << 52;
+    else for (ex = 1; !(mx >> 52); ex--) mx <<= 1;
+    if (ey) my |= 1ull << 52;
+    else for (ey = 1; !(my >> 52); ey--) my <<= 1;
+    for (; ex > ey; ex--) {
+        if (mx >= my) mx -= my;
+        mx <<= 1;
+    }
+    if (mx >= my) mx -= my;
+    if (!mx) {
+        r.u = sign;   /* a zero of x's sign */
+        return r.d;
+    }
+    for (; !(mx >> 52); ey--) mx <<= 1;
+    r.u = (ey > 0 ? (mx & 0xfffffffffffffull) | (uint64_t)ey << 52 : mx >> (1 - ey)) | sign;
+    return r.d;
+}
+static float gs_fmodf(float x, float y) { return (float)gs_fmod(x, y); }   /* exact as a float too */
+
 /* `as!` float-to-int: truncate toward zero, wrap modulo 2^64 (§6.3). Defined
    the same on every platform, unlike a raw C cast of an out-of-range value.
    A value lies in the i64 range exactly when its truncation does, and there
    the C cast truncates by itself (one hardware conversion, where trunc() is
    a libm call on baseline x86-64), so only NaN and the values beyond the
-   range take the wrap, out of line. */
+   range take the wrap, out of line: integers already, being past 2^53. */
 static GS_NOINLINE int64_t gs_f2iwrap_slow(double d) {
     if (d != d) return 0;
-    d = fmod(trunc(d), 18446744073709551616.0);
+    d = gs_fmod(d, 18446744073709551616.0);
     if (d < 0) d += 18446744073709551616.0;
     return (int64_t)(uint64_t)d;
 }

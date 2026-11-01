@@ -6042,9 +6042,14 @@ instruction, the baseline in two SSE2 ones. Covered by
 `test/codegen/lanes.goose`, whose output TinyCC and MIR give one iteration
 at a time and clang, gcc and MSVC in lanes. gcc 15 compiles the vector
 types into code several times slower than the loop as it is, hence the
-SSE2 pairs; only clang builds the AVX2 and AVX-512 versions, so the pairs
-gain where the lanes save work at any width (n-body) and little where they
-gain by width alone (raytrace's filter form).
+SSE2 pairs. gcc builds the AVX2 and AVX-512 versions too, but on Windows
+(gcc bug 54412: its AVX spills assume a 32-byte stack alignment Windows
+does not give), and in them each lane macro is AVX's on one 256-bit
+register: the macros name the implementation `GS_L4_ISA` says, which
+`EmitSimdVersions` sets to `GS_L4_WIDE` around each version and back to
+`GS_L4_BASE` after. MSVC has no versions, so its pairs gain where the lanes
+save work at any width (n-body) and little where they gain by width alone
+(raytrace's filter form).
 
 The filter form (`LaneGen::PlanFilter`, `CodeGen::GenLaneFilter`) takes a
 search instead: a body of pure statements ending in `if c1 && c2 ... { S }`

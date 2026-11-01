@@ -534,16 +534,21 @@ inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const stri
     vector<string> versions(SIMD_LEVELS + 1);
     // Every version above the baseline has FMA, so math's mul_add fuses in
     // it whatever the target's mode (runtime.h).
+    // Gust: and its loops in lanes take the wide registers where the lanes
+    // are functions of the ISA's (gcc's, runtime_ext.h's GS_L4_ISA), which
+    // clang's vector types need not.
+    const char *wide = "#undef GS_L4_ISA\n#define GS_L4_ISA GS_L4_WIDE\n";
+    const char *base = "#undef GS_L4_ISA\n#define GS_L4_ISA GS_L4_BASE\n";
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
         versions[lv] = Unique(cat(name, "_simd", lv));
         if (fused)
-            Append(code, "#if GS_SIMD >= ", lv,
-                   "\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
+            Append(code, "#if GS_SIMD >= ", lv, "\n", wide,
+                   "#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
                    " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody,
-                   "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n#endif\n");
+                   "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n", base, "#endif\n");
         else
-            Append(code, "#if GS_SIMD >= ", lv, "\nGS_SIMD_TARGET", lv, " static ", ret, " ",
-                   versions[lv], "(", params, ") {\n", fnbody, "}\n#endif\n");
+            Append(code, "#if GS_SIMD >= ", lv, "\n", wide, "GS_SIMD_TARGET", lv, " static ", ret, " ",
+                   versions[lv], "(", params, ") {\n", fnbody, "}\n", base, "#endif\n");
     }
     Append(code, "static ", fused ? "" : FnAttrs(sp), ret, " ", name, "(", params, ") {\n",
            "#if GS_SIMD >= 1\n    switch (gs_simd_level()) {\n");

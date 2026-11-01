@@ -450,6 +450,15 @@ git log upstream/master..main
   `compare/`'s n-body runs 44% faster under MSVC (0.11 s, against Rust's
   0.17) and 31% under gcc, with the same checksums; the lanes tests give
   their output under all three at -O0 and -O2.
+- simd versions under gcc (`src/runtime/runtime.h`, `GS_SIMD`), but on
+  Windows, where gcc's AVX spills misalign (gcc bug 54412), and in them
+  lanes on AVX's 256-bit registers (`src/runtime/runtime_ext.h`, the
+  `_avx` implementations, selected by `GS_L4_ISA`, which
+  `CodeGen::EmitSimdVersions` in `src/codegen_emit.h` switches around each
+  version). Under gcc `compare/`'s raytrace went from 1.07x Rust's cycles to
+  0.89x and n-body from 0.57x to 0.50x (`compare/quiet_bench.py`), with the
+  same checksums. `.github/workflows/ci.yml` builds the lanes, simd and
+  float tests with gcc on Linux, optimized and `--debug`.
 
 ## Safety checks
 
@@ -495,6 +504,19 @@ git log upstream/master..main
   `examples/api/tables.py` names the Rust twin, and
   `.github/workflows/api-bench.yml` (new, run by hand) checks and measures
   the servers on a Linux runner.
+
+- No libm unless a program calls into it (`src/runtime/runtime.h`
+  `gs_fmod`, `src/runtime/runtime_ext.h`, `stdlib/math.goose`,
+  `src/codegen_values.h`, `src/build.h`): float `%` is the runtime's exact
+  remainder, a long division of the significands; math's floor, ceil,
+  trunc and round are the runtime's, an integer conversion below 2^52 (the
+  instruction where SSE4.1 or arm64 has one); sqrt under gcc and MSVC on
+  x86-64 is SSE2's, with no errno; and Linux links libm `--as-needed`.
+  Each gives libm's result to the bit (`test/stdlib/math_rounding.goose`,
+  new: signed zeros, halfway cases, 2^52, subnormals, infinities and NaN,
+  under clang, gcc, MSVC, TinyCC and MIR). A program then does not load
+  libm.so, a third of a megabyte resident on Linux, where `compare/`'s
+  baseline was a tenth of a megabyte above Rust's.
 
 - `stdlib/dictionary.goose`: a slot's tag is one byte, the top seven bits
   of the key's hash, where it was the low 31 with the home slot in them, so

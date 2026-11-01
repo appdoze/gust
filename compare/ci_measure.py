@@ -84,6 +84,19 @@ def timed(argv):
     sys.exit(f"no bench line from {' '.join(map(str, argv))}")
 
 
+def counted(argv):
+    """Linux, under cachegrind: the run's instructions and mispredicted
+    branches, which no other load on the machine changes. Valgrind reports
+    AVX2 and no AVX-512, so a Gust build runs its AVX2 versions there."""
+    r = subprocess.run(["valgrind", "--tool=cachegrind", "--cache-sim=no", "--branch-sim=yes",
+                        "--cachegrind-out-file=/dev/null", *argv], capture_output=True, text=True)
+    if r.returncode != 0:
+        sys.exit(f"valgrind {' '.join(map(str, argv))} failed:\n{r.stderr[-2000:]}")
+    num = lambda key: next((int(l.split(":")[1].split()[0].replace(",", "")) for l in r.stderr.splitlines()
+                            if l.split("==")[-1].strip().startswith(key)), None)
+    return num("I refs"), num("Mispredicts")
+
+
 def build(argv, **kw):
     """Whether argv built, and its wall time in seconds."""
     t0 = time.perf_counter()
@@ -168,6 +181,7 @@ def main():
     ap.add_argument("--out", required=True)
     ap.add_argument("--runs", type=int, default=7)
     ap.add_argument("--no-mir", action="store_true")
+    ap.add_argument("--instructions", action="store_true", help="also count instructions under cachegrind (Linux)")
     args = ap.parse_args()
     gust = os.path.abspath(args.gust)
     out = os.path.abspath(args.out)
@@ -237,6 +251,24 @@ def main():
 
     # Peak memory: a native build's own; gust/mir's includes the compiler.
     native = [n for n in names if n != "gust/mir"]
+
+    # Instructions and mispredicted branches, one run each under cachegrind:
+    # exact, where the times above move with the runner's other load.
+    if args.instructions and shutil.which("valgrind"):
+        ins = {(n, b): math.inf for n in native for b in BENCHES}
+        mis = {(n, b): math.inf for n in native for b in BENCHES}
+        for b in BENCHES:
+            for n in native:
+                i, m = counted(builds[n] + ["1", b])
+                ins[n, b], mis[n, b] = i or math.inf, m or math.inf
+        print("\ninstructions, millions (cachegrind; mispredicted branches, thousands)")
+        print("bench     " + "".join(f"{n:>22}" for n in native))
+        for b in BENCHES:
+            print(f"{b:<10}" + "".join(f"{ins[n, b] / 1e6:12.1f} {mis[n, b] / 1e3:9.1f}" for n in native))
+        for n in native:
+            if n != "rust":
+                ratios(n, "rust", ins, "instructions", "fewer")
+                ratios(n, "rust", mis, "mispredicted branches", "fewer")
     print("\npeak memory, MB (least of the runs)")
     print("bench     " + "".join(f"{n:>12}" for n in native))
     for b in BENCHES:

@@ -123,6 +123,12 @@ struct Builder {
             if (tc.style == "msvc") return {};
             vector<string> libs = { "-lm", "-pthread" };
             #ifdef __linux__
+                // Gust: libm only where the program calls into it. The
+                // runtime's own floats need none of it (gs_fmod, gs_floor,
+                // gs_sqrt), and loading libm.so costs a third of a
+                // megabyte resident; Ubuntu's gcc links so by default
+                // already, clang does not.
+                libs = { "-Wl,--as-needed", "-lm", "-Wl,--no-as-needed", "-pthread" };
                 // dlopen, for the runtime's dynamic externs: in libdl before
                 // glibc 2.34, and in libc since, where the archive left
                 // behind is empty.
