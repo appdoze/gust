@@ -249,10 +249,11 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
 }
 
 /* Gust: a thread whose worker has ended waits a little for the next one, as
-   a new thread costs far more than waking this one. It keeps nothing of the
+   a new thread costs far more than waking this one. It keeps little of the
    worker: all of a worker's state is set up again and released as for a new
-   thread, but for its native stack's pages. One that aborted is not kept,
-   as its stack may have overflowed. */
+   thread, but for its native stack's pages and the start of a few of its data
+   stacks (gs_keep_regions). One that aborted is not kept, as its stack may
+   have overflowed. */
 #define GS_THREAD_KEEP 64
 #define GS_THREAD_KEEP_MS 50
 static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; under the mutex */
@@ -281,9 +282,11 @@ static void *gs_thread_main(void *p)
         gs_slot_table_end();
         t->release();
         free(t->args);
-        gs_release_regions();
+        if (aborted) gs_release_regions();
+        else gs_keep_regions();
 
-        /* Publish completion only after all Goose storage has been released.
+        /* Publish completion only after all Goose storage has been released,
+           but for those few regions, and those go before this thread does.
            No waiter retains a pointer to this record. The detached native thread
            releases its own final OS stack/TLS state on returning below. */
         gs_mutex_lock(&gs_threads_mutex);
@@ -308,6 +311,7 @@ static void *gs_thread_main(void *p)
         }
         gs_mutex_unlock(&gs_threads_mutex);
     }
+    gs_release_kept();
     #ifdef _WIN32
         return 0;
     #else

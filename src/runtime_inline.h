@@ -1831,6 +1831,13 @@ static GS_TLS volatile long gs_nregions;
 /* The registry's size: the thread program's region count, as the compiler
    worked it out, so a reservation past it is a compiler bug. */
 static GS_TLS long gs_regions_cap;
+/* Gust: a few regions this thread's last worker held, for its next one
+   (gs_keep_regions): the first of each region is already there for it, and a
+   reservation and its release and a fault are not to be had again. */
+#define GS_KEPT_REGIONS 4
+#define GS_KEPT_BYTES (64u << 10)
+static GS_TLS gs_region *gs_kept;
+static GS_TLS long gs_nkept;
 
 /* Text without stdio, which a fault handler may not call (nor malloc):
    decimal digits, a size in the largest unit that holds it exactly, and a
@@ -1912,6 +1919,35 @@ GS_API void gs_release_regions(void) {
     gs_native_stack_free();
 }
 
+#if GS_NEED_THREADS
+static int gs_region_trim(gs_region *r);
+
+/* As gs_release_regions, but those it can stay with this thread, each with
+   no more than its first GS_KEPT_BYTES in memory. */
+static void gs_keep_regions(void) {
+    if (!gs_kept) gs_kept = (gs_region *)malloc(GS_KEPT_REGIONS * sizeof(gs_region));
+    while (gs_nregions) {
+        long i = gs_nregions - 1;
+        gs_region r = gs_regions[i];
+        gs_nregions = i;
+        gs_regions[i].base = NULL;
+        if (gs_kept && gs_nkept < GS_KEPT_REGIONS && gs_region_trim(&r)) gs_kept[gs_nkept++] = r;
+        else gs_release_region(&r);
+    }
+    free(gs_regions);
+    gs_regions = NULL;
+    gs_native_stack_free();
+}
+
+/* This thread is ending, and they go with it. */
+static void gs_release_kept(void) {
+)GSRT"
+R"GSRT(    while (gs_nkept) gs_release_region(&gs_kept[--gs_nkept]);
+    free(gs_kept);
+    gs_kept = NULL;
+}
+#endif
+
 #ifdef _WIN32
 
 #define WIN32_LEAN_AND_MEAN
@@ -1941,8 +1977,7 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
     for (long i = 0; i < gs_nregions; i++) {
         gs_region *r = &gs_regions[i];
         if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
-)GSRT"
-R"GSRT(            /* Within the usable part: commit another chunk (clamped to the
+            /* Within the usable part: commit another chunk (clamped to the
                region) and resume, or where the system has no more memory to
                commit, say so. Within the gap: a data stack overran. */
             if (hit < r->base + r->usable) {
@@ -1997,6 +2032,16 @@ static void gs_native_stack_init(void) {
 }
 
 static void gs_native_stack_free(void) {}
+
+#if GS_NEED_THREADS
+static int gs_region_trim(gs_region *r) {
+    uint8_t *keep = r->base + GS_KEPT_BYTES;
+    if (r->committed <= keep) return 1;
+    if (!VirtualFree(keep, (size_t)(r->committed - keep), MEM_DECOMMIT)) return 0;
+    r->committed = keep;
+    return 1;
+}
+#endif
 
 /* Address space for one region, or NULL where the platform has none left
    to give: nothing is committed until the fault handler is asked. */
@@ -2096,7 +2141,8 @@ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
             _exit(1);
         }
     }
-    if ((uintptr_t)hit - gs_native_lo < gs_native_hi - gs_native_lo) {
+)GSRT"
+R"GSRT(    if ((uintptr_t)hit - gs_native_lo < gs_native_hi - gs_native_lo) {
         static const char msg[] = "goose runtime error: native call stack overflow\n";
         ssize_t w = write(2, msg, sizeof(msg) - 1);
         (void)w;
@@ -2139,8 +2185,7 @@ static size_t gs_sigstack_size(void) {
 }
 
 /* Run by each thread program's thread as it starts: an alternate stack for
-)GSRT"
-R"GSRT(   the fault handler, unless the thread has one (ASan gives every thread its
+   the fault handler, unless the thread has one (ASan gives every thread its
    own), and the bounds of the thread's stack. */
 static void gs_native_stack_init(void) {
     stack_t ss;
@@ -2239,6 +2284,20 @@ static void gs_release_region(const gs_region *r) {
     if (munmap(r->base, r->size)) gs_panic("cannot release data stack address space");
 }
 
+#if GS_NEED_THREADS
+/* Nothing marks how far a stack reached here, but a range with nothing in it
+   costs next to nothing. macOS's visits every page, and commits on fault. */
+static int gs_region_trim(gs_region *r) {
+    #ifdef GS_POSIX_COMMIT_ON_FAULT
+        (void)r;
+        return 0;
+    #else
+        if (r->usable <= GS_KEPT_BYTES) return 1;
+        return !madvise(r->base + GS_KEPT_BYTES, r->usable - GS_KEPT_BYTES, MADV_DONTNEED);
+    #endif
+}
+#endif
+
 /* Whether this is the first call of gs_end; and where the later ones wait.
    TinyCC names the memory orders in its stdatomic.h alone. */
 #ifndef __ATOMIC_SEQ_CST
@@ -2290,12 +2349,20 @@ GS_API void *gs_freeze(const void *p, int64_t n) {
    GS_REGION_MIN: a smaller region is always safe, since the checks the
    compiler leaves out assume no more than GS_STACK_RESERVE bytes in a
    stack, and the guard gap behind a smaller one aborts growth that much
-   sooner. Workers racing through a refusal may each halve the size once
+)GSRT"
+R"GSRT(   sooner. Workers racing through a refusal may each halve the size once
    more than needed, or restore a larger one for a moment; it only ever
    settles downward. */
 GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
     if (gs_nregions >= gs_regions_cap)
         gs_panic("too many data stack regions");
+    if (gs_nkept) {
+        gs_region *k = &gs_kept[--gs_nkept];
+        k->stack = stack;
+        gs_regions[gs_nregions] = *k;
+        gs_nregions++;  /* Publish only the initialized entry. */
+        return gs_regions[gs_nregions - 1].base;
+    }
     size_t usable = gs_region_usable;
     uint8_t *p;
     for (;;) {
@@ -2333,8 +2400,7 @@ GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
 
    Only generated code may call this, through os.trim_memory, whose callers
    publish their cached tops first (SFunction::readsalltops). C reached
-)GSRT"
-R"GSRT(   from Goose through another extern must not: tops cached by the Goose
+   from Goose through another extern must not: tops cached by the Goose
    frames above it would still be stale, and live pages above them lost. */
 GS_API uint8_t gs_trim_memory(void) {
     uintptr_t page = (uintptr_t)gs_page_size;
@@ -2464,7 +2530,8 @@ static void gs_sp_open(gs_spleaf *lf, int64_t s) {
     lf->n++;
 }
 
-static void gs_sp_close(gs_spleaf *lf, int64_t s) {
+)GSRT"
+R"GSRT(static void gs_sp_close(gs_spleaf *lf, int64_t s) {
     int64_t j;
     lf->n--;
     for (j = s; j < lf->n; j++) {
@@ -2526,8 +2593,7 @@ static void gs_sp_fix(gs_sppath *p, int64_t l, int64_t was, int64_t now) {
         int leaf = l == p->h;
         int64_t key = gs_sp_key(p, c, leaf);
         int64_t nm = now >= m ? now : was < m ? m : gs_sp_max(p, c, leaf, was);
-)GSRT"
-R"GSRT(        if (in->key[k] == key && nm == m) return;
+        if (in->key[k] == key && nm == m) return;
         in->key[k] = key;
         in->max[k] = nm;
         was = m;
@@ -2698,7 +2764,8 @@ static void gs_sp_take(gs_sppath *p, int64_t k, int64_t cnt) {
 GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t len,
                               int64_t cnt) {
     gs_sppath p;
-    int64_t l, i, k = 0, j, m, c, now, idx, before[GS_SPAN_DEPTH];
+)GSRT"
+R"GSRT(    int64_t l, i, k = 0, j, m, c, now, idx, before[GS_SPAN_DEPTH];
     gs_spleaf *lf = NULL;
     if (cnt == 0 || *n == 0) return len;
     p.base = base;
@@ -2763,8 +2830,7 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
        scanning only where c was the node's largest. */
     for (l = p.h; l > 0; l--) {
         gs_spinner *in = GS_SPINNER(&p, p.node[l - 1]);
-)GSRT"
-R"GSRT(        int64_t e = p.pos[l - 1], mx = in->max[e], nm = mx;
+        int64_t e = p.pos[l - 1], mx = in->max[e], nm = mx;
         int64_t key = gs_sp_key(&p, p.node[l], l == p.h);
         if (c == mx) {
             const int64_t *v = l == p.h ? lf->cnt : GS_SPINNER(&p, p.node[l])->max;
@@ -2912,7 +2978,8 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
    Every x86-64 CPU has SSE2, so the comparisons test blocks of 16 bytes
    without any dispatch. The tables take SSSE3's pshufb, which the CPU is
    asked for as the runtime starts, and a search where either set is of kind
-   5 tests both by their tables. Without SSSE3 such a search, and on other
+)GSRT"
+R"GSRT(   5 tests both by their tables. Without SSSE3 such a search, and on other
    targets, under TinyCC (which has no intrinsics), or over fewer than 16
    positions, every search, tests one byte at a time, a single byte by
    memchr. No load reaches past the range: its last part is tested as the
@@ -2980,8 +3047,7 @@ static int gs_cpu_ssse3;
 static void gs_scan_init(void) {
 #ifdef _WIN32
     int r[4];
-)GSRT"
-R"GSRT(    __cpuid(r, 1);
+    __cpuid(r, 1);
     gs_cpu_ssse3 = (r[2] >> 9) & 1;
 #else
     unsigned a, b, c, d;
@@ -3101,7 +3167,8 @@ static GS_SSSE3 int64_t gs_scan_pair_tables(const uint8_t *p, int64_t np, const 
     GS_PAIR_LOOP(GS_TABLES_A, GS_TABLES_B)
 }
 
-/* A loop of its own for each kind, and for each pair of kinds, from 1 to 4. */
+)GSRT"
+R"GSRT(/* A loop of its own for each kind, and for each pair of kinds, from 1 to 4. */
 static int64_t gs_scan_any_blocks(const uint8_t *p, int64_t n, const gs_byteset *s) {
     switch (s->kind) {
         case 1: return gs_scan_any_k(p, n, s, 1);
@@ -3155,8 +3222,7 @@ GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t 
     return gs_scan_pair_bytes(p, np, sa, d, sb);
 }
 
-)GSRT"
-R"GSRT(GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
+GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
                         uint64_t budget, int64_t mainregions, int64_t workerregions) {
     gs_argc = argc;
     gs_argv = argv;
@@ -3294,7 +3360,8 @@ static void gs_big_mul(gs_big *a, uint32_t m) {
 /* a = a * m + c, where a may be zero (n 0). */
 static void gs_big_mul_small_add(gs_big *a, uint32_t m, uint32_t c0) {
     uint64_t c = c0;
-    for (int i = 0; i < a->n; i++) {
+)GSRT"
+R"GSRT(    for (int i = 0; i < a->n; i++) {
         c += (uint64_t)a->d[i] * m;
         a->d[i] = (uint32_t)c;
         c >>= 32;
@@ -3357,8 +3424,7 @@ static int gs_float_digits_big(uint64_t f, int e, int bits, int emin, char *dig,
     gs_big_set(&mp, 1, up + asym);
     gs_big_set(&mlo, 1, up);
     /* Scale to 10^*k, the least power of ten above the interval: with
-)GSRT"
-R"GSRT(       lg = floor(log2 value), ceil(lg log10 2) is it or one short, and
+       lg = floor(log2 value), ceil(lg log10 2) is it or one short, and
        78913 / 2^18 is log10 2 closely enough to compute that for |lg| < 1650. */
     for (uint64_t g = f; g; g >>= 1) lg++;
     *k = lg > 0 ? ((lg * 78913) >> 18) + 1 : -((-lg * 78913) >> 18);
@@ -3474,7 +3540,8 @@ static int gs_grisu_weed(char *dig, int n, uint64_t high_w, uint64_t unsafe_widt
     if (rest < big && unsafe_width - rest >= ten_kappa &&
         (rest + ten_kappa < big || big - rest > rest + ten_kappa - big))
         return 0;
-    return 2 * unit <= rest && rest <= unsafe_width - 4 * unit;
+)GSRT"
+R"GSRT(    return 2 * unit <= rest && rest <= unsafe_width - 4 * unit;
 }
 
 /* As gs_float_digits, or 0 where the digits are not proved. */
@@ -3525,8 +3592,7 @@ static int gs_grisu3(uint64_t f, int e, int bits, int emin, char *dig, int *k) {
         if (fractionals < unsafe_width) {
             if (!gs_grisu_weed(dig, n, (too_high - w) * unit, unsafe_width, fractionals, one, unit))
                 return 0;
-)GSRT"
-R"GSRT(            *k = n + kappa - d;
+            *k = n + kappa - d;
             return n;
         }
     }
@@ -3678,7 +3744,8 @@ static void gs_big_shl(gs_big *a, int sh) {
 }
 
 /* D * 10^E against (2f + 1) * 2^(e - 1): the point above the double f * 2^e. */
-static int gs_dec_cmp_mid(const gs_big *dec, int64_t exp10, uint64_t f, int e) {
+)GSRT"
+R"GSRT(static int gs_dec_cmp_mid(const gs_big *dec, int64_t exp10, uint64_t f, int e) {
     gs_big a = *dec, b;
     gs_big_set(&b, 2 * f + 1, 0);
     if (exp10 > 0) gs_big_mul_pow10(&a, (int)exp10);
@@ -3748,8 +3815,7 @@ static double gs_dec_exact(const uint8_t *s, int64_t len, int64_t exp10, double 
         int64_t x = 0;
         i++;
         if (i < len && (s[i] == '-' || s[i] == '+')) neg = s[i++] == '-';
-)GSRT"
-R"GSRT(        for (; i < len && s[i] >= '0' && s[i] <= '9'; i++)
+        for (; i < len && s[i] >= '0' && s[i] <= '9'; i++)
             if (x < 100000) x = x * 10 + (s[i] - '0');
         e10 += neg ? -x : x;
     }
@@ -4125,10 +4191,11 @@ static int gs_cond_wait_until(gs_cond *c, gs_mutex *m, int64_t deadline) {
 }
 
 /* Gust: a thread whose worker has ended waits a little for the next one, as
-   a new thread costs far more than waking this one. It keeps nothing of the
+   a new thread costs far more than waking this one. It keeps little of the
    worker: all of a worker's state is set up again and released as for a new
-   thread, but for its native stack's pages. One that aborted is not kept,
-   as its stack may have overflowed. */
+   thread, but for its native stack's pages and the start of a few of its data
+   stacks (gs_keep_regions). One that aborted is not kept, as its stack may
+   have overflowed. */
 #define GS_THREAD_KEEP 64
 #define GS_THREAD_KEEP_MS 50
 static gs_thread *gs_thread_next;   /* started, for a waiting thread to take; under the mutex */
@@ -4157,9 +4224,11 @@ static void *gs_thread_main(void *p)
         gs_slot_table_end();
         t->release();
         free(t->args);
-        gs_release_regions();
+        if (aborted) gs_release_regions();
+        else gs_keep_regions();
 
-        /* Publish completion only after all Goose storage has been released.
+        /* Publish completion only after all Goose storage has been released,
+           but for those few regions, and those go before this thread does.
            No waiter retains a pointer to this record. The detached native thread
            releases its own final OS stack/TLS state on returning below. */
         gs_mutex_lock(&gs_threads_mutex);
@@ -4184,6 +4253,7 @@ static void *gs_thread_main(void *p)
         }
         gs_mutex_unlock(&gs_threads_mutex);
     }
+    gs_release_kept();
     #ifdef _WIN32
         return 0;
     #else
@@ -4288,10 +4358,10 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
 }
 
 /* Gust: the parallel for pool (§6.5): workers started as the first jobs
-   want them, which wait between jobs. A job wakes them all; each runs its
-   thunk, which takes chunks until none is left, then reports that it is
 )GSRT"
-R"GSRT(   done. One job holds the pool at a time, from its post to its wait.
+R"GSRT(   want them, which wait between jobs. A job wakes them all; each runs its
+   thunk, which takes chunks until none is left, then reports that it is
+   done. One job holds the pool at a time, from its post to its wait.
 
    A worker awake between jobs sees the next one by its epoch and reports
    it done by the count of those still running, without the mutex, which
@@ -4498,7 +4568,8 @@ static void gs_qring_to_list(struct gs_qstate *s) {
         n->next = NULL;
         n->size = s->esize;
         memcpy(n + 1, s->ring + ((s->first + i) & (s->cap - 1)) * s->esize, (size_t)s->esize);
-        if (s->tail) s->tail->next = n; else s->head = n;
+)GSRT"
+R"GSRT(        if (s->tail) s->tail->next = n; else s->head = n;
         s->tail = n;
     }
     free(s->ring);
@@ -4507,8 +4578,7 @@ static void gs_qring_to_list(struct gs_qstate *s) {
     s->esize = -1;
 }
 
-)GSRT"
-R"GSRT(/* Gust: a thread's mailbox among a type's queues (qsend, qrecv): a queue of
+/* Gust: a thread's mailbox among a type's queues (qsend, qrecv): a queue of
    its own, made on its first use and never freed, so its address stays. */
 struct gs_qbox_entry {
     int64_t id;

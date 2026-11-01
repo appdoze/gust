@@ -285,6 +285,13 @@ static GS_TLS volatile long gs_nregions;
 /* The registry's size: the thread program's region count, as the compiler
    worked it out, so a reservation past it is a compiler bug. */
 static GS_TLS long gs_regions_cap;
+/* Gust: a few regions this thread's last worker held, for its next one
+   (gs_keep_regions): the first of each region is already there for it, and a
+   reservation and its release and a fault are not to be had again. */
+#define GS_KEPT_REGIONS 4
+#define GS_KEPT_BYTES (64u << 10)
+static GS_TLS gs_region *gs_kept;
+static GS_TLS long gs_nkept;
 
 /* Text without stdio, which a fault handler may not call (nor malloc):
    decimal digits, a size in the largest unit that holds it exactly, and a
@@ -365,6 +372,34 @@ GS_API void gs_release_regions(void) {
     gs_regions = NULL;
     gs_native_stack_free();
 }
+
+#if GS_NEED_THREADS
+static int gs_region_trim(gs_region *r);
+
+/* As gs_release_regions, but those it can stay with this thread, each with
+   no more than its first GS_KEPT_BYTES in memory. */
+static void gs_keep_regions(void) {
+    if (!gs_kept) gs_kept = (gs_region *)malloc(GS_KEPT_REGIONS * sizeof(gs_region));
+    while (gs_nregions) {
+        long i = gs_nregions - 1;
+        gs_region r = gs_regions[i];
+        gs_nregions = i;
+        gs_regions[i].base = NULL;
+        if (gs_kept && gs_nkept < GS_KEPT_REGIONS && gs_region_trim(&r)) gs_kept[gs_nkept++] = r;
+        else gs_release_region(&r);
+    }
+    free(gs_regions);
+    gs_regions = NULL;
+    gs_native_stack_free();
+}
+
+/* This thread is ending, and they go with it. */
+static void gs_release_kept(void) {
+    while (gs_nkept) gs_release_region(&gs_kept[--gs_nkept]);
+    free(gs_kept);
+    gs_kept = NULL;
+}
+#endif
 
 #ifdef _WIN32
 
@@ -450,6 +485,16 @@ static void gs_native_stack_init(void) {
 }
 
 static void gs_native_stack_free(void) {}
+
+#if GS_NEED_THREADS
+static int gs_region_trim(gs_region *r) {
+    uint8_t *keep = r->base + GS_KEPT_BYTES;
+    if (r->committed <= keep) return 1;
+    if (!VirtualFree(keep, (size_t)(r->committed - keep), MEM_DECOMMIT)) return 0;
+    r->committed = keep;
+    return 1;
+}
+#endif
 
 /* Address space for one region, or NULL where the platform has none left
    to give: nothing is committed until the fault handler is asked. */
@@ -691,6 +736,20 @@ static void gs_release_region(const gs_region *r) {
     if (munmap(r->base, r->size)) gs_panic("cannot release data stack address space");
 }
 
+#if GS_NEED_THREADS
+/* Nothing marks how far a stack reached here, but a range with nothing in it
+   costs next to nothing. macOS's visits every page, and commits on fault. */
+static int gs_region_trim(gs_region *r) {
+    #ifdef GS_POSIX_COMMIT_ON_FAULT
+        (void)r;
+        return 0;
+    #else
+        if (r->usable <= GS_KEPT_BYTES) return 1;
+        return !madvise(r->base + GS_KEPT_BYTES, r->usable - GS_KEPT_BYTES, MADV_DONTNEED);
+    #endif
+}
+#endif
+
 /* Whether this is the first call of gs_end; and where the later ones wait.
    TinyCC names the memory orders in its stdatomic.h alone. */
 #ifndef __ATOMIC_SEQ_CST
@@ -748,6 +807,13 @@ GS_API void *gs_freeze(const void *p, int64_t n) {
 GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
     if (gs_nregions >= gs_regions_cap)
         gs_panic("too many data stack regions");
+    if (gs_nkept) {
+        gs_region *k = &gs_kept[--gs_nkept];
+        k->stack = stack;
+        gs_regions[gs_nregions] = *k;
+        gs_nregions++;  /* Publish only the initialized entry. */
+        return gs_regions[gs_nregions - 1].base;
+    }
     size_t usable = gs_region_usable;
     uint8_t *p;
     for (;;) {

@@ -632,8 +632,11 @@ git log upstream/master..main
   for the next one, up to 64 of them, and everything of a worker but its native
   stack's pages is set up and released as on a new thread; one that aborted is
   not kept, its stack possibly having overflowed. A spawn and wait of an empty
-  worker fell from 90 microseconds to about 1, near a goroutine's. Threads ending
-  still leave nothing behind 50 ms later. `test/threads/thread_reuse.goose`,
+  worker fell from 90 microseconds to about 1, near a goroutine's. A thread also
+  keeps up to four of its worker's data stack regions, with no more than the
+  first 64 KB of each in memory, so a worker with a data stack costs 2 microseconds
+  rather than 42 (a goroutine doing the same costs 8 and a Rust thread 108). Threads
+  ending still leave nothing behind 50 ms later. `test/threads/thread_reuse.goose`,
   `compare/concurrency`.
 
 - `src/runtime/runtime_net.h` (new), `src/runtime/runtime_ext.h`,
