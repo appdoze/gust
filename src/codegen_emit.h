@@ -539,17 +539,22 @@ inline void CodeGen::EmitSimdVersions(FnSpec *sp, const string &name, const stri
     // clang's vector types need not.
     const char *wide = "#undef GS_L4_ISA\n#define GS_L4_ISA GS_L4_WIDE\n";
     const char *base = "#undef GS_L4_ISA\n#define GS_L4_ISA GS_L4_BASE\n";
+    // Gust: under MSVC the AVX2 version is built in a unit of its own and
+    // linked to the dispatch below, which in the first unit sees only its
+    // prototype (GS_SIMD_BODIES, GS_SIMD_STATIC: runtime.h).
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
         versions[lv] = Unique(cat(name, "_simd", lv));
+        auto sig = cat(ret, " ", versions[lv], "(", params, ")");
+        Append(code, "#if GS_SIMD >= ", lv, "\n#if GS_SIMD_BODIES\n", wide);
         if (fused)
-            Append(code, "#if GS_SIMD >= ", lv, "\n", wide,
-                   "#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
-                   " static ", ret, " ", versions[lv], "(", params, ") {\n", fnbody,
-                   "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n", base, "#endif\n");
+            Append(code, "#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET", lv,
+                   " GS_SIMD_STATIC ", sig, " {\n", fnbody,
+                   "}\n#undef GS_MUL_ADD_MODE\n#define GS_MUL_ADD_MODE GS_MUL_ADD_BASE\n");
         else
-            Append(code, "#if GS_SIMD >= ", lv, "\n", wide, "GS_SIMD_TARGET", lv, " static ", ret, " ",
-                   versions[lv], "(", params, ") {\n", fnbody, "}\n", base, "#endif\n");
+            Append(code, "GS_SIMD_TARGET", lv, " GS_SIMD_STATIC ", sig, " {\n", fnbody, "}\n");
+        Append(code, base, "#else\n", sig, ";\n#endif\n#endif\n");
     }
+    simdversions = true;
     Append(code, "static ", fused ? "" : FnAttrs(sp), ret, " ", name, "(", params, ") {\n",
            "#if GS_SIMD >= 1\n    switch (gs_simd_level()) {\n");
     for (int lv = SIMD_LEVELS; lv >= 1; lv--) {
@@ -654,6 +659,9 @@ inline void CodeGen::EmitSpec(FnSpec *sp, bool er) {
     for (auto &p : poolbases)
         Append(fnbody, "    uint8_t *", p.second, " = ", gnames[p.first], ".base;\n");
     fnbody += bodyout;
+    // Gust: the stack block, where the C indexes it, as a local first
+    // (GS_STKS_LOCAL, runtime.h).
+    if (fnbody.find("GS(") != string::npos) fnbody = "    GS_STKS_LOCAL\n" + fnbody;
     auto name = er ? ernames[sp] : curinfo->cname;
     if (sp->sf->issimd) EmitSimdVersions(sp, name, params, fnbody);
     else if (lanesused) EmitSimdVersions(sp, name, params, fnbody, false);
@@ -844,6 +852,9 @@ inline void CodeGen::EmitGlobalInit() {
     stackown[nullptr] = std::max(stackown[nullptr], stkmax);
     auto decls = HoistAggregateDecls(body);
     Append(code, "static void gs_init_globals(void) {\n");
+    // Gust: run once main's block is open (gs_program_init), so it may
+    // take the block into a local as a function does (EmitSpec).
+    if (body.find("GS(") != string::npos) code += "    GS_STKS_LOCAL\n";
     code += decls;
     code += body;
     code += "}\n\n";
@@ -884,7 +895,7 @@ inline void CodeGen::InitGlobalStack(VarDef *d) {
 }
 
 inline void CodeGen::EmitProgramInit() {
-    Append(data, "static int gs_program_initialized;\n");
+    Append(data, "GS_DATA int gs_program_initialized;\n");
     // Every function is emitted by now, so the counts are final: the main
     // program's stacks, and the most regions it and any one worker hold.
     // The worker thunks follow, each opening its program's block.
@@ -933,10 +944,11 @@ inline void CodeGen::EmitProgramInit() {
     // A C host starts the program here: its globals, then fn main() if there
     // is one, which may call the exports and can hold the host's own setup.
     if (library)
-        Append(code, "void goose_init(int argc, char **argv) {\n"
+        Append(code, "#ifndef GS_TU_AVX2\n"
+                     "void goose_init(int argc, char **argv) {\n"
                      "    if (gs_program_initialized) return;\n"
                      "    gs_program_init(argc, argv);\n",
-                     MainCall(), "}\n\n");
+                     MainCall(), "}\n#endif\n\n");
 }
 
 // The statement that runs fn main(), or nothing for a library without one.

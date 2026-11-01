@@ -1489,6 +1489,9 @@ struct CodeGen {
     // (codegen_lanes.h), which its versions for AVX2 and AVX-512 run in
     // single instructions: the baseline's are SSE2's, two per lane vector.
     bool lanesused = false;
+    // Gust: some function has simd versions, which MSVC builds in a unit
+    // of their own (src/build.h).
+    bool simdversions = false;
 
     // ------------------------------------------------------------------
     // Globals (§11.1): C globals plus dedicated data stacks for nonfixed
@@ -1539,7 +1542,7 @@ struct CodeGen {
             for (auto fv : sinfo[sp].freevars) capturedvars.insert(fv);
         // Zero means "no long-distance return in flight", which is also the
         // state every propagating function's ordinary exit leaves behind.
-        if (!fromids.empty()) data += "static GS_TLS int32_t gs_rf;\n";
+        if (!fromids.empty()) data += "GS_DATA GS_TLS int32_t gs_rf;\n";
         EmitGlobalDecls();
         // Prototypes for every live specialization, then their bodies.
         for (auto sp : livespecs)
@@ -1553,15 +1556,19 @@ struct CodeGen {
         // The render functions any of those asked for (may ask for more).
         for (size_t i = 0; i < renderqueue.size(); i++) EmitRenderFn(renderqueue[i]);
         EmitProgramInit();
+        // Gust: the functions with external linkage the second of MSVC's
+        // two units leaves to the first (runtime.h, GS_TU_SPLIT).
+        code += "#ifndef GS_TU_AVX2\n";
         EmitExports();
         if (!library) EmitMain();
+        code += "#endif\n";
         auto threads = usesthreads || (usesparallel && !codegen_jit);
         if (threads) predefs = "#define GS_NEED_THREADS 1\n";
         // The instance block: with workers each thread reaches its own
         // through gs_gl; without them there is only main's. A parallel
         // for's workers reach the calling thread's.
         Append(data, "typedef struct {\n", gblock.empty() ? "    uint8_t gs_none;\n" : gblock,
-               "} gs_globals_t;\nstatic gs_globals_t gs_globals_main;\n",
+               "} gs_globals_t;\nGS_DATA gs_globals_t gs_globals_main;\n",
                threads ? "#define GS_GL ((gs_globals_t *)gs_gl)\n"
                        : "#define GS_GL (&gs_globals_main)\n");
         // Extern fns: the runtime's own C follows the types it is written

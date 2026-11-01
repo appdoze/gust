@@ -145,7 +145,7 @@ inline vector<string> CodeGen::EmitExternCall(Call *c, FnSpec *sp) {
 inline string CodeGen::ExternProto(FnSpec *sp) {
     auto dynamic = !sp->sf->dylib.empty();
     auto ret = sp->rets.empty() ? string("void") : CT(sp->rets[0]);
-    string s = dynamic ? "static " : "";
+    string s = dynamic ? "GS_DATA " : "";
     s += ret;
     if (dynamic) Append(s, " (*", DlSlot(sp), ")(");
     else Append(s, " ", sp->sf->cname, "(");

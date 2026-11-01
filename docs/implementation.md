@@ -6047,9 +6047,11 @@ SSE2 pairs. gcc builds the AVX2 and AVX-512 versions too, but on Windows
 does not give), and in them each lane macro is AVX's on one 256-bit
 register: the macros name the implementation `GS_L4_ISA` says, which
 `EmitSimdVersions` sets to `GS_L4_WIDE` around each version and back to
-`GS_L4_BASE` after. MSVC has no versions, so its pairs gain where the lanes
-save work at any width (n-body) and little where they gain by width alone
-(raytrace's filter form).
+`GS_L4_BASE` after. MSVC builds the AVX2 version in a translation unit of
+its own (§6.13), where the AVX lane operations are macros rather than
+functions: MSVC 19.50 at `/O2`, inlining the lane extraction as a
+`__forceinline` function, read the lanes of a lane struct's second and
+third members wrongly (`lanes.goose`'s sum of y * z).
 
 The filter form (`LaneGen::PlanFilter`, `CodeGen::GenLaneFilter`) takes a
 search instead: a body of pure statements ending in `if c1 && c2 ... { S }`
@@ -6084,10 +6086,12 @@ parameters (the names of `SigParams`' declarations). Every caller,
 prototype, function value, export wrapper and thread thunk names the
 baseline, so nothing else changes. The versions are under
 `#if GS_SIMD >= <level>` and the switch is under `#if GS_SIMD >= 1`. The
-runtime (`runtime.h`) sets `GS_SIMD` to 2 under clang on x86-64 and to 0
-everywhere else, where the C compiler sees one ordinary function, so MSVC,
-TinyCC and other targets get no overhead from it. A build can lower it with
-`-DGS_SIMD=1` (no AVX-512 version) or `0`.
+runtime (`runtime.h`) sets `GS_SIMD` to 2 under clang and gcc on x86-64
+(gcc not on Windows, §6.12), to 1 under MSVC where `gust build` compiles
+the AVX2 versions in a unit of their own (below), and to 0 everywhere else,
+where the C compiler sees one ordinary function, so TinyCC and other
+targets get no overhead from it. A build can lower it with `-DGS_SIMD=1`
+(no AVX-512 version) or `0`.
 
 * **Levels.** 1 is AVX2 with FMA, BMI1, BMI2, LZCNT and POPCNT; 2 adds
   AVX-512 F, BW, CD, DQ and VL (x86-64-v4). Clang inlines a
@@ -6097,15 +6101,43 @@ TinyCC and other targets get no overhead from it. A build can lower it with
 * **Detection** (`gs_simd_detect`) is the compiler's own: `cpuid` for the
   feature bits and `xgetbv` for the register state the operating system
   saves (XCR0's YMM bits for level 1, its opmask and ZMM bits for level 2),
-  in inline assembly. An operating system that enables a register state
+  in inline assembly, and under MSVC through its `__cpuidex` and `_xgetbv`
+  intrinsics. An operating system that enables a register state
   only at its first use (macOS does so for AVX-512) shows it clear and
   gets the lower level: the check can miss a version, never pick one the
   machine cannot run. Clang's `target_clones` would write the dispatch
   itself, but it needs compiler-rt's `__cpu_model` and
   `__cpu_indicator_init`, which a Windows link does not have. The level is
   detected at the first call and kept in a static that every thread reads
-  and may write the same value into, through relaxed atomics, so there is
-  no initialization order to get right and no race.
+  and may write the same value into, through relaxed atomics (MSVC, which
+  has no `__atomic` builtins: volatile accesses), so there is no
+  initialization order to get right and no race.
+* **MSVC's two units.** MSVC has no target attribute, so `gust build`
+  (`BuildExecutable`, `src/build.h`) compiles a program whose C has versions
+  (`CodeGen::simdversions`) twice: once with `/DGS_TU_BASE`, as ever, and
+  once with `/arch:AVX2 /DGS_TU_AVX2`, and links both. Each version is
+  under `#if GS_SIMD_BODIES`: its body in the second unit, with external
+  linkage (`GS_SIMD_STATIC` is empty there, `static` elsewhere), and its
+  prototype in the first, whose dispatch calls it. Every datum the C
+  defines and changes is declared `GS_DATA`: the globals instance
+  `gs_globals_main`, the data stacks' thread-locals (`gs_stks`, `gs_nstks`,
+  `gs_cb_base`, `gs_gl`), the channels of a long-distance return, the
+  queues, the dynamic externs' pointers and `gs_program_initialized`.
+  `GS_DATA` is `static` in a unit built alone, nothing (a definition) in the
+  first unit and `extern` in the second, so both share one of each. An
+  external `gs_stks` is one MSVC reloads after every store, which might
+  have changed it: so in the two units a function that indexes the block
+  (`GS(i)`) takes it into a local at entry (`GS_STKS_LOCAL`), as a thread's
+  block stays put while Goose code runs on it. The
+  functions are `static` and each unit has a copy, as has each constant;
+  the second unit's copies are reached from its versions alone, and round
+  `mul_add` as the first unit does (`GS_MUL_ADD_BASE`). `main`,
+  `goose_init` and the export wrappers, which have external linkage, are
+  in the first unit only (`#ifndef GS_TU_AVX2`). Not with `--standalone`,
+  whose C holds the runtime's own state, nor with a C header (`--include`,
+  a package's `c_headers`), whose static data the second unit would copy,
+  nor off x86-64: there the C is one unit with no versions, as it is when
+  compiled alone.
 * **Exactness.** Clang's default `-ffp-contract=on` fuses a multiply and an
   add within one C expression wherever FMA exists, which AVX-512 implies
   and arm64 always has; GCC's default fuses across statements as well.
@@ -6127,8 +6159,8 @@ TinyCC and other targets get no overhead from it. A build can lower it with
   `gs_mul_add_separate` (`x * y + z`, two roundings under the contraction
   pragma), so a call gets the mode in force where it is emitted.
   `runtime.h` sets the mode to `GS_MUL_ADD_BASE`: fused where the whole
-  translation unit has FMA (`__FMA__`, arm64, MSVC's `/arch:AVX2`), and
-  separate elsewhere and under TinyCC. `EmitSimdVersions` sets it to fused
+  translation unit has FMA (`__FMA__`, arm64, MSVC's `/arch:AVX2` but in
+  the unit of AVX2 versions), and separate elsewhere and under TinyCC. `EmitSimdVersions` sets it to fused
   before each version past the baseline, whose target attribute includes
   FMA, and back to the base after, so the baseline's copy of the body keeps
   the target's mode.

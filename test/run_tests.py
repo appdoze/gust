@@ -1973,7 +1973,7 @@ def main():
                     r.fail(f"mul_add-clang{gopt} {name}.goose", out + err)
                     continue
                 ctext = src.read_text(encoding="utf-8")
-                if not re.search(r"#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET1 static [^\n]*"
+                if not re.search(r"#define GS_MUL_ADD_MODE fused\nGS_SIMD_TARGET1 GS_SIMD_STATIC [^\n]*"
                                  r"\bdirect_g\w*_simd1\(", ctext):
                     r.fail(f"mul_add-clang{gopt} {name}.goose", "no fused mode around the AVX2 version")
                     continue

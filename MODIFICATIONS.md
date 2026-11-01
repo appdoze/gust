@@ -459,6 +459,24 @@ git log upstream/master..main
   0.89x and n-body from 0.57x to 0.50x (`compare/quiet_bench.py`), with the
   same checksums. `.github/workflows/ci.yml` builds the lanes, simd and
   float tests with gcc on Linux, optimized and `--debug`.
+- simd versions under MSVC, which has no per-function target: `gust build`
+  (`src/build.h`) compiles a program with versions a second time, with
+  `/arch:AVX2 /DGS_TU_AVX2`, a unit holding only the AVX2 versions with
+  external linkage, which the first unit's dispatch (`/DGS_TU_BASE`,
+  `__cpuidex` and `_xgetbv`) calls (`src/runtime/runtime.h`, `GS_TU_SPLIT`,
+  `GS_SIMD_BODIES`; `CodeGen::EmitSimdVersions`). Every datum the program's
+  C defines and changes is declared `GS_DATA`, defined in the first unit
+  and `extern` in the second (`src/codegen.h`, `src/codegen_builtins.h`,
+  `src/codegen_calls.h`, `src/codegen_emit.h`, `src/codegen_stmts.h`), and
+  a function takes the external stack block into a local
+  (`GS_STKS_LOCAL`), which MSVC otherwise reloaded after every store
+  (`compare/`'s astar, 6% slower). The AVX lane operations are macros under
+  MSVC (`src/runtime/runtime_ext.h`): inlined as `__forceinline` functions
+  at `/O2`, MSVC 19.50 read a lane struct's later members wrongly. Under
+  MSVC `compare/`'s raytrace went from 1.20x Rust's cycles to 1.00x and
+  n-body from 0.67x to 0.49x (`compare/quiet_bench.py`), with the same
+  checksums. `.github/workflows/ci.yml` builds the lanes and simd tests with
+  MSVC on Windows, optimized and `--debug`, each with its AVX2 unit.
 
 ## Safety checks
 

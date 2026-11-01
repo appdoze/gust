@@ -208,6 +208,31 @@ float log2f(float x); float log10f(float x); float powf(float x, float y);
 #define GS_TLS
 #endif
 
+/* Gust: MSVC has no per-function target, so `gust build` compiles a
+   program with simd versions twice (src/build.h): once as ever, with
+   GS_TU_BASE, and once with /arch:AVX2 and GS_TU_AVX2, a unit that keeps
+   only the AVX2 versions, with external linkage, for the first one's
+   dispatch to call (GS_SIMD, below). Every datum the program's C defines
+   and changes is declared GS_DATA: in the first unit defined, in the second
+   declared extern, so that both units share one of each. Code and constant
+   data are each unit's own copy. A unit built alone has its data static. */
+#if defined(_MSC_VER) && !defined(__clang__) && defined(_M_X64) && \
+    (defined(GS_TU_BASE) || defined(GS_TU_AVX2))
+#define GS_TU_SPLIT 1
+#endif
+#if defined(GS_TU_AVX2) && !defined(__AVX2__)
+/* The unit is the versions' target: its AVX intrinsics and the rest of
+   their code are built for AVX2 together. */
+#error "GS_TU_AVX2 needs /arch:AVX2"
+#endif
+#if !defined(GS_TU_SPLIT)
+#define GS_DATA static
+#elif defined(GS_TU_AVX2)
+#define GS_DATA extern
+#else
+#define GS_DATA
+#endif
+
 /* The linkage of everything the runtime defines outside this file. Gust:
    the runtime compiled into the compiler for gust run --mir
    (src/runtime_native.c) exports it too, for MIR to find by name. */
@@ -333,31 +358,60 @@ GS_API GS_NORETURN void gs_slot_fail(const char *file, int line);
    results the baseline's, though both have FMA: only math's mul_add uses
    it (GS_MUL_ADD_MODE, below). Gust: gcc builds them too, but on Windows,
    where its spills of AVX registers assume a 32-byte stack alignment that
-   the Windows ABI does not give (gcc bug 54412). Elsewhere the versions are
-   left out, and so is the choice. -DGS_SIMD=0 or 1 lowers the level;
-   nothing raises it. */
+   the Windows ABI does not give (gcc bug 54412). MSVC builds the AVX2
+   version in a unit of its own (GS_TU_SPLIT, above): GS_SIMD_BODIES says
+   whether this unit holds the versions' bodies, and GS_SIMD_STATIC is
+   their linkage. Elsewhere the versions are left out, and so is the
+   choice. -DGS_SIMD=0 or 1 lowers the level; nothing raises it. */
 #if (defined(__clang__) || (defined(__GNUC__) && !defined(_WIN32))) && \
     (defined(__x86_64__) || defined(_M_X64)) && !defined(__TINYC__) && !defined(__MIRC__)
 #ifndef GS_SIMD
 #define GS_SIMD 2
 #endif
+#elif defined(GS_TU_SPLIT)
+#if !defined(GS_SIMD) || GS_SIMD > 1
+#undef GS_SIMD
+#define GS_SIMD 1
+#endif
 #else
 #undef GS_SIMD
 #define GS_SIMD 0
 #endif
-#if GS_SIMD >= 1
+#if GS_SIMD >= 1 && defined(GS_TU_SPLIT)
+#include <intrin.h>
+#define GS_SIMD_TARGET1
+#define GS_SIMD_STATIC
+#ifdef GS_TU_AVX2
+#define GS_SIMD_BODIES 1
+#else
+#define GS_SIMD_BODIES 0
+#endif
+
+static inline void gs_cpuid(uint32_t leaf, uint32_t r[4]) { __cpuidex((int *)r, (int)leaf, 0); }
+static inline uint32_t gs_xcr0(void) { return (uint32_t)_xgetbv(0); }
+#elif GS_SIMD >= 1
 #define GS_SIMD_TARGET1 __attribute__((target("avx2,fma,bmi,bmi2,lzcnt,popcnt")))
 #define GS_SIMD_TARGET2 \
     __attribute__((target("avx512f,avx512bw,avx512cd,avx512dq,avx512vl,avx2,fma,bmi,bmi2,lzcnt,popcnt")))
+#define GS_SIMD_STATIC static
+#define GS_SIMD_BODIES 1
 
 static inline void gs_cpuid(uint32_t leaf, uint32_t r[4]) {
     __asm__ volatile("cpuid" : "=a"(r[0]), "=b"(r[1]), "=c"(r[2]), "=d"(r[3]) : "a"(leaf), "c"(0));
 }
+static inline uint32_t gs_xcr0(void) {
+    uint32_t lo, hi;
+    __asm__ volatile("xgetbv" : "=a"(lo), "=d"(hi) : "c"(0));
+    (void)hi;
+    return lo;
+}
+#endif
+#if GS_SIMD >= 1
 
 /* The highest level both the CPU and the operating system support (the OS
    has to save the wider registers: XGETBV's XCR0), capped at GS_SIMD. */
 static inline int gs_simd_detect(void) {
-    uint32_t r[4], b7, xcr0, xhi;
+    uint32_t r[4], b7, xcr0;
     gs_cpuid(0, r);
     if (r[0] < 7) return 0;
     gs_cpuid(1, r);
@@ -365,8 +419,7 @@ static inline int gs_simd_detect(void) {
     if ((r[2] & (1u << 27 | 1u << 28 | 1u << 23 | 1u << 12)) !=
         (1u << 27 | 1u << 28 | 1u << 23 | 1u << 12))
         return 0;
-    __asm__ volatile("xgetbv" : "=a"(xcr0), "=d"(xhi) : "c"(0));
-    (void)xhi;
+    xcr0 = gs_xcr0();
     if ((xcr0 & 0x6) != 0x6) return 0;                  /* XMM and YMM state. */
     gs_cpuid(7, r);
     b7 = r[1];
@@ -385,14 +438,25 @@ static inline int gs_simd_detect(void) {
 }
 
 /* Detected at the first call and kept. Every thread computes the same
-   level, so a relaxed atomic is all a race between two first calls needs. */
+   level, so a relaxed atomic is all a race between two first calls needs:
+   under MSVC, which has no __atomic builtins, a volatile int, which x86-64
+   loads and stores whole. Each of MSVC's two units keeps its own, as it
+   would the same constant. */
 static inline int gs_simd_level(void) {
     static int level = -1;
+#ifdef GS_TU_SPLIT
+    int l = *(volatile int *)&level;
+    if (l < 0) {
+        l = gs_simd_detect();
+        *(volatile int *)&level = l;
+    }
+#else
     int l = __atomic_load_n(&level, __ATOMIC_RELAXED);
     if (l < 0) {
         l = gs_simd_detect();
         __atomic_store_n(&level, l, __ATOMIC_RELAXED);
     }
+#endif
     return l;
 }
 #endif
@@ -404,9 +468,11 @@ static inline int gs_simd_level(void) {
    past it (-march=x86-64-v3, /arch:AVX2), separate everywhere else and
    under TinyCC. A simd function's AVX2 and AVX-512 versions have FMA
    whatever the target, so the compiler sets GS_MUL_ADD_MODE to fused around
-   them, and back to the base after (EmitSimdVersions). */
+   them, and back to the base after (EmitSimdVersions). Gust: MSVC's AVX2
+   unit (GS_TU_AVX2) is built for AVX2 for its versions alone, and its copy
+   of every other function rounds as the first unit's does. */
 #if !defined(__TINYC__) && (defined(__FMA__) || defined(__aarch64__) || defined(_M_ARM64) || \
-                            (defined(_MSC_VER) && defined(__AVX2__)))
+                            (defined(_MSC_VER) && defined(__AVX2__) && !defined(GS_TU_AVX2)))
 #define GS_MUL_ADD_BASE fused
 #else
 #define GS_MUL_ADD_BASE separate
@@ -1112,11 +1178,11 @@ GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_
 GS_API void gs_pfor_wait(gs_pfor_job *j);
 
 /* One queue per flat element type the program uses (the compiler emits a
-   gs_queue global per type, which main sets up before anything can use it).
-   Values are contiguous byte images: gs_qget, gs_qwait and gs_qpoll return a
-   malloc'd node the caller copies from and frees, gs_qwait and gs_qpoll NULL
-   when nothing came. gs_qput returns 0, queueing nothing, when the queue is
-   at its limit. */
+   gs_queue global per type, null as static data starts, which main sets up
+   before anything can use it). Values are contiguous byte images: gs_qget,
+   gs_qwait and gs_qpoll return a malloc'd node the caller copies from and
+   frees, gs_qwait and gs_qpoll NULL when nothing came. gs_qput returns 0,
+   queueing nothing, when the queue is at its limit. */
 typedef struct gs_qnode {
     struct gs_qnode *next;
     int64_t size;
@@ -1124,7 +1190,6 @@ typedef struct gs_qnode {
 } gs_qnode;
 
 typedef struct gs_qstate *gs_queue;
-#define GS_QUEUE_INIT NULL
 
 GS_API void gs_qinit(gs_queue *q);
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size);
@@ -1142,21 +1207,34 @@ GS_API int64_t gs_thread_self(void);
 /* The current thread program's stack block: every stack the compiler
    counted for it, reserved as the program starts (gs_stack_block).
    gs_sp-relative indices resolve through it. */
-static GS_TLS gs_stack *gs_stks;
-static GS_TLS int64_t gs_nstks;
+GS_DATA GS_TLS gs_stack *gs_stks;
+GS_DATA GS_TLS int64_t gs_nstks;
 /* Gust: where an export fn's wrapper starts its stacks (§7.11): 0, unless
    it runs as a callback while an extern call is under way, which sets it to
    the first index its caller does not hold. */
-static GS_TLS int64_t gs_cb_base;
+GS_DATA GS_TLS int64_t gs_cb_base;
 
 /* The current program instance's globals (goose_spec.md 11.1), a struct the
    compiler lays out: main's is its one static instance, a worker's a fresh
    copy of the globals its program uses, taken from the spawning instance
    at spawn like the arguments (11.2). No global is shared between program
    instances; the only C statics a program shares are read-only ones. */
-static GS_TLS void *gs_gl;
+GS_DATA GS_TLS void *gs_gl;
 
+/* Gust: under MSVC's two units (GS_TU_SPLIT) gs_stks has external linkage,
+   and MSVC, which then cannot rule out that a store through some pointer
+   changes it, reloaded it before nearly every stack access, where the
+   static one stayed in a register (compare/'s astar ran 5% slower). A
+   thread's block does not change while Goose code runs on it, so there a
+   function that indexes it first takes it into a local, GS_STKS_LOCAL,
+   which no store reaches. */
+#ifdef GS_TU_SPLIT
+#define GS_STKS_LOCAL gs_stack *const gs_stkl = gs_stks;
+#define GS(i) (&gs_stkl[i])
+#else
+#define GS_STKS_LOCAL
 #define GS(i) (&gs_stks[i])
+#endif
 
 static void gs_stack_init(gs_stack *s) {
     s->top = gs_reserve_region(s);
