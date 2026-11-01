@@ -765,21 +765,21 @@ static T gs_shr_##SFX(T a, int64_t n) { \
 
 /* Unsigned types wrap modulo 2^width by definition (§6.2) in every build:
    plain C unsigned arithmetic, truncated back to the width. */
-#define GS_INTOPS_U(SFX, T, MAX, BITS) \
-static T gs_add_##SFX(T a, T b) { return (T)(a + b); } \
-static T gs_sub_##SFX(T a, T b) { return (T)(a - b); } \
-static T gs_mul_##SFX(T a, T b) { return (T)((uint64_t)a * (uint64_t)b); } \
-static T gs_shl_##SFX(T a, int64_t n) { \
+#define GS_INTOPS_U(T, MAX, BITS) \
+static T gs_add_u##BITS(T a, T b) { return (T)(a + b); } \
+static T gs_sub_u##BITS(T a, T b) { return (T)(a - b); } \
+static T gs_mul_u##BITS(T a, T b) { return (T)((uint64_t)a * (uint64_t)b); } \
+static T gs_shl_u##BITS(T a, int64_t n) { \
     return (T)((uint64_t)a << (n & (BITS - 1))); } \
-static T gs_shr_##SFX(T a, int64_t n) { \
+static T gs_shr_u##BITS(T a, int64_t n) { \
     return (T)((uint64_t)a >> (n & (BITS - 1))); }
 
 GS_INTOPS_S(i8,  int8_t,  -128, 127, 8)
 GS_INTOPS_S(i16, int16_t, -32768, 32767, 16)
 GS_INTOPS_S(i32, int32_t, INT32_MIN, INT32_MAX, 32)
-GS_INTOPS_U(u8,  uint8_t,  255u, 8)
-GS_INTOPS_U(u16, uint16_t, 65535u, 16)
-GS_INTOPS_U(u32, uint32_t, 4294967295u, 32)
+GS_INTOPS_U(uint8_t,  255u, 8)
+GS_INTOPS_U(uint16_t, 65535u, 16)
+GS_INTOPS_U(uint32_t, 4294967295u, 32)
 
 /* The 64-bit types detect overflow on the value itself. */
 static int64_t gs_add_i64(int64_t a, int64_t b, const char *file, int line) {

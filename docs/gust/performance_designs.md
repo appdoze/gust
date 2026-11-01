@@ -1,8 +1,9 @@
 # Next performance designs
 
-Two designs that the comparison against Rust, Go and Goose points to, with
+Designs that the comparison against Rust, Go and Goose points to, with
 the measurements behind each, and the tools the measurements came from.
-MSVC's AVX versions are built; the dictionary in groups is not yet.
+All of them are built: the dictionary in groups, the keyed hash and MSVC's
+AVX versions.
 
 ## A dictionary in groups (Swiss table)
 
