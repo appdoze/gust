@@ -619,7 +619,13 @@ static void gs_native_stack_init(void) {
            mappings out of that room (1 GB taken for an unlimited stack). */
         if (syscall(SYS_gettid) == getpid() && !getrlimit(RLIMIT_STACK, &rl)) {
             size = rl.rlim_cur == RLIM_INFINITY ? (size_t)1 << 30 : (size_t)rl.rlim_cur;
-            hi = (uintptr_t)&ss;
+            /* The frame itself: under ASan a local may live on its heap of
+               fake frames. */
+            #if defined(__GNUC__) || defined(__clang__) || defined(__TINYC__)
+                hi = (uintptr_t)__builtin_frame_address(0);
+            #else
+                hi = (uintptr_t)&ss;
+            #endif
             lo = hi > size ? hi - size : 0;
         } else if (!pthread_getattr_np(pthread_self(), &attr)) {
             if (!pthread_attr_getstack(&attr, &base, &size)) {

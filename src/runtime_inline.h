@@ -2164,7 +2164,13 @@ static void gs_native_stack_init(void) {
            mappings out of that room (1 GB taken for an unlimited stack). */
         if (syscall(SYS_gettid) == getpid() && !getrlimit(RLIMIT_STACK, &rl)) {
             size = rl.rlim_cur == RLIM_INFINITY ? (size_t)1 << 30 : (size_t)rl.rlim_cur;
-            hi = (uintptr_t)&ss;
+            /* The frame itself: under ASan a local may live on its heap of
+               fake frames. */
+            #if defined(__GNUC__) || defined(__clang__) || defined(__TINYC__)
+                hi = (uintptr_t)__builtin_frame_address(0);
+            #else
+                hi = (uintptr_t)&ss;
+            #endif
             lo = hi > size ? hi - size : 0;
         } else if (!pthread_getattr_np(pthread_self(), &attr)) {
             if (!pthread_attr_getstack(&attr, &base, &size)) {
@@ -2323,14 +2329,14 @@ GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
 
    Only generated code may call this, through os.trim_memory, whose callers
    publish their cached tops first (SFunction::readsalltops). C reached
-   from Goose through another extern must not: tops cached by the Goose
+)GSRT"
+R"GSRT(   from Goose through another extern must not: tops cached by the Goose
    frames above it would still be stale, and live pages above them lost. */
 GS_API uint8_t gs_trim_memory(void) {
     uintptr_t page = (uintptr_t)gs_page_size;
     int ok = 1;
     for (long i = 0; i < gs_nregions; i++) {
-)GSRT"
-R"GSRT(        gs_region *r = &gs_regions[i];
+        gs_region *r = &gs_regions[i];
         uintptr_t base = (uintptr_t)r->base, top = (uintptr_t)r->stack->top;
         /* A top outside its own region is a compiler or runtime bug, not
            something the OS refused: carrying on could discard live data. */
@@ -2516,7 +2522,8 @@ static void gs_sp_fix(gs_sppath *p, int64_t l, int64_t was, int64_t now) {
         int leaf = l == p->h;
         int64_t key = gs_sp_key(p, c, leaf);
         int64_t nm = now >= m ? now : was < m ? m : gs_sp_max(p, c, leaf, was);
-        if (in->key[k] == key && nm == m) return;
+)GSRT"
+R"GSRT(        if (in->key[k] == key && nm == m) return;
         in->key[k] = key;
         in->max[k] = nm;
         was = m;
@@ -2526,8 +2533,7 @@ static void gs_sp_fix(gs_sppath *p, int64_t l, int64_t was, int64_t now) {
 
 /* Descends to the leaf holding the last span that starts at or before idx,
    and returns its position there, or -1 where no span does. */
-)GSRT"
-R"GSRT(static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
+static int64_t gs_sp_find(gs_sppath *p, int64_t idx) {
     int64_t l, i = GS_SPHEAD(p)->root, k;
     gs_spleaf *lf;
     p->h = GS_SPHEAD(p)->height;
@@ -2753,13 +2759,13 @@ GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t 
        scanning only where c was the node's largest. */
     for (l = p.h; l > 0; l--) {
         gs_spinner *in = GS_SPINNER(&p, p.node[l - 1]);
-        int64_t e = p.pos[l - 1], mx = in->max[e], nm = mx;
+)GSRT"
+R"GSRT(        int64_t e = p.pos[l - 1], mx = in->max[e], nm = mx;
         int64_t key = gs_sp_key(&p, p.node[l], l == p.h);
         if (c == mx) {
             const int64_t *v = l == p.h ? lf->cnt : GS_SPINNER(&p, p.node[l])->max;
             int64_t w = l == p.h ? lf->n : GS_SPINNER(&p, p.node[l])->n;
-)GSRT"
-R"GSRT(            nm = before[l] > now ? before[l] : now;
+            nm = before[l] > now ? before[l] : now;
             for (; j < w && nm < c; j++)
                 if (v[j] > nm) nm = v[j];
         }
@@ -2970,7 +2976,8 @@ static int gs_cpu_ssse3;
 static void gs_scan_init(void) {
 #ifdef _WIN32
     int r[4];
-    __cpuid(r, 1);
+)GSRT"
+R"GSRT(    __cpuid(r, 1);
     gs_cpu_ssse3 = (r[2] >> 9) & 1;
 #else
     unsigned a, b, c, d;
@@ -2979,8 +2986,7 @@ static void gs_scan_init(void) {
 }
 
 /* A set's block test, held in registers: the bytes or range it compares
-)GSRT"
-R"GSRT(   with and all ones where the result is complemented, or its tables. */
+   with and all ones where the result is complemented, or its tables. */
 typedef struct { __m128i a, b, c, flip; } gs_bsm;
 
 static GS_INLINE void gs_bsm_init(gs_bsm *m, const gs_byteset *s, int tables) {
@@ -3145,12 +3151,12 @@ GS_API int64_t gs_scan_pair(const uint8_t *p, int64_t n, const void *a, int64_t 
     return gs_scan_pair_bytes(p, np, sa, d, sb);
 }
 
-GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
+)GSRT"
+R"GSRT(GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
                         uint64_t budget, int64_t mainregions, int64_t workerregions) {
     gs_argc = argc;
     gs_argv = argv;
-)GSRT"
-R"GSRT(    /* A region's usable part is whole pages: the guard gap behind it has to
+    /* A region's usable part is whole pages: the guard gap behind it has to
        start on a page to be protected, and on Windows a stack would run on
        unseen through the rest of a part page committed at its end, past the
        GS_STACK_RESERVE bytes the compiler's checks go by. */
@@ -3344,15 +3350,15 @@ static int gs_float_digits(uint64_t f, int e, int bits, int emin, char *dig, int
         gs_big_mul_pow10(&mp, -*k);
         if (asym) gs_big_mul_pow10(&mlo, -*k);
     }
-    gs_big_add(&t, &r, &mp);
+)GSRT"
+R"GSRT(    gs_big_add(&t, &r, &mp);
     c = gs_big_cmp(&t, &s);
     if (even ? c >= 0 : c > 0) {
         gs_big_mul(&s, 10);
         ++*k;
     }
     /* Each digit d leaves the remainder r: stop where the digits so far
-)GSRT"
-R"GSRT(       followed by d (r within *mm) or by d + 1 (r + mp past s) read back. */
+       followed by d (r within *mm) or by d + 1 (r + mp past s) read back. */
     for (;;) {
         int d = 0, low, high;
         gs_big_mul(&r, 10);
