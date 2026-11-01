@@ -405,7 +405,7 @@ GS_API void gs_os_write_stdout(sl_u8 s) {
 }
 
 GS_API void gs_os_write_stderr(sl_u8 s) {
-    if (s.len > 0) fwrite(s.data, 1, (size_t)s.len, stderr);
+    gs_err_bytes(s.data, s.len);
 }
 
 GS_API void gs_os_flush_stdout(void) { fflush(stdout); }

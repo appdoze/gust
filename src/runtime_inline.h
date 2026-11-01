@@ -1530,6 +1530,7 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
    first i < n with p[i] in the set, or with p[i] in a and p[i + d] in b
@@ -3470,9 +3471,9 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
    the stream for one with a 2-byte buffer). A partial write goes on from where
    it stopped; a failed one is dropped, as fwrite's result was. No descriptor,
    in a process started without a stdout, is such a failure. */
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
+static void gs_write_stream(FILE *stream, const uint8_t *p, int64_t len) {
     #ifdef _WIN32
-        int fd = _fileno(stdout);
+        int fd = _fileno(stream);
         if (fd < 0) return;
         while (len > 0) {
             int n = _write(fd, p, len > 0x40000000 ? 0x40000000u : (unsigned)len);
@@ -3481,7 +3482,7 @@ GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
             len -= n;
         }
     #else
-        int fd = fileno(stdout);
+        int fd = fileno(stream);
         while (len > 0) {
             ssize_t n = write(fd, p, (size_t)len);
             if (n < 0 && errno == EINTR) continue;
@@ -3491,6 +3492,8 @@ GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
         }
     #endif
 }
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stderr, p, len); }
 )GSRT"
     ) },
     { "runtime_threads.h", string_view(
@@ -5118,7 +5121,7 @@ GS_API void gs_os_write_stdout(sl_u8 s) {
 }
 
 GS_API void gs_os_write_stderr(sl_u8 s) {
-    if (s.len > 0) fwrite(s.data, 1, (size_t)s.len, stderr);
+    gs_err_bytes(s.data, s.len);
 }
 
 GS_API void gs_os_flush_stdout(void) { fflush(stdout); }
