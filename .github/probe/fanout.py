@@ -38,66 +38,37 @@ def sub(s, old, new):
     return s.replace(old, new)
 
 
-LOOK = """            gs_mutex_unlock(&s->mutex);
+GET = """            gs_mutex_unlock(&s->mutex);
         }
         gs_pf_relax();
     }
     gs_qlock(s);
     while (!s->count) {"""
 
+
+def get(lost, look):
+    return lambda s: sub(s, GET, f"""            gs_mutex_unlock(&s->mutex);
+            for (int r = 0; r < {lost}; r++) gs_pf_relax();
+        }}
+        {look}
+    }}
+    gs_qlock(s);
+    while (!s->count) {{""")
+
+
+PLAIN = "gs_pf_relax();"
 VARIANTS = {
     "as is": lambda s: s,
-    "spin 64": lambda s: sub(s, "#define GS_QSPIN 2000", "#define GS_QSPIN 64"),
-    "spin 16": lambda s: sub(s, "#define GS_QSPIN 2000", "#define GS_QSPIN 16"),
-    "no lock spin": lambda s: sub(s, "#define GS_QLOCK_SPIN 128", "#define GS_QLOCK_SPIN 0"),
-    "no pause": lambda s: sub(s, "__builtin_ia32_pause();", "__asm__ __volatile__(\"\");"),
-    "look /16": lambda s: sub(s, LOOK, LOOK.replace("        gs_pf_relax();\n", "        for (int r = 0; r < 16; r++) gs_pf_relax();\n")),
-    "look /128": lambda s: sub(s, LOOK, LOOK.replace("        gs_pf_relax();\n", "        for (int r = 0; r < 128; r++) gs_pf_relax();\n")),
-    "lost race /256": lambda s: sub(s, """            gs_mutex_unlock(&s->mutex);
-        }
-        gs_pf_relax();
-    }
-    gs_qlock(s);
-    while (!s->count) {""", """            gs_mutex_unlock(&s->mutex);
-            for (int r = 0; r < 256; r++) gs_pf_relax();
-        }
-        gs_pf_relax();
-    }
-    gs_qlock(s);
-    while (!s->count) {"""),
-    "after take /64": lambda s: sub(s, """                gs_qnode *n = gs_qtake(s);
-                gs_mutex_unlock(&s->mutex);
-                return n;
-            }
-            gs_mutex_unlock(&s->mutex);
-        }
-        gs_pf_relax();""", """                gs_qnode *n = gs_qtake(s);
-                gs_mutex_unlock(&s->mutex);
-                for (int r = 0; r < 64; r++) gs_pf_relax();
-                return n;
-            }
-            gs_mutex_unlock(&s->mutex);
-        }
-        gs_pf_relax();"""),
-    "lines apart": lambda s: sub(s, """    int64_t count, limit;
-    gs_mutex mutex;
-    gs_cond cond;
-    struct gs_qbox_entry *boxes;""", """    char pad0[64];
-    int64_t count, limit;
-    char pad1[64];
-    gs_mutex mutex;
-    gs_cond cond;
-    char pad2[64];
-    struct gs_qbox_entry *boxes;"""),
-    "adaptive": lambda s: sub(s, """    gs_mutex_init(&s->mutex);
-    gs_cond_init_timed(&s->cond);""", """    {
-        pthread_mutexattr_t a;
-        pthread_mutexattr_init(&a);
-        pthread_mutexattr_settype(&a, 3);
-        pthread_mutex_init(&s->mutex, &a);
-        pthread_mutexattr_destroy(&a);
-    }
-    gs_cond_init_timed(&s->cond);"""),
+    "lost 256": get(256, PLAIN),
+    "lost 1024": get(1024, PLAIN),
+    "lost 64": get(64, PLAIN),
+    "fast 16": get(0, "if (spins < GS_QSPIN - 16) gs_pf_relax();"),
+    "fast 64": get(0, "if (spins < GS_QSPIN - 64) gs_pf_relax();"),
+    "lost 256 fast 16": get(256, "if (spins < GS_QSPIN - 16) gs_pf_relax();"),
+    "lost 256 fast 64": get(256, "if (spins < GS_QSPIN - 64) gs_pf_relax();"),
+    "lost 1024 fast 64": get(1024, "if (spins < GS_QSPIN - 64) gs_pf_relax();"),
+    "lost 256 look 16": get(256, "for (int r = 0; r < 16; r++) gs_pf_relax();"),
+    "lost 256 fast 64 nolock": lambda s: sub(get(256, "if (spins < GS_QSPIN - 64) gs_pf_relax();")(s), "#define GS_QLOCK_SPIN 128", "#define GS_QLOCK_SPIN 0"),
 }
 
 
@@ -123,12 +94,12 @@ def fan(exe, prefix=()):
 
 
 print(run("nproc; lscpu | grep -E 'Model name|Thread|Core|L3|Hypervisor'; lscpu -e; uname -r", shell=True).stdout, flush=True)
-print(f"{'variant':<16}{'best':>8}{'median':>8}{'user':>8}{'sys':>8}{'vol':>9}{'invol':>8}{'pingpong':>10}{'spawnwork':>10}", flush=True)
+print(f"{'variant':<25}{'best':>8}{'median':>8}{'user':>8}{'sys':>8}{'vol':>9}{'invol':>8}{'pingpong':>10}{'spawnwork':>10}", flush=True)
 for name, change in VARIANTS.items():
     exe = build_variant(name, change)
     times, t = fan(exe)
     other = {b: min(float(run([exe, "1", b]).stdout.split("\t")[2]) for _ in range(3)) for b in ("pingpong", "spawnwork")}
-    print(f"{name:<16}{min(times):8.3f}{statistics.median(times):8.3f}{t[0]:>8}{t[1]:>8}{t[2]:>9}{t[3]:>8}{other['pingpong']:10.4f}{other['spawnwork']:10.4f}", flush=True)
+    print(f"{name:<25}{min(times):8.3f}{statistics.median(times):8.3f}{t[0]:>8}{t[1]:>8}{t[2]:>9}{t[3]:>8}{other['pingpong']:10.4f}{other['spawnwork']:10.4f}", flush=True)
 
 print("\nhow many receivers, as is", flush=True)
 for n in (1, 2, 3):
@@ -141,7 +112,3 @@ for cpus in ("0", "0,1", "0,2", "0,1,2", "0-3"):
     times, t = fan(exe, ("taskset", "-c", cpus))
     print(f"  cpus {cpus:<8} best {min(times):.3f} median {statistics.median(times):.3f} vol {t[2]} invol {t[3]}", flush=True)
 
-print("\nhow large the ring grew, as is", flush=True)
-exe = build_variant("grow", lambda s: sub(s, "    int64_t cap = s->cap ? s->cap * 2 : 64;", "    int64_t cap = s->cap ? s->cap * 2 : 64;\n    fprintf(stderr, \"ring %lld\n\", (long long)cap);"))
-r = run([exe, "1", "fanout"])
-print("  " + " ".join(r.stderr.split()[-12:]), flush=True)
