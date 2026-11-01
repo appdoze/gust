@@ -1,0 +1,46 @@
+plain: GET /a ?b=1 length 0 keep true
+http 1.0: GET / ? length 0 keep false
+body: POST /p ? length 5 keep true
+no space after colon: POST /p ? length 5 keep true
+spaces in value: GET / ? length 0 keep true
+high bytes in value: GET / ? length 0 keep true
+empty value: GET / ? length 0 keep true
+close: GET / ? length 0 keep false
+token method: M-SEARCH /x ? length 0 keep true
+odd name: GET / ? length 0 keep true
+space before colon: refused 400
+tab before colon: refused 400
+folded line: refused 400
+bare lf in value: refused 400
+bare cr in value: refused 400
+bare lf line end: refused 400
+bare cr line end: refused 400
+nul in value: refused 400
+delete in value: refused 400
+two lengths: refused 400
+same length twice: POST /p ? length 5 keep true
+signed length: refused 400
+length list: refused 400
+huge length: refused 413
+chunked: refused 501
+both: refused 501
+no host: refused 400
+two hosts: refused 400
+no colon: refused 400
+no name: refused 400
+bad version: refused 400
+no version: refused 400
+two spaces: refused 400
+space in target: refused 400
+no method: refused 400
+control in method: refused 400
+control in target: refused 400
+relative target: refused 400
+only a line end: refused 400
+two chunks: 20 "abcde"
+extension and trailer: 23 "abc"
+not all here: -1 ""
+largest size: -1 ""
+past the largest: -100 ""
+negative: -100 ""
+missing line end: -100 ""

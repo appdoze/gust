@@ -1,6 +1,6 @@
 "plain" "q\"b\\s/ \n\r\t \u0001\u001f\x7f caf\xc3\xa9" "k\"ey":-9223372036854775808 9223372036854775807 true false
 0.0 -0.0 1.0 -2.0 0.5 123.25 0.1 0.3333333333333333 0.6666666666666666 100.0 1e-7 1.5e300 0.001 0.0001 0.00001 1e-6 1000000000000000.0 1e16 1.2345678901234568e17 1e21 1e22 1e23 9007199254740992.0 9007199254740992.0 4.35 5e-324 2.2250738585072014e-308 1.7976931348623157e308 -1.7976931348623157e308 0.30000000000000004 null null null
-{"a":[1,-2,3.5,-0.0,100.0,true,false,null,"s",{},[]],"nested":{"x":{"y":{"z":"deep"}}},"esc":"\xc3\xa9\xf0\x9f\x98\x80\"\\/\b\f\n\r\t","lone":"\xed\xa0\x80!","key":7,"big":9223372036854775807,"small":-9223372036854775808,"over":9.223372036854776e18,"long":1.2345678901234567e19,"e":0.01,"dup":1,"dup":2}
+{"a":[1,-2,3.5,-0.0,100.0,true,false,null,"s",{},[]],"nested":{"x":{"y":{"z":"deep"}}},"esc":"\xc3\xa9\xf0\x9f\x98\x80\"\\/\b\f\n\r\t","lone":"\xef\xbf\xbd!","key":7,"big":9223372036854775807,"small":-9223372036854775808,"over":9.223372036854776e18,"long":1.2345678901234567e19,"e":0.01,"dup":1,"dup":2}
 27 nodes, 21 bytes decoded
 deep true true true 7 true 1 true 9223372036854775807 true -9223372036854775808 true 0 false 9.223372036854776e18 true
 [true true false false][true true false false][true false false false][true false false false][true false false false][false false true false][false false true false][false false false false][false false false true][false false false false][false false false false]

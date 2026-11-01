@@ -5,8 +5,8 @@ GET /v1/items/7/bolt: 0 200 allow [] item 7 named bolt
 POST /v1/orders: 0 201 allow [] order 1
 POST /v1/orders: 0 201 allow [] order 2
 GET /v1/orders: 405 405 allow [POST, DELETE] 
-POST /health: 405 405 allow [GET] 
-POST /v1/items/abc: 405 405 allow [GET] 
+POST /health: 405 405 allow [GET, HEAD] 
+POST /v1/items/abc: 405 405 allow [GET, HEAD] 
 GET /v1/items/abc: 404 200 allow [] 
 GET /v1/items/: 404 200 allow [] 
 GET /nowhere: 404 200 allow [] 
