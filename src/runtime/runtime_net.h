@@ -1560,6 +1560,8 @@ GS_API int64_t gs_net_adopt(int64_t ph, int64_t dh) {
    connections, and its listeners and detached connections. */
 #if GS_NEED_THREADS
 static void gs_net_thread_end(void) {
+    /* The next worker on this thread starts with none of them (gs_thread_main). */
+    gs_net_oserr = gs_net_accepted_open = 0;
     for (int64_t i = 0; i < gs_net_npls; i++)
         if (gs_net_pls[i].live) gs_net_free_pl(&gs_net_pls[i]);
     free(gs_net_pls);

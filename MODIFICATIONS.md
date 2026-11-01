@@ -628,6 +628,14 @@ git log upstream/master..main
 
 ## Runtime
 
+- `thread_spawn` reuses threads. A thread whose worker has ended waits 50 ms
+  for the next one, up to 64 of them, and everything of a worker but its native
+  stack's pages is set up and released as on a new thread; one that aborted is
+  not kept, its stack possibly having overflowed. A spawn and wait of an empty
+  worker fell from 90 microseconds to about 1, near a goroutine's. Threads ending
+  still leave nothing behind 50 ms later. `test/threads/thread_reuse.goose`,
+  `compare/concurrency`.
+
 - `src/runtime/runtime_net.h` (new), `src/runtime/runtime_ext.h`,
   `src/main.cpp`, `CMakeLists.txt` (and `src/runtime_inline.h`,
   regenerated): the sockets and poller behind `net`, part of the runtime
