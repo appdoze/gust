@@ -105,10 +105,10 @@ fn dict_empty(c: u64) -> u64 { c & ~(c << 6) & DICT_MSB }
 // The slot of the lowest byte set in a match (m != 0). Its lowest bit,
 // shifted down to 1 << 8j, is a multiply that moves byte 7 - j of the
 // constant to the top, and that byte's top three bits hold j. It is as
-// fast as std's ctz where the C compiler has an instruction for that, and
-// several times faster under TinyCC and MIR, where ctz is a loop over the
-// bits. The `& 7`, which tells bounds-check elimination it is a slot,
-// costs nothing: the C compiler sees a 3-bit value.
+// fast as std's ctz under a C compiler or TinyCC, and under MIR, where a
+// call of ctz stays a call, makes the hashmap benchmark 1.24 times faster.
+// The `& 7`, which tells bounds-check elimination it is a slot, costs
+// nothing: the C compiler sees a 3-bit value.
 fn dict_first(m: u64) -> i64 { ((((m & (0 - m)) >> 7) * 0x0020406080A0C0E0 >> 61) as! i64) & 7 }
 
 fn dict_byte(c: u64, j: i64) -> u64 { (c >> (j * 8)) & 255 }

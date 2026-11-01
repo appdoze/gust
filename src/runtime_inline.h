@@ -782,21 +782,21 @@ static T gs_shr_##SFX(T a, int64_t n) { \
 
 /* Unsigned types wrap modulo 2^width by definition (§6.2) in every build:
    plain C unsigned arithmetic, truncated back to the width. */
-#define GS_INTOPS_U(SFX, T, MAX, BITS) \
-static T gs_add_##SFX(T a, T b) { return (T)(a + b); } \
-static T gs_sub_##SFX(T a, T b) { return (T)(a - b); } \
-static T gs_mul_##SFX(T a, T b) { return (T)((uint64_t)a * (uint64_t)b); } \
-static T gs_shl_##SFX(T a, int64_t n) { \
+#define GS_INTOPS_U(T, MAX, BITS) \
+static T gs_add_u##BITS(T a, T b) { return (T)(a + b); } \
+static T gs_sub_u##BITS(T a, T b) { return (T)(a - b); } \
+static T gs_mul_u##BITS(T a, T b) { return (T)((uint64_t)a * (uint64_t)b); } \
+static T gs_shl_u##BITS(T a, int64_t n) { \
     return (T)((uint64_t)a << (n & (BITS - 1))); } \
-static T gs_shr_##SFX(T a, int64_t n) { \
+static T gs_shr_u##BITS(T a, int64_t n) { \
     return (T)((uint64_t)a >> (n & (BITS - 1))); }
 
 GS_INTOPS_S(i8,  int8_t,  -128, 127, 8)
 GS_INTOPS_S(i16, int16_t, -32768, 32767, 16)
 GS_INTOPS_S(i32, int32_t, INT32_MIN, INT32_MAX, 32)
-GS_INTOPS_U(u8,  uint8_t,  255u, 8)
-GS_INTOPS_U(u16, uint16_t, 65535u, 16)
-GS_INTOPS_U(u32, uint32_t, 4294967295u, 32)
+GS_INTOPS_U(uint8_t,  255u, 8)
+GS_INTOPS_U(uint16_t, 65535u, 16)
+GS_INTOPS_U(uint32_t, 4294967295u, 32)
 
 /* The 64-bit types detect overflow on the value itself. */
 static int64_t gs_add_i64(int64_t a, int64_t b, const char *file, int line) {
@@ -873,9 +873,9 @@ static uint64_t gs_shr_u64(uint64_t a, int64_t n) { return a >> (n & 63); }
 
 #define gs_add_i64(a, b, f, l) ((int64_t)((uint64_t)(a) + (uint64_t)(b)))
 #define gs_sub_i64(a, b, f, l) ((int64_t)((uint64_t)(a) - (uint64_t)(b)))
+#define gs_mul_i64(a, b, f, l) ((int64_t)((uint64_t)(a) * (uint64_t)(b)))
 )GSRT"
-R"GSRT(#define gs_mul_i64(a, b, f, l) ((int64_t)((uint64_t)(a) * (uint64_t)(b)))
-#define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
+R"GSRT(#define gs_neg_i64(a, f, l)    ((int64_t)(0u - (uint64_t)(a)))
 #define gs_shl_i64(a, n) ((int64_t)((uint64_t)(a) << ((n) & 63)))
 #define gs_shr_i64(a, n) ((int64_t)((a) >> ((n) & 63)))
 
@@ -1077,9 +1077,9 @@ static int64_t gs_f2ichk(double d, int f32, int64_t lo, int64_t hi, const char *
     if (!(d >= -9223372036854775808.0 && d < 9223372036854775808.0))
         gs_asfail_f("out of range", d, f32, type, file, line);
     int64_t v = (int64_t)d;
+    if (v < lo || v > hi) gs_asfail_f("out of range", d, f32, type, file, line);
 )GSRT"
-R"GSRT(    if (v < lo || v > hi) gs_asfail_f("out of range", d, f32, type, file, line);
-    if ((double)v != d) gs_asfail_f("changes the value", d, f32, type, file, line);
+R"GSRT(    if ((double)v != d) gs_asfail_f("changes the value", d, f32, type, file, line);
     return v;
 }
 static uint64_t gs_f2uchk(double d, int f32, const char *file, int line) {
@@ -1243,9 +1243,9 @@ GS_DATA GS_TLS int64_t gs_nstks;
 GS_DATA GS_TLS int64_t gs_cb_base;
 
 /* The current program instance's globals (goose_spec.md 11.1), a struct the
+   compiler lays out: main's is its one static instance, a worker's a fresh
 )GSRT"
-R"GSRT(   compiler lays out: main's is its one static instance, a worker's a fresh
-   copy of the globals its program uses, taken from the spawning instance
+R"GSRT(   copy of the globals its program uses, taken from the spawning instance
    at spawn like the arguments (11.2). No global is shared between program
    instances; the only C statics a program shares are read-only ones. */
 GS_DATA GS_TLS void *gs_gl;
@@ -1465,9 +1465,9 @@ static int64_t gs_zig_write(uint8_t *p, int64_t v) {
     return gs_uleb_write(p, ((uint64_t)v << 1) ^ (uint64_t)(v >> 63));
 }
 
+/* ---------------------------------------------------------------------------
 )GSRT"
-R"GSRT(/* ---------------------------------------------------------------------------
-   Verified loading (docs/design/serialization.md): what the generated
+R"GSRT(   Verified loading (docs/design/serialization.md): what the generated
    gs_verify_<T> walkers are built from. The bytes are untrusted until the
    walk finishes, so every read here is bounded by the image end and reports
    a malformed encoding instead of running past it. */
@@ -4880,6 +4880,33 @@ static uint8_t gs_ffi_bytes(uint64_t p, int64_t n, gs_rref out) {
 #define GS_SQRT_NO_ERRNO 1
 #endif
 #endif
+/* Gust: ASCII case: bytes from lo through lo + 25 have bit 5 flipped, which
+   turns upper case to lower and lower to upper. In SSE2 where a C compiler
+   may not vectorize the loop, as MSVC does not, and gcc before 15 at -O2 did
+   not. Adding 127 - (lo + 25) moves that range to the top of the signed bytes,
+   where nothing else lands. */
+#if defined(__x86_64__) || defined(_M_X64)
+#if !defined(__TINYC__) && !defined(__MIRC__)
+#include <emmintrin.h>
+#define GS_ASCII_SSE2 1
+#endif
+#endif
+static void gs_ascii_flip(sl_u8 s, int64_t lo) {
+    uint8_t *p = (uint8_t *)s.data;
+    int64_t n = s.len, i = 0;
+    #ifdef GS_ASCII_SSE2
+        __m128i shift = _mm_set1_epi8((char)(127 - (lo + 25)));
+        __m128i floor = _mm_set1_epi8((char)(127 - 26));
+        __m128i bit = _mm_set1_epi8(0x20);
+        for (; i + 16 <= n; i += 16) {
+            __m128i v = _mm_loadu_si128((const __m128i *)(p + i));
+            __m128i in = _mm_cmpgt_epi8(_mm_add_epi8(v, shift), floor);
+            _mm_storeu_si128((__m128i *)(p + i), _mm_xor_si128(v, _mm_and_si128(in, bit)));
+        }
+    #endif
+    for (; i < n; i++) p[i] ^= (uint8_t)((uint8_t)(p[i] - (uint8_t)lo) < 26 ? 0x20 : 0);
+}
+
 #ifdef GS_SQRT_NO_ERRNO
 static double gs_sqrt(double x) { return __builtin_elementwise_sqrt(x); }
 static float gs_sqrtf(float x) { return __builtin_elementwise_sqrt(x); }
@@ -4949,7 +4976,8 @@ GS_ROUNDING(gs_roundf, float, int32_t, 8388608.0f, GS_ROUND_ADJ)
    branch stores into. The lanes' C only ever operates on them through the
    macros below, so that each compiler gets its own: clang's vector types,
    or under MSVC and gcc on x86-64 a pair of SSE2 registers each and
-   functions inlined into the block of lanes (gcc 15 compiles the vector
+)GSRT"
+R"GSRT(   functions inlined into the block of lanes (gcc 15 compiles the vector
    types into code several times slower than the loop one iteration at a
    time: n-body 1.78 s against 0.17 s). Each lane's operations are its
    iteration's, rounded as they are. TinyCC and MIR have neither, and
@@ -4966,8 +4994,7 @@ typedef long long gs_l4m __attribute__((vector_size(32)));
 #define gs_l4d_splat(x)                                                       \
     __extension__({                                                           \
         double gs_l4d_s_ = (x);                                               \
-)GSRT"
-R"GSRT(        (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
+        (gs_l4d){ gs_l4d_s_, gs_l4d_s_, gs_l4d_s_, gs_l4d_s_ };               \
     })
 #define gs_l4m_splat(x)                                                       \
     __extension__({                                                           \
@@ -5109,7 +5136,8 @@ GS_L4_INLINE gs_l4x_m_sse gs_l4x_not_sse(gs_l4x_m_sse a) {
     r.hi = _mm_xor_pd(a.hi, s);
     return r;
 }
-GS_L4_INLINE gs_l4x_d_sse gs_l4x_blend_sse(gs_l4x_m_sse m, gs_l4x_d_sse a, gs_l4x_d_sse b) {
+)GSRT"
+R"GSRT(GS_L4_INLINE gs_l4x_d_sse gs_l4x_blend_sse(gs_l4x_m_sse m, gs_l4x_d_sse a, gs_l4x_d_sse b) {
     gs_l4x_d_sse r;
     r.lo = _mm_or_pd(_mm_and_pd(m.lo, a.lo), _mm_andnot_pd(m.lo, b.lo));
     r.hi = _mm_or_pd(_mm_and_pd(m.hi, a.hi), _mm_andnot_pd(m.hi, b.hi));
@@ -5133,8 +5161,7 @@ GS_L4_INLINE gs_l4x_d_sse gs_l4x_sqrt_sse(gs_l4x_d_sse a) {
 #define GS_L4_WIDE _avx
 typedef __m256d gs_l4x_d_avx;
 typedef __m256d gs_l4x_m_avx;
-)GSRT"
-R"GSRT(#ifdef _MSC_VER
+#ifdef _MSC_VER
 /* Under MSVC macros, not functions: MSVC 19.50 at /O2, inlining
    gs_l4x_get_avx as a __forceinline function, read lanes 0 to 3 of a lane
    vector in the second or third member of a lane struct wrongly
@@ -5244,7 +5271,8 @@ static float gs_mul_addf(float x, float y, float z) {
 #define GS_LIBM_SYM2(p, f) #p #f
 #define GS_LIBM_SYM(p, f) GS_LIBM_SYM2(p, f)
 #define GS_LIBM
-#define GS_LIBM1(f) __asm__(GS_LIBM_SYM(__USER_LABEL_PREFIX__, f)) __attribute__((const));
+)GSRT"
+R"GSRT(#define GS_LIBM1(f) __asm__(GS_LIBM_SYM(__USER_LABEL_PREFIX__, f)) __attribute__((const));
 #define GS_LIBM2(f) GS_LIBM1(f)
 #else
 #define GS_LIBM static
@@ -5270,8 +5298,7 @@ GS_LIBM float gs_asinf(float x) GS_LIBM1(asinf)
 GS_LIBM float gs_acosf(float x) GS_LIBM1(acosf)
 GS_LIBM float gs_atanf(float x) GS_LIBM1(atanf)
 GS_LIBM float gs_atan2f(float x, float y) GS_LIBM2(atan2f)
-)GSRT"
-R"GSRT(GS_LIBM float gs_expf(float x) GS_LIBM1(expf)
+GS_LIBM float gs_expf(float x) GS_LIBM1(expf)
 GS_LIBM float gs_logf(float x) GS_LIBM1(logf)
 GS_LIBM float gs_log2f(float x) GS_LIBM1(log2f)
 GS_LIBM float gs_log10f(float x) GS_LIBM1(log10f)
