@@ -1007,8 +1007,14 @@ body against a server thread.
 The server, `http::serve`, runs HTTP/1.1 over `net::serve`'s event loop:
 requests parsed in place in the loop's buffer, keep-alive and pipelining,
 `Content-Length` bodies (a chunked request body is refused with 501), the
-refusals a client that breaks the protocol is owed (400, 408, 413, 431,
-503), and responses of any size. A handler `H(state, req, res, out)` writes
+refusals a client that breaks the protocol is owed (400, 408, 413, 417, 431,
+503), and responses of any size. What a proxy in front could read differently
+is refused with 400, as a request gets smuggled inside another that way (RFC
+9112 §11.2): a space before a header's colon, a line folded onto the one
+before, a bare CR or LF, a control byte in a method, target or header. A reply
+to HEAD has the headers a GET's would and no body. A client waiting on
+`Expect: 100-continue` is told to send, and an HTTP/1.0 client that asks for
+keep-alive is told it has it. A handler `H(state, req, res, out)` writes
 a whole body into `out`, up to `http::MAX_RESPONSE` bytes, and sets
 `res.status`, `res.content_type` (JSON by default), `res.allow` and
 `res.close`; one that sets `res.stream` answers with what it wrote and then
@@ -1020,15 +1026,20 @@ after `net::catch_signals`).
 <!-- fragment -->
 ```goose
 struct Request { method: const u8[:], path: const u8[:], query: const u8[:], body: const u8[:],
-                 keep_alive: bool, http11: bool, deadline: f64, stopping: bool }
+                 keep_alive: bool, http11: bool, expect_continue: bool, deadline: f64, stopping: bool }
 struct Response { status: i64 = 200, allow: u8[..64] = "", close: bool = false, stream: bool = false,
                   content_type: const u8[:] = "application/json" }
 fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn, proto: S,
                   max_conns: i64, first_id: i64, id_step: i64) -> Counts
+fn serve<H, G, S>(listener: net::Listener, poller: net::Poller, first: net::Conn, proto: S,
+                  max_conns: i64, first_id: i64, id_step: i64, max_body: i64) -> Counts
 ```
 Over a listener it is one worker of a pool, which handlers must not block;
 over one adopted connection (`first`, with no listener) it serves that
-connection on a thread of its own, where they may.
+connection on a thread of its own, where they may. A body may be
+`http::MAX_BODY` bytes, 8 KB, or `max_body` where it is given; a connection
+with part of one holds that much until the rest comes or the request's time
+is up.
 `examples/api/api.gust` serves a JSON API on it both ways, and
 `test/threads/http_server.goose` answers its client.
 
@@ -1049,7 +1060,8 @@ A pattern's `{name}` stands for one path segment that is not empty, which
 goes into the variant's field of that name, an integer or an inline
 string; a pattern naming no such field aborts. The first variant whose
 pattern matches the path, whose method is the request's and whose fields
-take their segments has its `handle` called, and `route` returns 0. When
+take their segments has its `handle` called, and `route` returns 0; a GET
+pattern answers HEAD too, as Go's does. When
 none does but some pattern matches the path with another method, it sets
 `res.status` to 405 and `res.allow` to those methods and returns 405, as
 Go's `ServeMux` answers; otherwise it returns 404. The body of either is

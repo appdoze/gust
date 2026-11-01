@@ -2,8 +2,8 @@
 
 Designs that the comparison against Rust, Go and Goose points to, with
 the measurements behind each, and the tools the measurements came from.
-All of them are built: the dictionary in groups, the keyed hash and MSVC's
-AVX versions.
+The dictionary in groups, the keyed hash and MSVC's AVX versions are built; the
+queue with no lock between its ends is not.
 
 ## A dictionary in groups (Swiss table)
 

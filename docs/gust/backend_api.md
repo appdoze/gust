@@ -19,7 +19,7 @@ before-and-after comparison on 26 October 2026. Raw results are in
 | area | Gust before this work | in `examples/api/` now | gap left |
 |---|---|---|---|
 | sockets | nothing: the standard library has files, not sockets | the standard library's `net` (section 6): TCP over IPv4, non-blocking sockets, a poller (WSAPoll, poll), checked handles, and `serve`, the event loop, over `src/runtime/runtime_net.h`; no pointer crosses into C | IPv6, DNS, UDP, TLS; epoll, kqueue or IOCP behind the poller for many thousands of connections per worker |
-| HTTP | none | `stdlib/http.goose`, a protocol over `net::serve`: HTTP/1.1 parsed in place, keep-alive, pipelining, `Content-Length` bodies, `Host` checks (RFC 9112), `413` / `431` / `501` / `408` refusals, partial reads and writes, responses built whole up to 1 MB and streamed in chunks past that | chunked request bodies, a client, HTTP/2, TLS (terminate it in a proxy meanwhile) |
+| HTTP | none | `stdlib/http.goose`, a protocol over `net::serve`: HTTP/1.1 parsed in place, keep-alive, pipelining, `Content-Length` bodies, `Host` checks and the refusal of what a proxy could read differently (RFC 9112), HEAD, `Expect: 100-continue`, `413` / `417` / `431` / `501` / `408` refusals, partial reads and writes, responses built whole up to 1 MB and streamed in chunks past that | chunked request bodies, a client, HTTP/2, TLS (terminate it in a proxy meanwhile) |
 | routing | none | `http::route` (Gust), resolved at compile time: an enum with a variant per endpoint, an `endpoint` overload giving its method and path pattern (`{id}` into the variant's field) and a `handle` overload, expanded by a `const for` over the variants; `405` naming the methods a path has, as Go 1.22's `ServeMux` | wildcards past one segment (`{path...}`), host patterns; text parameters longer than 64 bytes |
 | JSON | `std/json`: a writer, a tree parser, and a reader that decodes straight into a program's types | `jsonx.gust`: a struct of numbers, booleans and inline strings encoded and decoded through `const for` over its fields, one line per type to opt in to encoding | the opt-in line (`const if` would remove it); optional fields; nested structs and arrays in decoding; UTF-8 validation of strings |
 | validation | none | field errors gathered into one FastAPI-shaped `422`; text fields with their limit in the type (`Str64`) | declarative constraints on fields |
@@ -420,6 +420,22 @@ scenarios. Its slow showing on Windows was its I/O driver there, not the
 language. Gust's pool keeps the smallest memory throughout. With a new
 connection per request all three come to about 18,000 to 19,000 a second,
 set by the runner's connection setup rather than the servers.
+
+On 1 November 2026 (run 41357916334, the same way;
+`examples/api/results/2026-11-01-linux-ci-quick.json`), with HEAD, `Expect` and the
+refusal of what a proxy could read differently in Gust's server and not in the
+others', which cost it nothing that shows:
+
+| server, mixed, 64 connections | req/s | p50 | p99 | p99.9 | peak RSS | server CPU |
+|---|---:|---:|---:|---:|---:|---:|
+| Gust, worker pool | 157k | 361 µs | 1.05 ms | 1.16 ms | 2.4 MB | 93% |
+| Rust, tokio, same HTTP | 149k | 417 µs | 0.92 ms | 1.30 ms | 3.9 MB | 96% |
+| Go, same HTTP as Gust | 117k | 482 µs | 1.48 ms | 3.05 ms | 9.5 MB | 98% |
+| Go net/http | 55k | 1,005 µs | 3.29 ms | 4.18 ms | 12.8 MB | 98% |
+
+tokio leads a health check, 159k to 154k, and with a new connection per request Gust
+is behind at 17.6k against 18.8k for Go and 18.6k for tokio. A server's executable is
+163 KB against tokio's 1.2 MB and Go's 4.0 MB.
 
 ## 6. The networking module
 
