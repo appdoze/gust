@@ -552,6 +552,29 @@ git log upstream/master..main
   `test/stdlib/stdlib_bits.goose` (new) checks all three against counting
   bit by bit, for zero, each bit, runs, every pair of bits and random words.
 
+- `format_flt` from the float's exact value (`gs_fmt_fixed`,
+  `src/runtime/runtime_os.h`), half up at an exact tie: it had computed
+  `x * 10^d + 0.5` in floats and an `i64`, which rounded 1.115 to 1.12 at two
+  places and wrapped past 2^63, printing `format_flt(1e19, 2)` as
+  38758200196842127.36. 199,889 cases agree with Python's exact decimals.
+  `hash` of a float is of its bits (`gs_flt_bits`), the two zeros as one,
+  where counting 1/65536ths gave every small float one hash; and `hash_mix`
+  folds the high half down first, where keys differing only above bit 32
+  shared a dictionary's low bits. 100,000 keys `i << 44` take 0.003 s, from
+  1.75 s. `test/stdlib/format_flt_hash.goose` (new).
+- A float's text and reading it back (`src/runtime/runtime_impl.h`,
+  `gs_grisu3`, `gs_dec_to_f64`; `stdlib/std.goose`, `parse_flt`). Formatting
+  finds the digits by Grisu3, as Rust's does, where every float took big
+  integers, which stay for the 0.25% to 0.8% it cannot prove: the same text
+  for every float (80 million compared with the integers' digits, none
+  differing), at 0.86x Rust's cycles, from 7.1x. Reading had been off by a
+  unit in the last place for up to one float's shortest text in five, which so
+  did not read back; `parse_flt` now gives the nearest float, ties to even, as
+  Rust's and Go's do: Clinger's exact case, else 64-bit scaling through the
+  same 87 powers of ten with its uncertainty tracked, else the text compared
+  exactly with the points halfway between doubles. 510,000 hard texts agree
+  with Python's. `test/stdlib/float_text.goose` (new).
+
 - `stdlib/dictionary.goose`: a slot's tag is one byte, the top seven bits
   of the key's hash, where it was the low 31 with the home slot in them, so
   growth and removal hash the keys they move again. A slot of `i64` keys and

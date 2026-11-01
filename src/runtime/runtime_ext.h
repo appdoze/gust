@@ -535,6 +535,14 @@ GS_API void gs_os_read_stdin(gs_rref out);
 GS_API int64_t gs_os_arg_count(void);
 GS_API void gs_os_arg(int64_t i, gs_rref out);
 GS_API uint8_t gs_os_getenv(sl_u8 name, gs_rref out);
+GS_API double gs_parse_f64(sl_u8 s, uint64_t mant, int64_t exp10, uint8_t truncated);
+GS_API void gs_fmt_fixed(gs_rref out, double v, int64_t decimals);
+/* A float's bits for its hash, the two zeros, which compare equal, as one. */
+static uint64_t gs_flt_bits(double x) {
+    union { double d; uint64_t u; } b;
+    b.d = x;
+    return x == 0 ? 0 : b.u;
+}
 GS_API uint8_t gs_os_resource_dir(gs_rref out);
 GS_API int64_t gs_os_time_ns(void);
 GS_API int64_t gs_os_clock_ns(void);

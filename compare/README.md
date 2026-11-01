@@ -61,3 +61,13 @@ raytrace from them, reorganized into functions both forms share, with
 rayon's parallel iterators added. The rest (`EXTRA_SPEC.md`, the Gust
 program, benchmarks 6-8 in Rust and Lobster, the probes and the scripts)
 was written for this comparison, under Gust's licence (Apache-2.0).
+
+## Library operations
+
+`library/` measures what programs lean on beyond the eight benchmarks: floats and
+integers to text and back, searching, replacing, splitting, sorting, array growth
+and files, in Gust, Rust and Go, and JSON, base64 and regular expressions in Gust
+and Go, whose standard library has them. `ci_measure.py --library` runs them on
+CI and fails if any two languages disagree on a checksum. Print throughput, process
+start and build time are in `ci_measure.py` too. `quiet_bench.py` compares builds
+on a busy desktop and `sample_profile.py` profiles one on Windows.
