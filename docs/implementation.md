@@ -6298,7 +6298,9 @@ A thread program's stacks
 are kept in a block reached through the thread-local `gs_stks`. Since the
 compiler knows how many there are, all of them are reserved as the thread
 program starts (`gs_stack_block`, called from `gs_rt_init` for main and from
-its entry thunk for a worker). A worker's stacks are released when it exits.
+its entry thunk for a worker). A worker's stacks are released when it exits,
+but for up to four regions its thread keeps for the next worker
+(`gs_keep_regions`), which that worker takes in place of reserving its own.
 Every region owned by the current thread program is registered
 thread-locally, so that the fault handler never touches another worker's
 state. The registry is sized to the program's region count; the runtime

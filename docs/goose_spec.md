@@ -4481,7 +4481,14 @@ relative of the Linda tuple-space / coordination style.
   the Goose cleanup has completed. A child worker owns its storage
   independently and may outlive the worker that spawned it. Queued messages
   belong to their queues and remain available to receivers after the sender
-  exits. Workers still running when `main` returns are killed.
+  exits. Workers still running when `main` returns are killed. Gust: a native
+  thread whose worker has returned may wait up to 50 ms for the next
+  `thread_spawn` rather than ending, up to 256 of them, each keeping its native
+  stack's pages and up to four of its worker's regions, reserved, with no more
+  than the first 64 KB of each in memory. Those go when the thread ends, so a
+  worker's storage is all gone within that time of its return rather than at
+  it. The next worker on the thread sees nothing of the last: its arguments,
+  globals, stack block and registry are new. One that aborted is not kept.
 * A thread program is an instance of the program with globals of its own.
   At `thread_spawn`, every global the worker's program uses is copied from
   the spawning instance, in the same way as the arguments, and the worker

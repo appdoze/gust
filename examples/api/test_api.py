@@ -379,7 +379,7 @@ def main():
                 if good:
                     good = check(json.loads(body)) if body else want >= 400
             if want == 405:
-                good = good and headers.get("allow") in ("GET, HEAD", "POST")
+                good = good and headers.get("allow") in (("GET", "GET, HEAD", "POST") if args.go else ("GET, HEAD", "POST"))
         except Exception as e:
             good, status, body = False, "error", repr(e).encode()
         print(("ok   " if good else "FAIL ") + f"{name}: {status} {body[:160]!r}")

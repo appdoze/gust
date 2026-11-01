@@ -3714,7 +3714,7 @@ locks, atomics or memory orderings.
 |---|---|
 | `thread_spawn(worker, args…) -> i64` | starts a worker; its id, never reused |
 | `thread_spawn_contained(worker, args…) -> i64` | starts a worker whose aborts end only that worker |
-| `thread_wait(id) -> bool` | blocks until that worker has ended and its storage is released; `false` if it was contained and aborted |
+| `thread_wait(id) -> bool` | blocks until that worker has ended and its storage is released, but for what its thread keeps a moment for the next worker (§11.2); `false` if it was contained and aborted |
 | `thread_wait(id, msg) -> bool` | as `thread_wait(id)`, and the first such wait appends a contained worker's abort message to `msg` |
 | `hardware_threads() -> i64` | a sensible worker count, never more than the data stacks allow |
 | `qput(v) -> bool` | puts `v` on the queue for its type; `false`, at once, if the queue is full |
