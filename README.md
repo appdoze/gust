@@ -74,34 +74,40 @@ benchmarks whose checksums match in both languages: five from Lobster's
 cross-language suite (n-body, ray tracing, an AST interpreter, quicksort, A*)
 plus binary trees, a hash map and string processing. Gust is ahead on all eight
 on both systems. `compare/` has the programs and the harness; these are run
-[41344580435](https://github.com/appdoze/gust/actions/runs/41344580435).
+[41528247902](https://github.com/appdoze/gust/actions/runs/41528247902).
 
 | measure, Gust relative to Rust | Ubuntu | Windows |
 |---|---|---|
-| time over all 8 (geometric mean) | 0.50x | 0.45x |
+| time over all 8 (geometric mean) | 0.51x | 0.45x |
 | closest of the 8 | ray tracing and quicksort, 0.95x | ray tracing, 0.92x |
 | peak memory (geometric mean) | 0.72x | 0.84x |
-| the benchmark program's size | 72 KB, Rust 2.15 MB | 85 KB, Rust 188 KB |
-| hello world, start to exit | 0.56 ms, Rust 0.73 ms, Go 1.00 ms | 4.9 ms, Rust 5.1 ms, Go 6.8 ms |
+| the benchmark program's size | 77 KB, Rust 2.15 MB | 87 KB, Rust 188 KB |
+| hello world, start to exit | 0.58 ms, Rust 0.73 ms, Go 1.04 ms | 5.0 ms, Rust 5.1 ms, Go 6.6 ms |
+| 300,000 prints to a file | 0.012 s, Rust 0.33 s, Go 0.41 s | 0.014 s, Rust 0.85 s, Go 0.63 s |
+
+The prints are each language's plain print. Gust buffers them when stdout is not a terminal,
+and Rust's and Go's write each line unless a program asks for a buffer.
 
 Serving a JSON API, mixed load over 64 connections on a 4-CPU Linux runner, one
 3-second run on a shared machine, so indicative only (run
-[41357916334](https://github.com/appdoze/gust/actions/runs/41357916334)):
+[41528252467](https://github.com/appdoze/gust/actions/runs/41528252467); Rust's and Go's
+servers, unchanged, came out 46% to 72% above the run before, so this runner was
+faster and the two runs do not compare):
 
 | server | requests/s | p99 | peak memory |
 |---|---:|---:|---:|
-| Gust, `http::serve` | 157k | 1.05 ms | 2.4 MB |
-| Rust on tokio, the same minimal HTTP | 149k | 0.92 ms | 3.9 MB |
-| Go, the same minimal HTTP | 117k | 1.48 ms | 9.5 MB |
-| Go's net/http | 55k | 3.29 ms | 12.8 MB |
+| Gust, `http::serve` | 251k | 0.64 ms | 2.5 MB |
+| Rust on tokio, the same minimal HTTP | 218k | 0.69 ms | 4.0 MB |
+| Go, the same minimal HTTP | 180k | 1.18 ms | 9.4 MB |
+| Go's net/http | 94k | 2.06 ms | 12.7 MB |
 
-Where it is behind: tokio has the lower p99 there and answers a health check 3%
-faster, and with a new connection per request Gust's 17.6k a second is 5 to 6% under
-Go's and tokio's. Sorting integers takes 1.15x to 1.35x Rust's time, gcc builds
+Where it is behind: tokio answers a health check 4% faster, with the lower p99 there,
+and with a new connection per request Gust's 36.1k a second is 8% under tokio's and 3%
+under net/http's. Sorting integers takes 1.16x to 1.34x Rust's time, gcc builds
 are behind Rust on sort, A* and ray tracing, and an MSVC build on ray tracing. Go's
-goroutines start a hundred at once faster than threads can, 20x on Linux, and a
-sender with three receivers at one queue on Linux takes about 2x what Go does and
-1.2x to 1.8x what Rust does. [ROADMAP.md](ROADMAP.md) has the rest.
+goroutines start a hundred at once faster than threads can, 18x on Linux, and a
+sender with three receivers at one queue on Linux takes about 2x what Go and Rust
+do. [ROADMAP.md](ROADMAP.md) has the rest.
 
 A static build, `gust build --target x86_64-linux-musl`, resides in 88 KB for a hello world,
 against about 2 MB for Rust, Go and Gust's usual build, whose C library's pages are shared between
