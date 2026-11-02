@@ -117,7 +117,8 @@ ThreadSanitizer the stress test `test/threads/queue_stress.goose` reports nothin
 
 **What it gave.** One lock against two on the same 4-CPU runner, three runs on three
 kinds of CPU: a sender and three receivers takes 0.73x to 0.83x of the time, and messages
-back and forth 0.64x to 0.75x, which is level with Go. That is less than the design hoped
+back and forth 0.64x to 0.75x, which is level with Go on some CPUs (1.04x) and 2x on others.
+That is less than the design hoped
 for. The sender and three receivers are still 1.2x to 1.8x Rust and 1.7x to 2.1x Go, since
 the receivers pass the one lock on their end among them. So this closes part of the gap and
 not all of it. A thread also remembers the mailboxes it has asked for, which never
@@ -140,8 +141,9 @@ hint that the lock then decides, so the sleeping protocol is as it was. On one m
 a slowest of 0.097 s, to 0.027 s, with a slowest of 0.028 s, against the one-lock queue's 0.058 s,
 Rust's 0.115 s and Go's 0.118 s. On Linux, where the receivers' lock is what limits it, 0.121 s went
 to 0.112 s, against Rust's 0.063 s and Go's 0.054 s. Messages back and forth moved 1.02x on Linux and
-0.95x on this PC. On that runner they read 1.18x, but so did variants that do not touch them (1.14x
-to 1.19x), so that row was its reference's luck.
+0.95x on a Windows PC. On that runner they read 1.18x, but so did variants that do not touch them
+(1.14x to 1.19x), so that row was its reference's luck. A full Bench run (41543135535) agrees: on
+Windows 0.26x Rust and 0.25x Go, and on Linux 1.31x and 1.70x, on another kind of CPU.
 
 Tried on the way, and dropped:
 
