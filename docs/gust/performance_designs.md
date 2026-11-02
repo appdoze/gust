@@ -123,6 +123,14 @@ the receivers pass the one lock on their end among them. So this closes part of 
 not all of it. A thread also remembers the mailboxes it has asked for, which never
 move, rather than taking a lock every thread of that type asks for each message.
 
+Those runs were all on Linux. On Windows, on one machine in 25 rounds (probe run 41531683290),
+clang's build of a sender and three receivers is level at its fastest (1.01x) and 1.13x at its
+median, MSVC's 0.95x and 1.20x: the two-lock queue's times spread more there, 0.056 s to 0.094 s
+against 0.055 s to 0.061 s, and even its slowest is ahead of Rust's fastest, 0.112 s, and Go's,
+0.115 s. Messages back and forth take 0.49x with clang and 0.94x with MSVC (medians 0.56x and
+0.77x). A full Bench run reads differently, 1.28x Rust and 0.82x Go, on a runner where Rust's own
+time was 0.070 s, which is why these comparisons are made on one machine.
+
 ## What Zig and Nim had to offer
 
 Read in November 2026 from their sources, for Gust's remaining gaps, and measured where a
