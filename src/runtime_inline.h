@@ -6802,7 +6802,7 @@ static int64_t gs_net_ndets;
 /* Whether any thread has used the network, set with no lock held and read by a
    thread as it ends. */
 static int gs_net_used;
-#if defined(_MSC_VER) && !defined(__clang__)
+#if !GS_NEED_THREADS || (defined(_MSC_VER) && !defined(__clang__))
 #define GS_NET_MARK_USED() (*(volatile int *)&gs_net_used = 1)
 #define GS_NET_WAS_USED() (*(volatile int *)&gs_net_used)
 #else
