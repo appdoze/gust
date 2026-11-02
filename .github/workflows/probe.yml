@@ -1,0 +1,32 @@
+name: Probe
+
+on:
+  push:
+    branches: ['probe/win-queue']
+
+jobs:
+  winqueue:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+      - name: Build
+        run: |
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --target goose -j 4
+      - name: Build the one-lock queue's compiler
+        run: |
+          git worktree add "$RUNNER_TEMP/old" 1966cf52
+          cd "$RUNNER_TEMP/old"
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release --target goose -j 4
+      - name: Measure
+        run: python .github/probe/winqueue.py
