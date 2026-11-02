@@ -10,6 +10,7 @@ and while it runs.
 import argparse
 import glob
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -75,6 +76,26 @@ def read_until(pipe, want, seconds):
     threading.Thread(target=reader, daemon=True).start()
     done.wait(seconds)
     return want in b"".join(got), b"".join(got)
+
+
+def lines_in_order(got):
+    """Whether what came is `line 0`, `line 1` and so on, in whole lines, each once."""
+    lines = got.replace(b"\r\n", b"\n").split(b"\n")
+    return lines[-1] == b"" and all(l == b"line %d" % i for i, l in enumerate(lines[:-1]))
+
+
+def workers_in_order(got):
+    """Whether each worker's `worker W line N` came whole, each once and in its order."""
+    lines = got.replace(b"\r\n", b"\n").split(b"\n")
+    if lines[-1] != b"":
+        return False
+    seen = {}
+    for l in lines[:-1]:
+        m = re.fullmatch(rb"worker (\d) line (\d+)", l)
+        if not m or int(m.group(2)) != seen.get(m.group(1), 0):
+            return False
+        seen[m.group(1)] = int(m.group(2)) + 1
+    return True
 
 
 def main():
@@ -185,12 +206,51 @@ def main():
                         break
                     got += b
                 code = p.wait()
-                lines = bytes(got).split(b"\n")
-                whole = lines[-1] == b"" and all(l == b"line %d" % i for i, l in enumerate(lines[:-1]))
-                if not whole or code != -sig:
-                    problem = f"attempt {attempt}: exit {code}, {len(lines)} lines, last {lines[-3:]!r}"
+                if not lines_in_order(bytes(got)) or code != -sig:
+                    problem = f"attempt {attempt}: exit {code}, {len(got)} bytes, ends {bytes(got[-40:])!r}"
                     break
             c.report(f"{sig.name} in a burst, 40 times: every line whole, once and in order, ended by it", problem is None, problem)
+
+        # A reader that has stopped taking bytes (`prog | less`, then Ctrl-C): a signal still
+        # ends a program stuck writing to it, as it would any other, though what waits cannot
+        # then all go.
+        stuck = {
+            "the thread it lands on": exe,
+            "another thread": c.build('import os;\nthread_fn talker(x: i64) {\n    var i = 0;\n    loop {\n        print("line ", i);\n        i++;\n    }\n}\nfn main() {\n    thread_spawn(talker, 0);\n    sleep_ms(60000);\n}\n')[0],
+        }
+        for name, e in stuck.items():
+            for sig in (signal.SIGTERM, signal.SIGINT):
+                p = subprocess.Popen([e], stdout=subprocess.PIPE, env=base)
+                time.sleep(0.5)
+                p.send_signal(sig)
+                try:
+                    code = p.wait(timeout=SLOW)
+                except subprocess.TimeoutExpired:
+                    code = "still running"
+                    p.kill()
+                    p.wait()
+                p.stdout.close()
+                c.report(f"{sig.name} with nobody reading, the write on {name}: ended by it", code == -sig, f"exit {code}")
+
+        # Several threads printing: what follows a signal must not get in among what it lets go.
+        exe, _ = c.build('thread_fn talker(from: i64) {\n    var i = 0;\n    loop {\n        print("worker ", from, " line ", i);\n        i++;\n    }\n}\nfn main() {\n    var ids: i64[>..] = [];\n    for w in 4 { ids.push(thread_spawn(talker, w)); }\n    for id in ids { thread_wait(id); }\n}\n')
+        problem = None
+        for attempt in range(40):
+            p = subprocess.Popen([exe], stdout=subprocess.PIPE, env=base)
+            got = bytearray(os.read(p.stdout.fileno(), 65536))
+            # The first read can stop in a line, which is no fault of the program's.
+            time.sleep(attempt * 0.0005)
+            p.send_signal(signal.SIGTERM)
+            while True:
+                b = os.read(p.stdout.fileno(), 1 << 20)
+                if not b:
+                    break
+                got += b
+            code = p.wait()
+            if not workers_in_order(bytes(got)) or code != -signal.SIGTERM:
+                problem = f"attempt {attempt}: exit {code}, {len(got)} bytes, ends {bytes(got[-60:])!r}"
+                break
+        c.report("SIGTERM with four threads in a burst, 40 times: every line whole, once and in order, ended by it", problem is None, problem)
 
         # What is set to be ignored stays so.
         exe, _ = c.build('import os;\nfn main() {\n    print("up");\n    sleep_ms(1500);\n    print("still up");\n}\n')
@@ -200,6 +260,24 @@ def main():
         p.send_signal(signal.SIGHUP)
         code = p.wait(timeout=60)
         c.report("a signal the parent ignored stays ignored", good and code == 0, f"exit {code}")
+
+    # A fault with stdout in hand: on another thread as it prints, and in the very write,
+    # which must neither wait on itself nor write what has gone. Printing and flushing at
+    # each level of a recursion, the stack runs out on the way into a write often.
+    down = 'recursive fn down(n: i64) -> i64 {\n    if n < 0 { return 0; }\n    let a: i64[4] = [n, n * 3 + 1, n ^ 5, n * 7];\n    let r = down(a[n % 4] % 1000 + 1);\n    r + a[r % 4]\n}\n'
+    faults = {
+        "on another thread than the one printing": down + 'thread_fn faller(x: i64) {\n    print(down(1));\n}\nfn main() {\n    thread_spawn(faller, 0);\n    var i = 0;\n    loop {\n        print("line ", i);\n        i++;\n    }\n}\n',
+        "in a flush": 'import os;\nrecursive fn down(n: i64) -> i64 {\n    print("line ", n);\n    flush_stdout();\n    let a: i64[4] = [n, n * 3 + 1, n ^ 5, n * 7];\n    let r = down(n + 1);\n    r + a[r % 4]\n}\nfn main() {\n    print(down(0));\n}\n',
+    }
+    for name, text in faults.items():
+        exe, _ = c.build(text)
+        problem = None
+        for attempt in range(5):
+            r = subprocess.run([exe], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, timeout=120, env=base)
+            if not lines_in_order(r.stdout) or not r.stdout or r.returncode == 0:
+                problem = f"attempt {attempt}: exit {r.returncode}, {len(r.stdout)} bytes, ends {r.stdout[-40:]!r}"
+                break
+        c.report(f"the stack overflowing {name}, 5 times: every line whole, once and in order", problem is None, problem)
 
     # Foreign C prints for itself, so a program with any keeps a write per print.
     exe, src = c.build('fn main() {\n    print("plain");\n}\n')
