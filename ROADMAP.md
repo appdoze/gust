@@ -432,8 +432,9 @@ tokio's multi-thread runtime, passing `test_api.py`; in one short run on Windows
 load over 64 connections, Gust's pool served 168k req/s, Go with the same HTTP 140k and
 tokio 88k, with tokio's tails the lowest (`docs/gust/backend_api.md` §5). A Linux run
 is `.github/workflows/api-bench.yml`, run by hand on a hosted runner: there, at 64
-connections, Gust 251k, tokio 218k, Go with the same HTTP 180k and its net/http 94k, Gust's
-p99, p99.9 and memory the smallest (run 41528252467). The GUI program is
+connections, Gust 155k, tokio 145k, Go with the same HTTP 112k and its net/http 55k, tokio's
+p99 the lowest, Gust's p99.9 and memory the smallest (run 41545266589; on a faster runner,
+run 41528252467, 251k, 218k, 180k and 94k, with Gust's p99 the lowest too). The GUI program is
 `samples/32_ui_calc.goose`: every key, menu item and shortcut a command whose handler is
 an overload on its variant, the dispatch, menu and shortcuts one `const for` over the
 commands, with no callbacks kept as objects; the samples' runner plays it off screen.)**
@@ -465,34 +466,36 @@ commands, with no callbacks kept as objects; the samples' runner plays it off sc
 
 **Exit:** no known soundness bugs; ahead of Rust on every benchmark in `compare/`; 1.0 tagged.
 **(Ahead on all eight, with clang, Gust's default, on hosted runners: `compare/ci_measure.py`,
-the fastest of seven alternating runs of each build, run 41528247902, Gust's time over
-Rust's (rustc -O3, fat LTO). Ubuntu: n-body 0.26x, raytrace 0.95x, interp 0.66x, sort 0.95x,
-astar 0.79x, bintrees 0.16x, hashmap 0.53x, strings 0.45x, geomean 0.51x. Windows: 0.26x,
-0.92x, 0.65x, 0.90x, 0.85x, 0.06x, 0.52x, 0.46x, geomean 0.45x. hashmap, behind before, is
+the fastest of seven alternating runs of each build, run 41543135535, Gust's time over
+Rust's (rustc -O3, fat LTO). Ubuntu: n-body 0.48x, raytrace 0.97x, interp 0.74x, sort 0.94x,
+astar 0.87x, bintrees 0.20x, hashmap 0.63x, strings 0.48x, geomean 0.60x. Windows: 0.26x,
+0.92x, 0.67x, 0.90x, 0.86x, 0.06x, 0.53x, 0.46x, geomean 0.45x. GitHub's Ubuntu runners come
+with different CPUs: the run before, 41528247902, with the same instruction counts, read 0.26x,
+0.95x, 0.66x, 0.95x, 0.79x, 0.16x, 0.53x, 0.45x, geomean 0.51x. hashmap, behind before, is
 ahead with the dictionary in groups, its mispredicted branches 1.10x Rust's rather than 3.3x
-(`docs/gust/performance_designs.md`). With gcc, sort (1.15x), astar (1.06x) and raytrace
-(1.03x) are behind on Ubuntu, and raytrace (1.12x) and astar (1.10x) on Windows' MinGW; with
-MSVC raytrace (1.11x, from 1.37x before its AVX versions). Peak memory, Gust's over Rust's:
-geomean 0.72x on Ubuntu, where a program no longer loads libm.so, and 0.84x on Windows, behind
-there only on hashmap (1.03x) and level on astar. The compare program's executable is 77 KB
+(`docs/gust/performance_designs.md`). With gcc, raytrace and sort (both 1.18x) are behind on
+Ubuntu, and raytrace (1.12x) and astar (1.11x) on Windows' MinGW; with
+MSVC raytrace (1.10x, from 1.37x before its AVX versions). Peak memory, Gust's over Rust's:
+geomean 0.72x on Ubuntu, where a program no longer loads libm.so, and 0.85x on Windows, behind
+there only on hashmap (1.03x) and astar (1.01x). The compare program's executable is 77 KB
 against Rust's 2.15 MB on Ubuntu and 87 KB against 188 KB on Windows, a hello world 19 and 27
 KB against Rust's 4.5 MB and 131 KB and Go's 2.2 and 2.3 MB, and a rebuild of it takes 0.9 to
-1.1 s against rustc's 12 to 38 s. From start to exit a hello world takes 0.58 ms against
-Rust's 0.73 and Go's 1.04 on Ubuntu, and 5.0 ms against 5.1 and 6.6 on Windows. 300,000 prints
-to a file take 0.012 s against 0.33 and 0.41 on Ubuntu, and 0.014 s against 0.85 and 0.63 on
+1.0 s against rustc's 11 to 14 s. From start to exit a hello world takes 0.41 ms against
+Rust's 0.51 and Go's 0.80 on Ubuntu, and 4.8 ms against 5.1 and 6.7 on Windows. 300,000 prints
+to a file take 0.012 s against 0.17 and 0.22 on Ubuntu, and 0.014 s against 0.86 and 0.64 on
 Windows, Gust's stdout being buffered where it is not a terminal. Past the eight,
-in the same run, `compare/library` is ahead of Go on the sixteen of its operations but `find` on
-Windows (level at 1.00x), and of Rust on the twelve Rust has but `sortint` (1.34x on Ubuntu,
-1.16x on Windows) and, on Ubuntu, `sortstr` (level at 0.98x). `compare/concurrency`, on Ubuntu
-and then Windows against Rust's threads: a spawn and wait 0.01x and under 0.01x, one with work
-to do 0.06x and under 0.01x, messages back and forth 0.02x and 0.31x. Against Go's goroutines,
-1.3x and 0.89x, 0.39x and 0.04x, 1.04x and 0.17x. Behind: a hundred workers at once are 18x Go
-on Ubuntu and 1.9x on Windows, and a sender with three receivers at one queue on Ubuntu takes
-2.06x Rust and 2.18x Go, down from 2.8x and 2.9x with the two-lock queue, a lock's cache line
-still going from core to core. On Windows that one depends on the machine: 1.28x Rust and 0.82x Go
-in this run, where Rust's own time was 0.63x its usual, and 0.50x and 0.48x on the machine of
-probe run 41531683290, which had the two-lock queue level with the one-lock queue at its fastest
-and 1.13x to 1.20x at its median (`docs/gust/performance_designs.md`).
+in the same run, `compare/library` is ahead of Go on the sixteen of its operations but `find`,
+level at 1.01x on Ubuntu and 0.99x on Windows, and of Rust on the twelve Rust has but `sortint`
+(1.29x on Ubuntu, 1.13x on Windows) and, on Ubuntu, `sortstr` (1.39x here, 0.98x on the other
+CPU). `compare/concurrency`, on Ubuntu and then Windows against Rust's threads: a spawn and
+wait 0.03x and under 0.01x, one with work to do 0.09x and 0.01x, messages back and forth 0.04x
+and 0.69x, a sender with three receivers at one queue 1.31x and 0.26x. Against Go's goroutines,
+2.4x and 0.32x, 0.43x and 0.11x, 1.85x and 0.12x, 1.70x and 0.25x. Behind: a hundred workers at
+once are 14x Go on Ubuntu and 2.7x on Windows; on Ubuntu a spawn and wait and messages back and
+forth depend on the CPU, 1.3x to 2.4x and 1.04x to 2x Go; and the sender with three receivers
+remains behind there, with the receivers' lock going from core to core. On Windows that one went
+from 1.28x Rust and 0.82x Go once receivers looked first at what they last saw of the tail
+(`docs/gust/performance_designs.md`).
 `scripts/tsan_threads.py` has every program that uses threads
 clean under ThreadSanitizer on CI. No soundness bug is known with the Windows
 commit fix, but the review has not happened (`docs/gust/soundness_review.md` keeps the list),
