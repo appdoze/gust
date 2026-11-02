@@ -693,6 +693,10 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
 
 ## Runtime
 
+- A queue's receivers look at what they last saw of the tail before they look at the tail's
+  own cache line, so that with messages known to wait they leave it to the sender. On one
+  machine a sender and three receivers went from 0.071 s to 0.027 s on Windows, past the
+  one-lock queue's 0.058 s and with its spread gone, and took 0.93x as long on Linux.
 - stdout is buffered where it is a file or a pipe, as in C, Python and Nim: 300,000 prints
   went from 0.21 s to 0.009 s, with Rust at 0.25 s and Go at 0.31 s. A print more than 50 ms
   after the last write takes what waits with it, so logs and progress lines come out as
