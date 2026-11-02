@@ -81,6 +81,10 @@ jobs:
       - name: Test
         run: python test/run_tests.py --exe build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }} --profile baseline --cc native --require-clang
 
+      # Gust: a buffered stdout, on one pipe with stderr and while the program runs.
+      - name: stdout
+        run: python scripts/stdout_tests.py --gust build/${{ runner.os == 'Windows' && 'Debug/gust.exe' || 'gust' }}
+
       # Gust's --checked builds: the suite's GS_DEBUG=1 programs already run
       # optimized above; this builds every sample the same way, where a
       # check that fires on a correct program is a bug in the checks.

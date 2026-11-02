@@ -5633,7 +5633,7 @@ sign.
 
 **Output.** `print` renders its whole line, including the newline, into a
 statement-stack builder and hands it to one `fwrite` (`gs_out_bytes`) on an
-unbuffered stdout. So nothing printed is lost to an abort, and no other
+stdout that an abort lets go first (`runtime_threads.h`). So nothing printed is lost to an abort, and no other
 thread's line ends up inside it. On Windows the runtime puts stdin, stdout
 and stderr in binary mode as it starts (`gs_rt_start`). A newline is then
 written as the one byte it is everywhere else, not as the `\r\n` that the

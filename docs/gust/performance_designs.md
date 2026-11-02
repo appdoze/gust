@@ -141,12 +141,21 @@ musl, Windows and macOS, on machines of that kind.
 - Waking one sleeping thread and leaving it to wake the next, as Go's scheduler does:
   a hundred workers at once 1.25x, worse.
 
-**Measured, and waiting on a decision: buffering stdout.** C, Nim and Python buffer it when it is
-not a terminal. 300,000 prints to a file went from 0.211 s to 0.009 s, and to a pipe from 0.131 s
-to 0.007 s, against Rust's 0.252 and 0.171 and Go's 0.312 and 0.205. The runtime writes each print
-on purpose, so that output is not lost to an abort or a killed run and stays in order with stderr.
-A buffer can be flushed at an abort, before stderr and before a thread blocks, which leaves one
-loss: a process killed outright while printing loses what is in the buffer.
+**Built: buffering stdout.** C, Nim and Python buffer it when it is not a terminal. 300,000 prints
+to a file went from 0.211 s to 0.009 s, and to a pipe from 0.131 s to 0.007 s, against Rust's 0.252
+and 0.171 and Go's 0.312 and 0.205. The runtime used to write each print on purpose, so that output
+was not lost to an abort or a killed run and stayed in order with stderr. So the buffer goes out at
+an abort, a fault, SIGINT, SIGTERM and SIGHUP, before stderr and before a thread blocks, and a print
+more than 50 ms after the last write takes it along. That leaves one loss: a process killed outright
+while printing loses what is in the buffer. A terminal, `GUST_UNBUFFERED` and foreign C in the
+program keep a write per print.
+
+Signals were the hard part, and `scripts/stdout_tests.py` found three mistakes in the first versions,
+none of them seen in ordinary use: a signal during a write printed the buffer twice, a fault on
+another thread cut a write off in a line, and a program stuck writing to a reader that had stopped
+no longer ended on a signal (`prog | less`, then Ctrl-C). A write in progress now finishes first, and
+a signal allows a stalled reader 2 seconds. The signals' tests repeat at varied moments, since the
+first of these appeared on one machine in three, by chance of timing.
 
 **Read, and not applicable, for these reasons.** None of these was measured.
 

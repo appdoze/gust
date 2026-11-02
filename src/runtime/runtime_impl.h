@@ -34,6 +34,12 @@ static const char *gs_errmsgs[] = {
    runs inside the compiler, where exit() on the main thread returns to it
    instead. */
 static GS_NORETURN void gs_end(int code);
+/* Gust: what print has buffered goes out (runtime_threads.h): as a thread is about to
+   block, for good as the process ends, and from a fault or a signal, which can take no
+   lock. */
+static void gs_out_flush(void);
+static void gs_out_final(void);
+static void gs_out_flush_dying(void);
 
 #include <setjmp.h>
 #include <stdarg.h>
@@ -48,6 +54,7 @@ static GS_NORETURN void gs_end(int code);
 #endif
 
 GS_API GS_NORETURN void gs_panic(const char *msg) {
+    gs_out_final();
     fprintf(stderr, "goose runtime error: %s\n", msg);
     gs_end(1);
 }
@@ -73,6 +80,7 @@ static GS_NORETURN void gs_fail(const void *msg, int64_t len, const char *file, 
     uint8_t *text = (uint8_t *)malloc((size_t)(pre + len + loc + 1));
     if (!text) {
         if (gs_contain) gs_panic("out of memory recording an aborted thread");
+        gs_out_final();
         fputs(lead, stderr);
         fwrite(msg, 1, (size_t)len, stderr);
         fprintf(stderr, " (%s:%d)\n", file, line);
@@ -87,6 +95,7 @@ static GS_NORETURN void gs_fail(const void *msg, int64_t len, const char *file, 
         gs_contain->len = len + loc - 1;
         gs_longjmp(gs_contain->jump, 1);
     }
+    gs_out_final();
     fwrite(text, 1, (size_t)(pre + len + loc), stderr);
     gs_end(1);
 }
@@ -422,6 +431,7 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
            stdio, which could want more. */
         static const char msg[] = "goose runtime error: native call stack overflow\n";
         DWORD written;
+        gs_out_flush_dying();
         WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, sizeof(msg) - 1, &written, NULL);
         ExitProcess(1);
     }
@@ -444,12 +454,14 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
                 static const char nomem[] =
                     "goose runtime error: out of memory committing a data stack\n";
                 DWORD written;
+                gs_out_flush_dying();
                 WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
                           NULL);
                 ExitProcess(1);
             }
             char msg[GS_OVERFLOW_TEXT];
             DWORD written;
+            gs_out_flush_dying();
             WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)gs_overflow_text(msg, r),
                       &written, NULL);
             ExitProcess(1);
@@ -590,6 +602,7 @@ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
             if (hit < r->base + r->usable && gs_commit_chunk(r, hit)) return;
 #endif
             char msg[GS_OVERFLOW_TEXT];
+            gs_out_flush_dying();
             ssize_t w = write(2, msg, gs_overflow_text(msg, r));
             (void)w;
             _exit(1);
@@ -597,12 +610,14 @@ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
     }
     if ((uintptr_t)hit - gs_native_lo < gs_native_hi - gs_native_lo) {
         static const char msg[] = "goose runtime error: native call stack overflow\n";
+        gs_out_flush_dying();
         ssize_t w = write(2, msg, sizeof(msg) - 1);
         (void)w;
         _exit(1);
     }
     /* Not ours: the access faults again under what handled it before, the
        default action or a sanitizer's report. */
+    gs_out_flush_dying();
     sigaction(sig, sig == SIGSEGV ? &gs_prev_segv : &gs_prev_bus, NULL);
 }
 
@@ -768,6 +783,7 @@ static GS_NORETURN void gs_park(void) {
 
 static GS_NORETURN void gs_end(int code) {
     if (!gs_end_first()) gs_park();
+    gs_out_final();
     fflush(NULL);
     #if defined(__TINYC__) || defined(__MIRC__) || defined(GS_NATIVE_RUNTIME)
         if (gs_current_thread_id < 0) exit(code);
@@ -1697,9 +1713,8 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
         spare -= mainregions;
         gs_thread_cap = spare > workerregions ? spare / workerregions : 1;
     }
-    // Unbuffered stdout: output is never lost to an abort or a killed run,
-    // and interleaves correctly with stderr diagnostics. Revisit if print
-    // throughput ever matters.
+    // stdout's FILE unbuffered, which print does not go through but C called from
+    // a program may. Gust: what print does is gs_out_bytes's (runtime_threads.h).
     setvbuf(stdout, NULL, _IONBF, 0);
     #ifdef _WIN32
         // The bytes a program writes are the bytes that come out, '\n' one
@@ -2352,7 +2367,7 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
     return (int64_t)(d - dst);
 }
 
-/* stdout is unbuffered (gs_rt_start): each print is this one write. Gust:
+/* A write to stdout or stderr. Gust:
    made directly, where fwrite on an unbuffered stream takes stdio's lock and,
    on Windows, a second write for a text of odd length (the C runtime takes
    the stream for one with a 2-byte buffer). A partial write goes on from where
@@ -2379,5 +2394,3 @@ static void gs_write_stream(FILE *stream, const uint8_t *p, int64_t len) {
         }
     #endif
 }
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
-GS_API void gs_err_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stderr, p, len); }

@@ -1518,6 +1518,8 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
+GS_API void gs_out_begin(void);   /* Gust: a program's main: stdout may be buffered from here */
+GS_API void gs_out_end(void);     /* and what waits goes out at its end */
 GS_API void gs_err_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the

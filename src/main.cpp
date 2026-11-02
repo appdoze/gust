@@ -1812,7 +1812,15 @@ int Main(int argc, char **argv) {
             if (string_view(rf.name) == "runtime_ext.h") runtime_ext_text = rf.text;
         auto stackcfg = StackConfigOf(cdefines);
         codegen_jit = jit;   // Gust: a JIT run has no parallel for workers.
-        CodeGen cg(ast, runtime_ext_text, progincludes, norfcheck, library, stackcfg.maxstacks, debug);
+        // Gust: stdout is buffered where no foreign C can print past it (runtime_threads.h):
+        // an extern fn outside the standard library, whether a builtin package's or not.
+        auto foreign = false;
+        for (auto sf : ast.functions) {
+            auto fi = sf->line.fileidx;
+            auto known = fi >= 0 && fi < (int)ast.filepkg.size();
+            if (sf->isextern && !ast.packages[known ? ast.filepkg[fi] : 0].stdlib) foreign = true;
+        }
+        CodeGen cg(ast, runtime_ext_text, progincludes, norfcheck, library, stackcfg.maxstacks, debug, foreign);
         if (stacks) cg.StackReport(msgs, stackcfg);
         // The packages whose native parts the program needs, which a JIT
         // run takes functions from and a build links: its own, when it has

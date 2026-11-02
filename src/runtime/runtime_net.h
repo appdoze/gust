@@ -1232,6 +1232,7 @@ GS_API int64_t gs_net_connect(int64_t ph, sl_u8 host, int64_t port, int64_t time
         pf.fd = s;
         pf.events = GS_POLL_OUT;
         pf.revents = 0;
+        gs_out_flush();
         int r = gs_net_poll(&pf, 1, timeout_ms < 0 ? 0 : timeout_ms);
         if (r == 0) { gs_net_closesock(s); return GS_NET_TIMEOUT; }
         int err = 0;
@@ -1468,6 +1469,7 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
    listener that has been closed is reported once with GS_NET_HUP and no
    longer watched. */
 GS_API int64_t gs_net_wait(int64_t ph, int64_t ms, sl_i64 hs, sl_i64 evs) {
+    if (ms) gs_out_flush();
     gs_net_pl *p = gs_net_pl_of(ph);
     if (!p) return GS_NET_BAD_HANDLE;
     int64_t cap = hs.len < evs.len ? hs.len : evs.len;
