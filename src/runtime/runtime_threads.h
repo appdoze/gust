@@ -1012,7 +1012,10 @@ GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
      or on the network, reading stdin), so that an idle program has nothing waiting;
    - stderr lets it go first, so that the two stay in order on one pipe;
    - an abort, a fault, the process ending, and SIGINT, SIGTERM and SIGHUP where the
-     program has not said otherwise, all let it go.
+     program has not said otherwise, all let it go, and a write in progress finishes
+     first, so that nothing is cut or comes out twice;
+   - a reader that has stopped taking bytes (`prog | less`, then Ctrl-C) does not keep a
+     signal from ending the process: it gets GS_OUT_STUCK_S to take them.
    What is left is a process killed outright (SIGKILL, a power cut) in the middle of a
    burst, or the end of a burst followed by a long silence with no block in it, for
    which os.flush_stdout() is there. GUST_UNBUFFERED in the environment turns all of
@@ -1030,6 +1033,7 @@ static void gs_out_flush_dying(void) {}
 #else
 #define GS_OUT_SIZE (1 << 16)
 #define GS_OUT_QUIET_MS 50
+#define GS_OUT_STUCK_S 2
 static uint8_t gs_out[GS_OUT_SIZE];
 static int64_t gs_out_len;      /* written under the lock; looked at outside it */
 static int64_t gs_out_on;       /* likewise: buffering */
@@ -1044,6 +1048,9 @@ static int64_t gs_out_last;     /* when it last went out, in ms; under the lock 
 #define GS_OUT_DYING 2
 static int64_t gs_out_state;
 static int64_t gs_out_signal;
+static GS_TLS volatile int gs_out_here;     /* which of those this thread is doing */
+static const uint8_t *volatile gs_out_from; /* what the write in progress was given */
+static volatile int64_t gs_out_left;
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #define GS_OUT_LOOK(p) (*(volatile int64_t *)(p))
@@ -1097,14 +1104,19 @@ static int64_t gs_out_clock_ms(void) {
 /* `n` bytes of stdout, with the buffer's state saying so. A signal that came meanwhile
    ends the process here, its handler having put the default back. */
 static void gs_out_write(const uint8_t *p, int64_t n) {
+    gs_out_here = GS_OUT_WRITING;
     if (!GS_OUT_CLAIM(&gs_out_state, GS_OUT_IDLE, GS_OUT_WRITING)) {
+        gs_out_here = GS_OUT_IDLE;
         /* A fault or a signal is writing it on the way out, and nothing more goes. */
         if (GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_DYING) gs_park();
         return;
     }
+    gs_out_from = p;
+    gs_out_left = n;
     gs_write_stream(stdout, p, n);
     if (p == gs_out) GS_OUT_SET(&gs_out_len, 0);
     GS_OUT_SEQ_SET(&gs_out_state, GS_OUT_IDLE);
+    gs_out_here = GS_OUT_IDLE;
     #ifndef _WIN32
         int64_t sig = GS_OUT_SEQ_LOOK(&gs_out_signal);
         if (sig) raise((int)sig);
@@ -1153,23 +1165,18 @@ GS_API void gs_err_bytes(const uint8_t *p, int64_t len) {
     gs_write_stream(stderr, p, len);
 }
 
-/* From a fault or a signal, on a thread that may hold the lock, with the process on
-   its way out: the bytes as they stand, each print in them whole, as a print counts
-   only once its bytes are all there. */
-static void gs_out_flush_dying(void) {
-    /* Whoever is writing it now has it, or has already gone. */
-    if (!GS_OUT_CLAIM(&gs_out_state, GS_OUT_IDLE, GS_OUT_DYING)) return;
-    int64_t n = GS_OUT_LOOK(&gs_out_len);
-    GS_OUT_SET(&gs_out_len, 0);
-    GS_OUT_SET(&gs_out_on, 0);
-    if (n <= 0) return;
+static void gs_out_dying_write(const uint8_t *p, int64_t n) {
     #ifdef _WIN32
+        HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
         DWORD written;
-        WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), gs_out, (DWORD)n, &written, NULL);
+        while (n > 0 && WriteFile(out, p, (DWORD)n, &written, NULL) && written) {
+            p += written;
+            n -= written;
+        }
     #else
-        const uint8_t *p = gs_out;
         while (n > 0) {
             ssize_t w = write(1, p, (size_t)n);
+            if (w < 0 && errno == EINTR) continue;
             if (w <= 0) break;
             p += w;
             n -= w;
@@ -1177,12 +1184,45 @@ static void gs_out_flush_dying(void) {
     #endif
 }
 
+/* From a fault or a signal, on a thread that may hold the lock, with the process on
+   its way out: the bytes as they stand, each print in them whole, as a print counts
+   only once its bytes are all there. Whoever has them now finishes first, as ending the
+   process would cut them off. A thread printing meanwhile adds beyond these, and then
+   stops at gs_out_write, so that nothing gets in among them. */
+static void gs_out_take(void) {
+    while (!GS_OUT_CLAIM(&gs_out_state, GS_OUT_IDLE, GS_OUT_DYING)) {
+        #ifdef _WIN32
+            Sleep(1);
+        #else
+            struct timespec ms = { 0, 1000000 };
+            nanosleep(&ms, NULL);
+        #endif
+    }
+    gs_out_here = GS_OUT_DYING;
+    gs_out_dying_write(gs_out, GS_OUT_LOOK(&gs_out_len));
+}
+
+/* From a fault. */
+static void gs_out_flush_dying(void) {
+    if (!GS_OUT_LOOK(&gs_out_on) || gs_out_here == GS_OUT_DYING) return;
+    if (gs_out_here == GS_OUT_WRITING && GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_WRITING) {
+        /* Its own write: the stack running out on the way in, which is before any of it
+           has gone, as a call again in that write goes no deeper. */
+        gs_out_here = GS_OUT_DYING;
+        GS_OUT_SEQ_SET(&gs_out_state, GS_OUT_DYING);
+        gs_out_dying_write(gs_out_from, gs_out_left);
+        return;
+    }
+    gs_out_take();
+}
+
 /* For good, as the process ends. The lock if it can be had: another thread may be held
    up in a write, or have been stopped holding it. */
 static void gs_out_final(void) {
     if (!GS_OUT_LOOK(&gs_out_on)) return;
-    int locked = 0;
-    for (int i = 0; i < 1000 && !(locked = GS_OUT_TRYLOCK()); i++) {
+    int locked;
+    int64_t since = gs_out_clock_ms();
+    while (!(locked = GS_OUT_TRYLOCK()) && gs_out_clock_ms() - since < GS_OUT_STUCK_S * 1000) {
         #ifdef _WIN32
             Sleep(0);
         #else
@@ -1197,21 +1237,40 @@ static void gs_out_final(void) {
 GS_API void gs_out_end(void) { gs_out_final(); }
 
 #ifdef _WIN32
+static DWORD WINAPI gs_out_console_flush(LPVOID unused) {
+    (void)unused;
+    gs_out_flush_dying();
+    return 0;
+}
 static BOOL WINAPI gs_out_on_console(DWORD event) {
     (void)event;
-    /* A thread of its own, which can wait a moment for a write to finish. */
-    for (int i = 0; i < 2000 && GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_WRITING; i++) Sleep(1);
-    gs_out_flush_dying();
+    /* Returning ends the process, whatever a reader taking nothing is holding up. */
+    HANDLE t = CreateThread(NULL, 0, gs_out_console_flush, NULL, 0, NULL);
+    if (t) {
+        WaitForSingleObject(t, GS_OUT_STUCK_S * 1000);
+        CloseHandle(t);
+    }
     return FALSE;
 }
 #else
+/* A write that does not come back, or a wait for one: its reader has stopped. */
+static void gs_out_on_stuck(int unused) {
+    (void)unused;
+    raise((int)GS_OUT_SEQ_LOOK(&gs_out_signal));
+}
 static void gs_out_on_signal(int sig) {
     GS_OUT_SEQ_SET(&gs_out_signal, sig);
-    /* gs_out_write ends the process as it finishes. */
-    if (GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_WRITING) return;
-    gs_out_flush_dying();
-    /* SA_RESETHAND has put the default back, and it takes the signal as this returns,
-       so that the program ends as killed by it. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_handler = gs_out_on_stuck;
+    sigaction(SIGALRM, &sa, NULL);
+    alarm(GS_OUT_STUCK_S);
+    /* A write of this thread's own that this has interrupted, which goes on: gs_out_write
+       then ends the process, or what that write was for does. */
+    if (gs_out_here != GS_OUT_IDLE && GS_OUT_SEQ_LOOK(&gs_out_state) != GS_OUT_IDLE) return;
+    gs_out_take();
+    /* SA_RESETHAND has put the default back, and SA_NODEFER leaves it unblocked, so this
+       ends the program as killed by it. */
     raise(sig);
 }
 #endif
@@ -1231,7 +1290,7 @@ GS_API void gs_out_begin(void) {
             struct sigaction sa;
             memset(&sa, 0, sizeof sa);
             sa.sa_handler = gs_out_on_signal;
-            sa.sa_flags = SA_RESETHAND;
+            sa.sa_flags = SA_RESETHAND | SA_NODEFER;
             sigaction(sigs[i], &sa, NULL);
         }
     #endif

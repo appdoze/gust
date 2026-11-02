@@ -697,8 +697,10 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
   went from 0.21 s to 0.009 s, with Rust at 0.25 s and Go at 0.31 s. A print more than 50 ms
   after the last write takes what waits with it, so logs and progress lines come out as
   they did. What waits goes out before a thread blocks and before anything goes to stderr,
-  at an abort or a fault, and at SIGINT, SIGTERM and SIGHUP. What can still be lost is what
-  a process killed outright had in the middle of a burst. A terminal, `GUST_UNBUFFERED` in the
+  at an abort or a fault, and at SIGINT, SIGTERM and SIGHUP, with a write in progress left to
+  finish so that nothing is cut or comes out twice. A reader that has stopped taking bytes
+  gets 2 seconds, so that `prog | less` and Ctrl-C still ends the program. What can still be
+  lost is what a process killed outright had in the middle of a burst. A terminal, `GUST_UNBUFFERED` in the
   environment, foreign C in the program, a C host and a run inside the compiler all keep a
   write per print. `scripts/stdout_tests.py`.
 
