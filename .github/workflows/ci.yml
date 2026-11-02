@@ -200,6 +200,33 @@ jobs:
       - name: Test compiler, generated C, runtime lifecycle and samples
         run: python test/run_tests.py --exe build-sanitize/gust --profile sanitize --cc clang
 
+  # Gust: the programs that use threads under ThreadSanitizer. A race only shows on
+  # real threads where it happens to go wrong, and on x86 most never do: this found
+  # two that every other job passed.
+  threads:
+    name: Linux / ThreadSanitizer
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CC: clang
+      CXX: clang++
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target goose --parallel 4
+
+      - name: Run the programs that use threads
+        run: python scripts/tsan_threads.py --gust build/gust
+
   # Gust: TinyCC as a shared library beside the compiler (GUST_TCC_SHARED),
   # which a release ships for the LGPL's relinking: the compiler finds it
   # there, and an in-process run and gust cimport work through it.

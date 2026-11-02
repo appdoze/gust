@@ -24,11 +24,12 @@ thread_fn server(l: net::Listener, max_body: i64) {
     qput(http::serve(l, p, net::Conn { .. }, App { 0 }, 64, 0, 1, max_body, handle, more));
 }
 
-// All that comes back within ms of the last of it, as text with its line ends
-// shown, and whether the server closed the connection.
-fn read_some(p: net::Poller, c: net::Conn, ms: i64, out: u8[>..]&) -> bool {
+// What comes back, onto out, until it ends with `until` (nothing: until ms have
+// gone by with nothing coming); and whether the server closed the connection.
+fn read_until(p: net::Poller, c: net::Conn, until: const u8[:], ms: i64, out: u8[>..]&) -> bool {
     var buf: u8[4096] = [0; 4096];
     loop {
+        if until.len > 0 && ends_with(out, until) { return false; }
         let n = net::recv(p, c, buf);
         if n == net::AGAIN {
             if http::ready(p, c, net::READ, ms) < 0 { return false; }
@@ -48,34 +49,43 @@ fn shown(s: const u8[:]) -> u8[>..] {
     return out;
 }
 
-fn exchange(port: i64, name: u8[:], request: const u8[:], then_send: const u8[:] = "") {
-    let p, e = net::poller();
-    let c, ce = net::connect(p, "127.0.0.1", port, 5000);
-    if e < 0 || ce < 0 {
-        print(name, ": no connection");
-        return;
-    }
+fn send_all(p: net::Poller, c: net::Conn, text: const u8[:]) {
     var sent = 0;
-    while sent < request.len {
-        let n = net::send(p, c, request[sent..]);
+    while sent < text.len {
+        let n = net::send(p, c, text[sent..]);
         if n == net::AGAIN { http::ready(p, c, net::WRITE, 5000); continue; }
         if n < 0 { break; }
         sent += n;
     }
+}
+
+// How long a reply may take, on a machine as busy as it likes, and how long one that
+// should come is looked for when none should.
+let PATIENCE = 20000;
+let A_MOMENT = 100;
+
+// Sends request and prints the reply, which ends with until. After then_send (the
+// body of one that waits to be told) what ends with then_until. Whether the server
+// then closes the connection is waited for as long as it may take where it should,
+// so that nothing here depends on how fast this runs.
+fn exchange(port: i64, name: u8[:], request: const u8[:], until: const u8[:], closes: bool,
+            then_send: const u8[:] = "", then_until: const u8[:] = "") {
+    let p, e = net::poller();
+    let c, ce = net::connect(p, "127.0.0.1", port, PATIENCE);
+    if e < 0 || ce < 0 {
+        print(name, ": no connection");
+        return;
+    }
+    send_all(p, c, request);
     var got: u8[>..] = [];
-    var closed = read_some(p, c, 300, got);
+    read_until(p, c, until, if until.len > 0 { PATIENCE } else { A_MOMENT }, got);
     if then_send.len > 0 {
         print(name, " first: ", shown(got));
         got.clear();
-        var more_sent = 0;
-        while more_sent < then_send.len {
-            let n = net::send(p, c, then_send[more_sent..]);
-            if n == net::AGAIN { http::ready(p, c, net::WRITE, 5000); continue; }
-            if n < 0 { break; }
-            more_sent += n;
-        }
-        closed = read_some(p, c, 300, got);
+        send_all(p, c, then_send);
+        read_until(p, c, then_until, PATIENCE, got);
     }
+    let closed = read_until(p, c, "", if closes { PATIENCE } else { A_MOMENT }, got);
     print(name, ": ", shown(got), " closed ", closed);
     net::close(p);
 }
@@ -89,22 +99,22 @@ fn main() {
     let port = net::port(l);
     let t = thread_spawn(server, l, 100000);
 
-    exchange(port, "get", "GET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    exchange(port, "head", "HEAD / HTTP/1.1\r\nHost: x\r\n\r\n");
+    exchange(port, "get", "GET / HTTP/1.1\r\nHost: x\r\n\r\n", "hello", false);
+    exchange(port, "head", "HEAD / HTTP/1.1\r\nHost: x\r\n\r\n", "\r\n\r\n", false);
     // What comes after a HEAD's reply on the connection is the next reply,
     // with nothing of a body between them.
-    exchange(port, "head then get", "HEAD / HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n");
-    exchange(port, "http 1.0", "GET / HTTP/1.0\r\n\r\n");
-    exchange(port, "http 1.0 keep-alive", "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n");
-    exchange(port, "close", "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n");
+    exchange(port, "head then get", "HEAD / HTTP/1.1\r\nHost: x\r\n\r\nGET / HTTP/1.1\r\nHost: x\r\n\r\n", "hello", false);
+    exchange(port, "http 1.0", "GET / HTTP/1.0\r\n\r\n", "hello", true);
+    exchange(port, "http 1.0 keep-alive", "GET / HTTP/1.0\r\nConnection: keep-alive\r\n\r\n", "hello", false);
+    exchange(port, "close", "GET / HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", "hello", true);
 
-    exchange(port, "expect", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n", "abcde");
-    exchange(port, "expect with the body", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\nabcde");
-    exchange(port, "expect in 1.0", "POST /echo HTTP/1.0\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n", "abcde");
-    exchange(port, "expect what", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: tea\r\n\r\n");
+    exchange(port, "expect", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n", "\r\n\r\n", false, "abcde", "abcde");
+    exchange(port, "expect with the body", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\nabcde", "abcde", false);
+    exchange(port, "expect in 1.0", "POST /echo HTTP/1.0\r\nContent-Length: 5\r\nExpect: 100-continue\r\n\r\n", "", true, "abcde", "abcde");
+    exchange(port, "expect what", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\nExpect: tea\r\n\r\n", "\"}", true);
 
     // Smuggling: the second request here must not be read out of the first's body.
-    exchange(port, "space before colon", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length : 27\r\n\r\nGET /smuggled HTTP/1.1\r\n\r\n\r\n");
+    exchange(port, "space before colon", "POST /echo HTTP/1.1\r\nHost: x\r\nContent-Length : 27\r\n\r\nGET /smuggled HTTP/1.1\r\n\r\n\r\n", "\"}", true);
 
     // A body past MAX_BODY, as this server allows, and past its own limit.
     var big: u8[>..] = [];

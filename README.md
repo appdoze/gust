@@ -100,9 +100,8 @@ faster, and with a new connection per request Gust's 17.6k a second is 5 to 6% u
 Go's and tokio's. Sorting integers takes 1.15x to 1.35x Rust's time, gcc builds
 are behind Rust on sort, A* and ray tracing, and an MSVC build on ray tracing. Go's
 goroutines start a hundred at once faster than threads can, 20x on Linux, and a
-sender with three receivers at one queue on Linux takes about 3x what Go and Rust
-do. [ROADMAP.md](ROADMAP.md) has the rest, and `docs/gust/performance_designs.md`
-what would close the last one.
+sender with three receivers at one queue on Linux takes about 2x what Go does and
+1.2x to 1.8x what Rust does. [ROADMAP.md](ROADMAP.md) has the rest.
 
 ## Build and run
 

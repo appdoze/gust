@@ -692,8 +692,13 @@ flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
   a wakeup would cost, and one that loses a race for a message waits before it looks
   again, as each receiver going for a message is another trip for the lock's cache
   line from core to core: a sender and three receivers on Linux took a million
-  messages from 0.49 s to 0.16 s. Go and Rust still take 0.05 s, for which see
-  `docs/gust/performance_designs.md`.
+  messages from 0.49 s to 0.16 s. Senders and receivers then got a lock and a cache
+  line each, so that a message does not take one lock's line from core to core and
+  back: on the same machine 0.73x to 0.83x of the time there, and 0.64x to 0.75x for
+  messages back and forth (`docs/gust/performance_designs.md`).
+  `test/threads/queue_stress.goose`. `scripts/tsan_threads.py`, a CI job now, runs every
+  program that uses threads under ThreadSanitizer, which found a race in thread reuse
+  and one in `gs_net_used`, both fixed.
 
 - `src/runtime/runtime_net.h` (new), `src/runtime/runtime_ext.h`,
   `src/main.cpp`, `CMakeLists.txt` (and `src/runtime_inline.h`,
