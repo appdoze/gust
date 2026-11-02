@@ -350,6 +350,10 @@ inline bool BuildCMakePart(const Ast &ast, int pkg, const Builder &b, bool wantj
             throw CompileError { cat("cannot write into ", wrapper) };
         WriteFileMakingDirs(cat(builddir, "/.cmake/api/v1/query/codemodel-v2"), "");
     }
+    if (b.tc.name == "zig") {
+        ProgressPrint(cat("package ", p.name, " has a CMake build, which --target cannot cross-compile\n"));
+        return false;
+    }
     vector<string> argv = { cmake, "-S", wrapper, "-B", builddir, "-DCMAKE_BUILD_TYPE=Release" };
     auto ninja = NinjaPath();
     if (!ninja.empty()) {

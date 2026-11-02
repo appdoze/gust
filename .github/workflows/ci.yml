@@ -227,6 +227,54 @@ jobs:
       - name: Run the programs that use threads
         run: python scripts/tsan_threads.py --gust build/gust
 
+  # Gust: `gust build --target`, Zig's C compiler building for each system: the test
+  # programs built and run on a machine of that system, and from Linux for the others.
+  targets:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-latest, target: x86_64-linux-musl }
+          - { os: ubuntu-24.04-arm, target: aarch64-linux-musl }
+          - { os: windows-latest, target: x86_64-windows-gnu }
+          - { os: macos-latest, target: aarch64-macos }
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.x'
+
+      - name: Zig
+        run: |
+          python -m pip install ziglang
+          python -c "import ziglang, os; print(os.path.dirname(ziglang.__file__))" >> "$GITHUB_PATH"
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release
+
+      - name: Build
+        run: cmake --build build --config Release --target goose --parallel 4
+
+      - name: Build the programs for this target and run them
+        run: python scripts/target_tests.py --gust build/${{ runner.os == 'Windows' && 'Release/gust.exe' || 'gust' }} --target ${{ matrix.target }}
+
+      - name: Build for the other systems from here
+        if: matrix.target == 'x86_64-linux-musl'
+        run: |
+          printf 'fn main() { print("hello"); }\n' > cross.goose
+          for t in aarch64-linux-musl x86_64-windows-gnu aarch64-macos; do
+            build/gust build --target "$t" cross.goose -o "cross-$t"
+            file "cross-$t"* | cut -c1-110
+          done
+
   # Gust: TinyCC as a shared library beside the compiler (GUST_TCC_SHARED),
   # which a release ships for the LGPL's relinking: the compiler finds it
   # there, and an in-process run and gust cimport work through it.

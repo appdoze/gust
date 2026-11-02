@@ -40,6 +40,7 @@ struct Toolchain {
     string id;        // For the cache: name-version-hash of the path and style.
     string how;       // Where it was found: on PATH, in Visual Studio, --cc, ...
     string target;    // Gust: the triple clang's --version names, "" for the others.
+    vector<string> ccargs;  // Gust: what follows cc on every command: zig's `cc -target ...`.
 };
 
 struct ToolInfo {
@@ -357,6 +358,31 @@ inline Toolchain GccStyle(const string &cc, const string &how, const string &kin
 
 inline Toolchain MsvcStyle(const string &name, const string &cc, const string &how) {
     return DescribeToolchain(name, "msvc", cc, cc, how);
+}
+
+// Gust: the toolchain of `gust build --target`: Zig's C compiler, a clang that
+// carries a C library for every target it builds for, so that one machine with
+// nothing else installed can build for any of them, and for Linux with musl a static
+// executable. False, with `why` saying where to get it, when zig is not on PATH.
+inline bool ZigToolchain(const string &target, Toolchain &out, string &why) {
+    auto zig = FindOnPath("zig");
+    if (zig.empty()) {
+        why = cat("--target ", target, " builds with Zig's C compiler, and zig is not on PATH: ",
+                  "get it from https://ziglang.org/download, or `pip install ziglang`");
+        return false;
+    }
+    auto r = RunProcess({ zig, "version" });
+    out = Toolchain {};
+    out.name = "zig";
+    out.style = "cc";
+    out.cc = zig;
+    out.ccargs = { "cc", "-target", target };
+    out.version = r.started ? FirstLine(r.output) : "";
+    out.desc = cat("zig cc ", out.version, " for ", target);
+    out.id = cat("zig-", out.version, "-", target, "-", Hex8(zig));
+    out.how = "--target";
+    out.target = target;
+    return true;
 }
 
 // The C toolchain to build with: the one `request` asks for (a name: msvc,

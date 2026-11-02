@@ -19,6 +19,7 @@ struct BuildOptions {
     bool standalone = false;  // --standalone: no runtime object
     string exe;               // -o: the executable; "" puts it beside the root source
     bool staticcrt = false;   // Gust: --static-crt, the C runtime linked in on Windows
+    string target;            // Gust: --target, the triple zig cc builds for
 };
 
 inline string AbsolutePath(const string &path) {
@@ -37,6 +38,14 @@ inline string ProgramBuildDir(const string &rootfile) {
     return cat(GooseHome(), "/build/prog/", PathStem(rootfile), "-", Hex8(abs));
 }
 
+// Gust: the system in a zig target triple, x86_64-linux-musl's linux.
+inline string ZigTargetSystem(const string &target) {
+    auto a = target.find('-');
+    if (a == string::npos) return "";
+    auto b = target.find_first_of("-.", a + 1);
+    return target.substr(a + 1, b == string::npos ? string::npos : b - a - 1);
+}
+
 // Runs the toolchain's commands, printing them as -v and --dry-run ask, and
 // a failed one with what it printed.
 struct Builder {
@@ -46,6 +55,17 @@ struct Builder {
     // Gust: the universal CRT as Windows' own DLL (UcrtDll), for a Windows
     // release build that links no C of a package's or its own.
     bool ucrtdll = false;
+
+    // The C driver and what always follows it.
+    vector<string> Driver() const {
+        vector<string> argv = { tc.cc };
+        argv.insert(argv.end(), tc.ccargs.begin(), tc.ccargs.end());
+        return argv;
+    }
+
+    // Gust: the system a zig cc build is for, the second part of its triple. The
+    // flags go by this and not by the machine it runs on, unlike the rest here.
+    string TargetSystem() const { return ZigTargetSystem(tc.target); }
 
     // The compile flags of both styles: optimization, or debug information
     // and none of it. Defines go into the C itself (main.cpp), never here.
@@ -60,6 +80,13 @@ struct Builder {
             if (opts.debug) f.push_back("/Od"), f.push_back("/Zi");
             else f.push_back("/O2"), f.push_back("/Gy"), f.push_back("/Gw");
             return f;
+        }
+        // Gust: zig cc turns on the C undefined-behavior checks by default; what they
+        // check here the language has rules of its own for. -fcf-protection is x86's.
+        if (tc.name == "zig") {
+            if (opts.debug) return { "-O0", "-g", "-fno-sanitize=undefined" };
+            return { "-O2", "-fno-sanitize=undefined", "-ffunction-sections", "-fdata-sections",
+                     "-fno-stack-protector", "-fno-asynchronous-unwind-tables" };
         }
         if (opts.debug) return { "-O0", "-g" };
         vector<string> f = { "-O2" };
@@ -96,6 +123,10 @@ struct Builder {
     // are asked to.
     vector<string> LinkFlags() const {
         if (opts.debug) return {};
+        if (tc.name == "zig") {
+            if (TargetSystem() == "macos") return { "-Wl,-dead_strip" };
+            return { "-Wl,--gc-sections", "-s" };
+        }
         if (tc.style == "msvc")
             return ucrtdll ? vector<string> { "/link", "/NODEFAULTLIB:libucrt.lib", "ucrt.lib" } : vector<string> {};
         if (tc.name != "clang" && tc.name != "gcc") return {};
@@ -139,6 +170,10 @@ struct Builder {
     // The system libraries a program links beyond the C library, in the cc
     // style: none on Windows, where they live in the C runtime.
     vector<string> SystemLibs() const {
+        if (tc.name == "zig") {
+            if (TargetSystem() == "windows") return {};
+            return { "-lm", "-pthread" };
+        }
         #ifdef _WIN32
             return {};
         #else
@@ -191,7 +226,7 @@ struct Builder {
     // (a package's includes and defines) after the usual ones.
     bool CompileObject(const string &src, const string &obj, const string &what,
                        const string &logfile, const vector<string> &extra = {}) const {
-        vector<string> argv = { tc.cc };
+        auto argv = Driver();
         for (auto &f : CFlags()) argv.push_back(f);
         for (auto &f : extra) argv.push_back(f);
         if (tc.style == "msvc") {
@@ -213,7 +248,7 @@ struct Builder {
     // intermediates: a package's JIT library.
     bool LinkShared(const vector<string> &objects, const vector<string> &libs, const string &out,
                     const string &builddir, const string &logfile, const string &what) const {
-        vector<string> argv = { tc.cc };
+        auto argv = Driver();
         if (tc.style == "msvc") {
             argv.push_back("/nologo");
             argv.push_back("/LD");
@@ -238,7 +273,7 @@ struct Builder {
     bool Link(const string &src, const vector<string> &objects, const vector<string> &rsps,
               const string &exe, const string &builddir, const string &logfile,
               const vector<string> &extra = {}) const {
-        vector<string> argv = { tc.cc };
+        auto argv = Driver();
         for (auto &f : CFlags()) argv.push_back(f);
         for (auto &f : extra) argv.push_back(f);
         if (tc.style == "msvc") {
@@ -342,8 +377,12 @@ inline int BuildExecutable(const string &rootfile, const string &cfile, const st
     if (exe.empty()) {
         exe = cat(DirOf(rootfile), output.empty() ? PathStem(rootfile) : output);
         #ifdef _WIN32
-            if (exe.size() < 4 || exe.compare(exe.size() - 4, 4, ".exe") != 0) exe += ".exe";
+            auto windows = tc.name != "zig";
+        #else
+            auto windows = false;
         #endif
+        if (tc.name == "zig") windows = b.TargetSystem() == "windows";
+        if (windows && (exe.size() < 4 || exe.compare(exe.size() - 4, 4, ".exe") != 0)) exe += ".exe";
     }
     if (!opts.dryrun) {
         std::error_code ec;

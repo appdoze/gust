@@ -775,6 +775,13 @@ R"(  --cc name|path        The C compiler: msvc, clang-cl, clang, gcc, cc or a
                         path (or GOOSE_CC; by default the first one found).
   --standalone          Compile the runtime into the program rather than link
                         the runtime object built once per C compiler.
+  --target triple       Gust: build for another system, through Zig's C compiler
+                        (zig on PATH): x86_64-linux-musl or aarch64-linux-musl for
+                        a static Linux executable with no dependencies, also
+                        x86_64-windows-gnu, aarch64-macos and whatever else
+                        `zig targets` lists. A static one cannot load libraries
+                        at run time, and a package's C with a CMake build cannot
+                        be built this way.
   --static-crt          On Windows, link the C runtime into the executable.
                         By default a release build that links no C package
                         takes the universal CRT from the DLL Windows 10 and
@@ -1395,7 +1402,7 @@ int Main(int argc, char **argv) {
     auto forcejit = false, standalone = false, usemir = false, staticcrt = false;
     auto json = false, refresh = false, debug = false, verbose = false, dryrun = false;
     auto jsondiag = false;
-    string ccrequest;
+    string ccrequest, targetrequest;
     // The inlining at its highest. The C compiler optimizes whatever the
     // level, unless --debug (Builder::CFlags).
     auto optlevel = 2;
@@ -1492,6 +1499,7 @@ int Main(int argc, char **argv) {
         else if (arg == "--include" && i + 1 < argc) includenames.push_back(argv[++i]);
         else if (arg == "--stdlib" && i + 1 < argc) stdlibdir = argv[++i];
         else if (arg == "--cc" && i + 1 < argc) ccrequest = argv[++i];
+        else if (arg == "--target" && i + 1 < argc) targetrequest = argv[++i];
         else if (arg == "--json") json = true;
         else if (arg == "--refresh") refresh = true;
         else if (arg == "--debug") {
@@ -1566,8 +1574,16 @@ int Main(int argc, char **argv) {
                             "(-o out.c) writes the C for a C host\n");
             return 1;
         }
-        buildopts = BuildOptions { debug, verbose, dryrun, standalone, outname, staticcrt };
+        buildopts = BuildOptions { debug, verbose, dryrun, standalone, outname, staticcrt, targetrequest };
         outname.clear();
+    }
+    if (!targetrequest.empty() && verb != "build") {
+        fprintf(stderr, "--target is for gust build: this machine cannot run what it builds for another\n");
+        return 1;
+    }
+    if (!targetrequest.empty() && !ccrequest.empty()) {
+        fprintf(stderr, "--target builds with zig cc, so it takes no --cc\n");
+        return 1;
     }
     if (files.size() > 1 && !multitest) {
         fprintf(stderr, "multiple input files given\n");
@@ -1868,7 +1884,8 @@ int Main(int argc, char **argv) {
     string tcwhy;
     bool tclooked = false, havetc = false;
     auto findtc = [&] {
-        if (!tclooked) havetc = FindToolchain(ccrequest, tc, tcwhy);
+        if (!tclooked) havetc = targetrequest.empty() ? FindToolchain(ccrequest, tc, tcwhy)
+                                                      : ZigToolchain(targetrequest, tc, tcwhy);
         tclooked = true;
         if (!havetc) fprintf(stderr, "%s\n", tcwhy.c_str());
         return havetc;
