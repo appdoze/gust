@@ -170,19 +170,27 @@ def main():
     # still ends as killed by it.
     if not WINDOWS:
         exe, _ = c.build('fn main() {\n    var i = 0;\n    loop {\n        print("line ", i);\n        i++;\n    }\n}\n')
+        # Many times, at varied moments: a signal landing in the middle of a write once
+        # printed everything twice, and only on one machine in three, by chance of timing.
         for sig in (signal.SIGTERM, signal.SIGINT, signal.SIGHUP):
-            p = subprocess.Popen([exe], stdout=subprocess.PIPE, env=base)
-            got = bytearray(os.read(p.stdout.fileno(), 65536))
-            p.send_signal(sig)
-            while True:
-                b = os.read(p.stdout.fileno(), 1 << 20)
-                if not b:
+            problem = None
+            for attempt in range(40):
+                p = subprocess.Popen([exe], stdout=subprocess.PIPE, env=base)
+                got = bytearray(os.read(p.stdout.fileno(), 65536))
+                time.sleep(attempt * 0.0005)
+                p.send_signal(sig)
+                while True:
+                    b = os.read(p.stdout.fileno(), 1 << 20)
+                    if not b:
+                        break
+                    got += b
+                code = p.wait()
+                lines = bytes(got).split(b"\n")
+                whole = lines[-1] == b"" and all(l == b"line %d" % i for i, l in enumerate(lines[:-1]))
+                if not whole or code != -sig:
+                    problem = f"attempt {attempt}: exit {code}, {len(lines)} lines, last {lines[-3:]!r}"
                     break
-                got += b
-            code = p.wait()
-            lines = bytes(got).split(b"\n")
-            whole = lines[-1] == b"" and all(l == b"line %d" % i for i, l in enumerate(lines[:-1]))
-            c.report(f"{sig.name} in a burst: every line whole and in order, ended by it", whole and code == -sig, f"exit {code}, {len(lines)} lines, last {lines[-3:]!r}")
+            c.report(f"{sig.name} in a burst, 40 times: every line whole, once and in order, ended by it", problem is None, problem)
 
         # What is set to be ignored stays so.
         exe, _ = c.build('import os;\nfn main() {\n    print("up");\n    sleep_ms(1500);\n    print("still up");\n}\n')

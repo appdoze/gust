@@ -5003,13 +5003,32 @@ static uint8_t gs_out[GS_OUT_SIZE];
 static int64_t gs_out_len;      /* written under the lock; looked at outside it */
 static int64_t gs_out_on;       /* likewise: buffering */
 static int64_t gs_out_last;     /* when it last went out, in ms; under the lock */
+/* Who is writing it. A signal cannot tell how much of a write in progress has gone,
+   on this thread or another, so it does not touch the buffer then: it says so in
+   gs_out_signal, and the thread writing finishes and ends the process with that signal.
+   Each side says what it is doing before it looks at what the other is, in sequentially
+   consistent order, so that at least one sees the other. */
+#define GS_OUT_IDLE 0
+#define GS_OUT_WRITING 1
+#define GS_OUT_DYING 2
+static int64_t gs_out_state;
+static int64_t gs_out_signal;
 
 #if defined(_MSC_VER) && !defined(__clang__)
 #define GS_OUT_LOOK(p) (*(volatile int64_t *)(p))
 #define GS_OUT_SET(p, v) (*(volatile int64_t *)(p) = (v))
+#define GS_OUT_SEQ_LOOK(p) _InterlockedOr64((volatile __int64 *)(p), 0)
+#define GS_OUT_SEQ_SET(p, v) ((void)_InterlockedExchange64((volatile __int64 *)(p), (v)))
+#define GS_OUT_CLAIM(p, from, to) (_InterlockedCompareExchange64((volatile __int64 *)(p), (to), (from)) == (from))
 #else
 #define GS_OUT_LOOK(p) __atomic_load_n((p), __ATOMIC_RELAXED)
 #define GS_OUT_SET(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#define GS_OUT_SEQ_LOOK(p) __atomic_load_n((p), __ATOMIC_SEQ_CST)
+#define GS_OUT_SEQ_SET(p, v) __atomic_store_n((p), (v), __ATOMIC_SEQ_CST)
+static int gs_out_claim(int64_t *p, int64_t from, int64_t to) {
+    return __atomic_compare_exchange_n(p, &from, to, 0, __ATOMIC_SEQ_CST, __ATOMIC_SEQ_CST);
+}
+#define GS_OUT_CLAIM(p, from, to) gs_out_claim((p), (from), (to))
 #endif
 
 #if GS_NEED_THREADS
@@ -5044,10 +5063,26 @@ static int64_t gs_out_clock_ms(void) {
     #endif
 }
 
+/* `n` bytes of stdout, with the buffer's state saying so. A signal that came meanwhile
+   ends the process here, its handler having put the default back. */
+static void gs_out_write(const uint8_t *p, int64_t n) {
+    if (!GS_OUT_CLAIM(&gs_out_state, GS_OUT_IDLE, GS_OUT_WRITING)) {
+        /* A fault or a signal is writing it on the way out, and nothing more goes. */
+        if (GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_DYING) gs_park();
+        return;
+    }
+    gs_write_stream(stdout, p, n);
+    if (p == gs_out) GS_OUT_SET(&gs_out_len, 0);
+    GS_OUT_SEQ_SET(&gs_out_state, GS_OUT_IDLE);
+    #ifndef _WIN32
+        int64_t sig = GS_OUT_SEQ_LOOK(&gs_out_signal);
+        if (sig) raise((int)sig);
+    #endif
+}
+
 /* What waits, out, under the lock. */
 static void gs_out_write_all(void) {
-    if (gs_out_len) gs_write_stream(stdout, gs_out, gs_out_len);
-    GS_OUT_SET(&gs_out_len, 0);
+    if (gs_out_len) gs_out_write(gs_out, gs_out_len);
 }
 
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
@@ -5056,7 +5091,7 @@ GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
         if (gs_out_on) {
             if (len > GS_OUT_SIZE - gs_out_len) gs_out_write_all();
             if (len >= GS_OUT_SIZE) {
-                gs_write_stream(stdout, p, len);
+                gs_out_write(p, len);
             } else {
                 memcpy(gs_out + gs_out_len, p, (size_t)len);
                 GS_OUT_SET(&gs_out_len, gs_out_len + len);
@@ -5091,10 +5126,12 @@ GS_API void gs_err_bytes(const uint8_t *p, int64_t len) {
    its way out: the bytes as they stand, each print in them whole, as a print counts
    only once its bytes are all there. */
 static void gs_out_flush_dying(void) {
+    /* Whoever is writing it now has it, or has already gone. */
+    if (!GS_OUT_CLAIM(&gs_out_state, GS_OUT_IDLE, GS_OUT_DYING)) return;
     int64_t n = GS_OUT_LOOK(&gs_out_len);
-    if (n <= 0) return;
     GS_OUT_SET(&gs_out_len, 0);
     GS_OUT_SET(&gs_out_on, 0);
+    if (n <= 0) return;
     #ifdef _WIN32
         DWORD written;
         WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), gs_out, (DWORD)n, &written, NULL);
@@ -5131,11 +5168,16 @@ GS_API void gs_out_end(void) { gs_out_final(); }
 #ifdef _WIN32
 static BOOL WINAPI gs_out_on_console(DWORD event) {
     (void)event;
+    /* A thread of its own, which can wait a moment for a write to finish. */
+    for (int i = 0; i < 2000 && GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_WRITING; i++) Sleep(1);
     gs_out_flush_dying();
     return FALSE;
 }
 #else
 static void gs_out_on_signal(int sig) {
+    GS_OUT_SEQ_SET(&gs_out_signal, sig);
+    /* gs_out_write ends the process as it finishes. */
+    if (GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_WRITING) return;
     gs_out_flush_dying();
     /* SA_RESETHAND has put the default back, and it takes the signal as this returns,
        so that the program ends as killed by it. */
@@ -5154,7 +5196,8 @@ GS_API void gs_out_begin(void) {
         for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
             struct sigaction old;
             /* What is set to be ignored stays so, as under nohup. */
-            if (sigaction(sigs[i], NULL, &old) || old.sa_handler != SIG_DFL) continue;
+)GSRT"
+R"GSRT(            if (sigaction(sigs[i], NULL, &old) || old.sa_handler != SIG_DFL) continue;
             struct sigaction sa;
             memset(&sa, 0, sizeof sa);
             sa.sa_handler = gs_out_on_signal;
