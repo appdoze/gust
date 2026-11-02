@@ -485,9 +485,13 @@ on the twelve Rust has but `sortint` (1.35x on Ubuntu, 1.15x on Windows) and, on
 threads: a spawn and wait 0.02x and 0.01x, one with work to do 0.06x and 0.01x, messages back
 and forth 0.01x and 1.03x. Against Go's goroutines, 1.5x and 0.62x, 0.37x and 0.11x, 0.85x and
 0.35x. Behind: a hundred workers at once are 20x Go on Ubuntu and 2.3x on Windows, and a sender
-with three receivers at one queue on Ubuntu takes 2.8x Rust and 2.9x Go, being a lock's cache
-line going from core to core (ahead on Windows, 0.49x and 0.46x; the design that would close it
-is in `docs/gust/performance_designs.md`, not built). No soundness bug is known with the Windows
+with three receivers at one queue on Ubuntu took 2.8x Rust and 2.9x Go there, a lock's cache line
+going from core to core (ahead on Windows, 0.49x and 0.46x). The two-lock queue since, measured
+against the one-lock queue on one machine in three probe runs rather than a full run of the suite,
+is 0.73x to 0.83x of that time, which leaves it 1.2x to 1.8x Rust and 1.7x to 2.1x Go, and brings
+messages back and forth to 0.64x to 0.75x, level with Go
+(`docs/gust/performance_designs.md`). `scripts/tsan_threads.py` has every program that uses threads
+clean under ThreadSanitizer on CI. No soundness bug is known with the Windows
 commit fix, but the review has not happened (`docs/gust/soundness_review.md` keeps the list),
 and 1.0 is not tagged.)**
 

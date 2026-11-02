@@ -115,11 +115,12 @@ interleaving of it was explored for up to three threads on each end, about 608,0
 along with three broken forms of it, each of which the check caught. Under
 ThreadSanitizer the stress test `test/threads/queue_stress.goose` reports nothing.
 
-**What it gave.** On one 4-CPU runner, one lock against two: a sender and three
-receivers 0.095 s to 0.069 s, and messages back and forth 0.035 s to 0.025 s. That is
-less than the design hoped for: Go took 0.041 s and Rust 0.054 s there, since three
-receivers still pass the one lock on their end among them. So this closes most of the gap
-and not all of it. A thread also remembers the mailboxes it has asked for, which never
+**What it gave.** One lock against two on the same 4-CPU runner, three runs on three
+kinds of CPU: a sender and three receivers takes 0.73x to 0.83x of the time, and messages
+back and forth 0.64x to 0.75x, which is level with Go. That is less than the design hoped
+for. The sender and three receivers are still 1.2x to 1.8x Rust and 1.7x to 2.1x Go, since
+the receivers pass the one lock on their end among them. So this closes part of the gap and
+not all of it. A thread also remembers the mailboxes it has asked for, which never
 move, rather than taking a lock every thread of that type asks for each message.
 
 ## MSVC's AVX versions, in a translation unit of their own
