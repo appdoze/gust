@@ -431,6 +431,7 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
 
 GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                                const char *file, int line) {
+    gs_out_flush();
     gs_mutex_lock(&gs_threads_mutex);
     int err = id < 0 || id >= gs_numthreads ? GS_E_THREADID
             : id == gs_current_thread_id    ? GS_E_THREADSELF : -1;
@@ -910,6 +911,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
         }
         gs_pf_relax();
     }
+    gs_out_flush();
     gs_qlock(&s->mutex);
     gs_qnode *n = gs_qtake(s);
     while (!n) {
@@ -932,6 +934,7 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
     if (!n && ms > 0) {
         gs_mutex_unlock(&s->mutex);
         gs_qspin(s);
+        gs_out_flush();
         gs_qlock(&s->mutex);
         n = gs_qtake(s);
         int waiting = 1;
@@ -994,3 +997,202 @@ GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
 GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
 
 #endif  /* GS_NEED_THREADS */
+
+/* ---------------------------------------------------------------------------
+   Gust: stdout. A print to a terminal is a write, as someone is reading it line by
+   line. Where stdout is a file or a pipe prints wait in a buffer, as in C, Python and
+   Nim: a write for each was nearly all of what 300,000 prints took, 0.21 s against
+   0.009 s, with Rust at 0.25 s and Go at 0.31 s.
+
+   A buffer has its dangers, and these are what is done about each:
+   - prints far apart go out as they come: one more than GS_OUT_QUIET_MS after the last
+     write takes what waits with it, so a log or a progress line is as it was, and only
+     a burst waits, at most that long while it goes on;
+   - a thread about to block lets it go first (sleeping, waiting on a queue, on a thread
+     or on the network, reading stdin), so that an idle program has nothing waiting;
+   - stderr lets it go first, so that the two stay in order on one pipe;
+   - an abort, a fault, the process ending, and SIGINT, SIGTERM and SIGHUP where the
+     program has not said otherwise, all let it go.
+   What is left is a process killed outright (SIGKILL, a power cut) in the middle of a
+   burst, or the end of a burst followed by a long silence with no block in it, for
+   which os.flush_stdout() is there. GUST_UNBUFFERED in the environment turns all of
+   this off. So does foreign C in the program (EmitMain), which may print by itself
+   and would come out ahead of what waits here. A program run inside the compiler, or
+   called from a C host, writes each print as ever. */
+#if defined(__TINYC__) || defined(__MIRC__) || defined(GS_NATIVE_RUNTIME)
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stderr, p, len); }
+GS_API void gs_out_begin(void) {}
+GS_API void gs_out_end(void) {}
+static void gs_out_flush(void) {}
+static void gs_out_final(void) {}
+static void gs_out_flush_dying(void) {}
+#else
+#define GS_OUT_SIZE (1 << 16)
+#define GS_OUT_QUIET_MS 50
+static uint8_t gs_out[GS_OUT_SIZE];
+static int64_t gs_out_len;      /* written under the lock; looked at outside it */
+static int64_t gs_out_on;       /* likewise: buffering */
+static int64_t gs_out_last;     /* when it last went out, in ms; under the lock */
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GS_OUT_LOOK(p) (*(volatile int64_t *)(p))
+#define GS_OUT_SET(p, v) (*(volatile int64_t *)(p) = (v))
+#else
+#define GS_OUT_LOOK(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define GS_OUT_SET(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#endif
+
+#if GS_NEED_THREADS
+static gs_mutex gs_out_mutex = GS_MUTEX_INIT;
+#define GS_OUT_LOCK() gs_mutex_lock(&gs_out_mutex)
+#define GS_OUT_UNLOCK() gs_mutex_unlock(&gs_out_mutex)
+#ifdef _WIN32
+#define GS_OUT_TRYLOCK() TryAcquireSRWLockExclusive(&gs_out_mutex)
+#else
+#define GS_OUT_TRYLOCK() (pthread_mutex_trylock(&gs_out_mutex) == 0)
+#endif
+#else
+#define GS_OUT_LOCK() ((void)0)
+#define GS_OUT_UNLOCK() ((void)0)
+#define GS_OUT_TRYLOCK() 1
+#endif
+
+/* The cheapest clock there is, as it is read on every print: 16 ms is fine here. */
+static int64_t gs_out_clock_ms(void) {
+    #ifdef _WIN32
+        return (int64_t)GetTickCount64();
+    #else
+        struct timespec ts;
+        #if defined(CLOCK_MONOTONIC_COARSE)
+            clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+        #elif defined(CLOCK_MONOTONIC_RAW_APPROX)
+            clock_gettime(CLOCK_MONOTONIC_RAW_APPROX, &ts);
+        #else
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+        #endif
+        return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    #endif
+}
+
+/* What waits, out, under the lock. */
+static void gs_out_write_all(void) {
+    if (gs_out_len) gs_write_stream(stdout, gs_out, gs_out_len);
+    GS_OUT_SET(&gs_out_len, 0);
+}
+
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
+    if (GS_OUT_LOOK(&gs_out_on)) {
+        GS_OUT_LOCK();
+        if (gs_out_on) {
+            if (len > GS_OUT_SIZE - gs_out_len) gs_out_write_all();
+            if (len >= GS_OUT_SIZE) {
+                gs_write_stream(stdout, p, len);
+            } else {
+                memcpy(gs_out + gs_out_len, p, (size_t)len);
+                GS_OUT_SET(&gs_out_len, gs_out_len + len);
+                int64_t now = gs_out_clock_ms();
+                if (now - gs_out_last >= GS_OUT_QUIET_MS) {
+                    gs_out_write_all();
+                    gs_out_last = now;
+                }
+            }
+            GS_OUT_UNLOCK();
+            return;
+        }
+        GS_OUT_UNLOCK();
+    }
+    gs_write_stream(stdout, p, len);
+}
+
+static void gs_out_flush(void) {
+    if (!GS_OUT_LOOK(&gs_out_len)) return;
+    GS_OUT_LOCK();
+    gs_out_write_all();
+    gs_out_last = gs_out_clock_ms();
+    GS_OUT_UNLOCK();
+}
+
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len) {
+    gs_out_flush();
+    gs_write_stream(stderr, p, len);
+}
+
+/* From a fault or a signal, on a thread that may hold the lock, with the process on
+   its way out: the bytes as they stand, each print in them whole, as a print counts
+   only once its bytes are all there. */
+static void gs_out_flush_dying(void) {
+    int64_t n = GS_OUT_LOOK(&gs_out_len);
+    if (n <= 0) return;
+    GS_OUT_SET(&gs_out_len, 0);
+    GS_OUT_SET(&gs_out_on, 0);
+    #ifdef _WIN32
+        DWORD written;
+        WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), gs_out, (DWORD)n, &written, NULL);
+    #else
+        const uint8_t *p = gs_out;
+        while (n > 0) {
+            ssize_t w = write(1, p, (size_t)n);
+            if (w <= 0) break;
+            p += w;
+            n -= w;
+        }
+    #endif
+}
+
+/* For good, as the process ends. The lock if it can be had: another thread may be held
+   up in a write, or have been stopped holding it. */
+static void gs_out_final(void) {
+    if (!GS_OUT_LOOK(&gs_out_on)) return;
+    int locked = 0;
+    for (int i = 0; i < 1000 && !(locked = GS_OUT_TRYLOCK()); i++) {
+        #ifdef _WIN32
+            Sleep(0);
+        #else
+            sched_yield();
+        #endif
+    }
+    gs_out_write_all();
+    GS_OUT_SET(&gs_out_on, 0);
+    if (locked) GS_OUT_UNLOCK();
+}
+
+GS_API void gs_out_end(void) { gs_out_final(); }
+
+#ifdef _WIN32
+static BOOL WINAPI gs_out_on_console(DWORD event) {
+    (void)event;
+    gs_out_flush_dying();
+    return FALSE;
+}
+#else
+static void gs_out_on_signal(int sig) {
+    gs_out_flush_dying();
+    /* SA_RESETHAND has put the default back, and it takes the signal as this returns,
+       so that the program ends as killed by it. */
+    raise(sig);
+}
+#endif
+
+GS_API void gs_out_begin(void) {
+    if (getenv("GUST_UNBUFFERED")) return;
+    #ifdef _WIN32
+        if (_isatty(_fileno(stdout))) return;
+        SetConsoleCtrlHandler(gs_out_on_console, TRUE);
+    #else
+        if (isatty(1)) return;
+        static const int sigs[] = { SIGINT, SIGTERM, SIGHUP };
+        for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
+            struct sigaction old;
+            /* What is set to be ignored stays so, as under nohup. */
+            if (sigaction(sigs[i], NULL, &old) || old.sa_handler != SIG_DFL) continue;
+            struct sigaction sa;
+            memset(&sa, 0, sizeof sa);
+            sa.sa_handler = gs_out_on_signal;
+            sa.sa_flags = SA_RESETHAND;
+            sigaction(sigs[i], &sa, NULL);
+        }
+    #endif
+    GS_OUT_SET(&gs_out_on, 1);
+}
+#endif

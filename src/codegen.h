@@ -1515,6 +1515,7 @@ struct CodeGen {
     void EmitExports();
     string MainCall();
     void EmitMain();
+    bool foreigncode = false;   // Gust: an extern fn outside the standard library, or a package's C
 
     // ------------------------------------------------------------------
     // Driver.
@@ -1531,9 +1532,9 @@ struct CodeGen {
     // A function the extern support declares gets no prototype here.
     CodeGen(Ast &_ast, string_view runtime_ext_text, const vector<string> &headers,
             bool _norfcheck = false, bool _library = false, int64_t _maxstacks = 0,
-            bool _linedirectives = false)
+            bool _linedirectives = false, bool foreign = false)
         : ast(_ast), library(_library), norfcheck(_norfcheck), maxstacks(_maxstacks),
-          linedirectives(_linedirectives) {
+          linedirectives(_linedirectives), foreigncode(foreign) {
         for (auto t : ast.alltypes)
             if (t->kind == TY_REF && t->ref->pool) poolglobals.insert(t->ref->pool);
         ComputeRelRootMax();

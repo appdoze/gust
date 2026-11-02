@@ -408,7 +408,10 @@ GS_API void gs_os_write_stderr(sl_u8 s) {
     gs_err_bytes(s.data, s.len);
 }
 
-GS_API void gs_os_flush_stdout(void) { fflush(stdout); }
+GS_API void gs_os_flush_stdout(void) {
+    gs_out_flush();
+    fflush(stdout);
+}
 
 GS_API double gs_parse_f64(sl_u8 s, uint64_t mant, int64_t exp10, uint8_t truncated) {
     return gs_dec_to_f64(s.data, s.len, mant, exp10, truncated);
@@ -517,6 +520,7 @@ GS_API void gs_fmt_fixed(gs_rref out, double v, int64_t decimals) {
 /* One line of stdin, without its newline or a carriage return before it;
    false at end of input. */
 GS_API uint8_t gs_os_read_line(gs_rref out) {
+    gs_out_flush();
     int c = fgetc(stdin);
     if (c == EOF) return 0;
     int64_t start = out.hdr->len;
@@ -534,6 +538,7 @@ GS_API uint8_t gs_os_read_line(gs_rref out) {
 
 /* All of stdin. */
 GS_API void gs_os_read_stdin(gs_rref out) {
+    gs_out_flush();
     uint8_t buf[65536];
     for (;;) {
         size_t n = fread(buf, 1, sizeof buf, stdin);
@@ -810,6 +815,7 @@ GS_API int64_t gs_os_clock_ns(void) {
 
 GS_API void gs_os_sleep_ms(int64_t ms) {
     if (ms <= 0) return;
+    gs_out_flush();
 #ifdef _WIN32
     /* Sleep takes 32 bits, the largest of them meaning INFINITE: a longer
        sleep goes in parts. */

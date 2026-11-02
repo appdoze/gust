@@ -693,6 +693,15 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
 
 ## Runtime
 
+- stdout is buffered where it is a file or a pipe, as in C, Python and Nim: 300,000 prints
+  went from 0.21 s to 0.009 s, with Rust at 0.25 s and Go at 0.31 s. A print more than 50 ms
+  after the last write takes what waits with it, so logs and progress lines come out as
+  they did. What waits goes out before a thread blocks and before anything goes to stderr,
+  at an abort or a fault, and at SIGINT, SIGTERM and SIGHUP. What can still be lost is what
+  a process killed outright had in the middle of a burst. A terminal, `GUST_UNBUFFERED` in the
+  environment, foreign C in the program, a C host and a run inside the compiler all keep a
+  write per print. `scripts/stdout_tests.py`.
+
 - `thread_spawn` reuses threads. A thread whose worker has ended waits 50 ms
   for the next one, up to 64 of them, and everything of a worker but its native
   stack's pages is set up and released as on a new thread; one that aborted is

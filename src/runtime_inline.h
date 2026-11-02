@@ -1539,6 +1539,8 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n);
 
 /* print(...) (§3.7): the whole line, rendered first, in one write. */
 GS_API void gs_out_bytes(const uint8_t *p, int64_t len);
+GS_API void gs_out_begin(void);   /* Gust: a program's main: stdout may be buffered from here */
+GS_API void gs_out_end(void);     /* and what waits goes out at its end */
 GS_API void gs_err_bytes(const uint8_t *p, int64_t len);
 
 /* Byte search behind std's find_any and find_pair (runtime_impl.h): the
@@ -1586,6 +1588,12 @@ static const char *gs_errmsgs[] = {
    runs inside the compiler, where exit() on the main thread returns to it
    instead. */
 static GS_NORETURN void gs_end(int code);
+/* Gust: what print has buffered goes out (runtime_threads.h): as a thread is about to
+   block, for good as the process ends, and from a fault or a signal, which can take no
+   lock. */
+static void gs_out_flush(void);
+static void gs_out_final(void);
+static void gs_out_flush_dying(void);
 
 #include <setjmp.h>
 #include <stdarg.h>
@@ -1600,6 +1608,7 @@ static GS_NORETURN void gs_end(int code);
 #endif
 
 GS_API GS_NORETURN void gs_panic(const char *msg) {
+    gs_out_final();
     fprintf(stderr, "goose runtime error: %s\n", msg);
     gs_end(1);
 }
@@ -1625,6 +1634,7 @@ static GS_NORETURN void gs_fail(const void *msg, int64_t len, const char *file, 
     uint8_t *text = (uint8_t *)malloc((size_t)(pre + len + loc + 1));
     if (!text) {
         if (gs_contain) gs_panic("out of memory recording an aborted thread");
+        gs_out_final();
         fputs(lead, stderr);
         fwrite(msg, 1, (size_t)len, stderr);
         fprintf(stderr, " (%s:%d)\n", file, line);
@@ -1639,6 +1649,7 @@ static GS_NORETURN void gs_fail(const void *msg, int64_t len, const char *file, 
         gs_contain->len = len + loc - 1;
         gs_longjmp(gs_contain->jump, 1);
     }
+    gs_out_final();
     fwrite(text, 1, (size_t)(pre + len + loc), stderr);
     gs_end(1);
 }
@@ -1748,7 +1759,8 @@ GS_API GS_NORETURN void gs_ovf_neg(int64_t a, const char *type, const char *file
 
 /* The message of a failing `as` check, with the source value as text. */
 static GS_NORETURN void gs_asfail(const char *why, const char *num, const char *type,
-                                  const char *file, int line) {
+)GSRT"
+R"GSRT(                                  const char *file, int line) {
     gs_failf(file, line, "as conversion %s (debug): %s as %s", why, num, type);
 }
 
@@ -1756,8 +1768,7 @@ GS_API GS_NORETURN void gs_asfail_i(const char *why, int64_t v, const char *type
                                     const char *file, int line) {
     char num[24];
     snprintf(num, sizeof(num), "%lld", (long long)v);
-)GSRT"
-R"GSRT(    gs_asfail(why, num, type, file, line);
+    gs_asfail(why, num, type, file, line);
 }
 
 GS_API GS_NORETURN void gs_asfail_u(const char *why, uint64_t v, const char *type,
@@ -1936,7 +1947,8 @@ static void gs_keep_regions(void) {
     if (!gs_kept) gs_kept = (gs_region *)malloc(GS_KEPT_REGIONS * sizeof(gs_region));
     while (gs_nregions) {
         long i = gs_nregions - 1;
-        gs_region r = gs_regions[i];
+)GSRT"
+R"GSRT(        gs_region r = gs_regions[i];
         gs_nregions = i;
         gs_regions[i].base = NULL;
         if (gs_kept && gs_nkept < GS_KEPT_REGIONS && gs_region_trim(&r)) gs_kept[gs_nkept++] = r;
@@ -1948,8 +1960,7 @@ static void gs_keep_regions(void) {
 
 /* This thread is ending, and they go with it. */
 static void gs_release_kept(void) {
-)GSRT"
-R"GSRT(    while (gs_nkept) gs_release_region(&gs_kept[--gs_nkept]);
+    while (gs_nkept) gs_release_region(&gs_kept[--gs_nkept]);
     free(gs_kept);
     gs_kept = NULL;
     gs_native_stack_free();
@@ -1976,6 +1987,7 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
            stdio, which could want more. */
         static const char msg[] = "goose runtime error: native call stack overflow\n";
         DWORD written;
+        gs_out_flush_dying();
         WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, sizeof(msg) - 1, &written, NULL);
         ExitProcess(1);
     }
@@ -1998,12 +2010,14 @@ static LONG WINAPI gs_fault_filter(EXCEPTION_POINTERS *ep) {
                 static const char nomem[] =
                     "goose runtime error: out of memory committing a data stack\n";
                 DWORD written;
+                gs_out_flush_dying();
                 WriteFile(GetStdHandle(STD_ERROR_HANDLE), nomem, sizeof(nomem) - 1, &written,
                           NULL);
                 ExitProcess(1);
             }
             char msg[GS_OVERFLOW_TEXT];
             DWORD written;
+            gs_out_flush_dying();
             WriteFile(GetStdHandle(STD_ERROR_HANDLE), msg, (DWORD)gs_overflow_text(msg, r),
                       &written, NULL);
             ExitProcess(1);
@@ -2138,26 +2152,29 @@ static void gs_fault_handler(int sig, siginfo_t *info, void *ctx) {
     for (long i = 0; i < gs_nregions; i++) {
         gs_region *r = &gs_regions[i];
         if ((uintptr_t)hit - (uintptr_t)r->base < r->size) {
-            /* Within the usable part: open another chunk and resume. Within
+)GSRT"
+R"GSRT(            /* Within the usable part: open another chunk and resume. Within
                the gap, or where it cannot be opened: a data stack overran. */
 #ifdef GS_POSIX_COMMIT_ON_FAULT
             if (hit < r->base + r->usable && gs_commit_chunk(r, hit)) return;
 #endif
             char msg[GS_OVERFLOW_TEXT];
+            gs_out_flush_dying();
             ssize_t w = write(2, msg, gs_overflow_text(msg, r));
             (void)w;
             _exit(1);
         }
     }
-)GSRT"
-R"GSRT(    if ((uintptr_t)hit - gs_native_lo < gs_native_hi - gs_native_lo) {
+    if ((uintptr_t)hit - gs_native_lo < gs_native_hi - gs_native_lo) {
         static const char msg[] = "goose runtime error: native call stack overflow\n";
+        gs_out_flush_dying();
         ssize_t w = write(2, msg, sizeof(msg) - 1);
         (void)w;
         _exit(1);
     }
     /* Not ours: the access faults again under what handled it before, the
        default action or a sanitizer's report. */
+    gs_out_flush_dying();
     sigaction(sig, sig == SIGSEGV ? &gs_prev_segv : &gs_prev_bus, NULL);
 }
 
@@ -2323,6 +2340,7 @@ static GS_NORETURN void gs_park(void) {
 
 static GS_NORETURN void gs_end(int code) {
     if (!gs_end_first()) gs_park();
+    gs_out_final();
     fflush(NULL);
     #if defined(__TINYC__) || defined(__MIRC__) || defined(GS_NATIVE_RUNTIME)
         if (gs_current_thread_id < 0) exit(code);
@@ -2344,7 +2362,8 @@ static void gs_freeze_keep(void **q) { q[0] = (void *)gs_frozen; gs_frozen = q; 
 GS_API void *gs_freeze(const void *p, int64_t n) {
     void **q = (void **)malloc(sizeof(void *) + (n > 0 ? (size_t)n : 1));
     if (!q) gs_panic("out of memory in freeze");
-    if (n > 0) memcpy(q + 1, p, (size_t)n);
+)GSRT"
+R"GSRT(    if (n > 0) memcpy(q + 1, p, (size_t)n);
     gs_freeze_keep(q);
     return q + 1;
 }
@@ -2357,8 +2376,7 @@ GS_API void *gs_freeze(const void *p, int64_t n) {
    GS_REGION_MIN: a smaller region is always safe, since the checks the
    compiler leaves out assume no more than GS_STACK_RESERVE bytes in a
    stack, and the guard gap behind a smaller one aborts growth that much
-)GSRT"
-R"GSRT(   sooner. Workers racing through a refusal may each halve the size once
+   sooner. Workers racing through a refusal may each halve the size once
    more than needed, or restore a larger one for a moment; it only ever
    settles downward. */
 GS_API uint8_t *gs_reserve_region(gs_stack *stack) {
@@ -2520,7 +2538,8 @@ static int64_t gs_sp_newnode(gs_sppath *p) {
     return (*p->n)++;
 }
 
-static void gs_sp_dropnode(gs_sppath *p, int64_t i) {
+)GSRT"
+R"GSRT(static void gs_sp_dropnode(gs_sppath *p, int64_t i) {
     GS_SPLEAF(p, i)->link = GS_SPHEAD(p)->chain;
     GS_SPHEAD(p)->chain = i;
 }
@@ -2538,8 +2557,7 @@ static void gs_sp_open(gs_spleaf *lf, int64_t s) {
     lf->n++;
 }
 
-)GSRT"
-R"GSRT(static void gs_sp_close(gs_spleaf *lf, int64_t s) {
+static void gs_sp_close(gs_spleaf *lf, int64_t s) {
     int64_t j;
     lf->n--;
     for (j = s; j < lf->n; j++) {
@@ -2756,7 +2774,8 @@ static void gs_sp_take(gs_sppath *p, int64_t k, int64_t cnt) {
     gs_spleaf *lf = GS_SPLEAF(p, p->node[p->h]);
     int64_t c = lf->cnt[k];
     if (c <= cnt) {
-        gs_sp_delete(p, k);
+)GSRT"
+R"GSRT(        gs_sp_delete(p, k);
         return;
     }
     lf->idx[k] += cnt;
@@ -2772,8 +2791,7 @@ static void gs_sp_take(gs_sppath *p, int64_t k, int64_t cnt) {
 GS_API int64_t gs_spans_alloc(uint8_t *base, int64_t *n, uint8_t **top, int64_t len,
                               int64_t cnt) {
     gs_sppath p;
-)GSRT"
-R"GSRT(    int64_t l, i, k = 0, j, m, c, now, idx, before[GS_SPAN_DEPTH];
+    int64_t l, i, k = 0, j, m, c, now, idx, before[GS_SPAN_DEPTH];
     gs_spleaf *lf = NULL;
     if (cnt == 0 || *n == 0) return len;
     p.base = base;
@@ -2977,7 +2995,8 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
    as std's ByteSet, made by its byte_set, which gs_byteset lays out as the
    Goose struct is (spec C.2: packed, in declaration order). `members` is
    the set. `kind` says how a block of bytes is tested for it: by comparing
-   with 1 to 3 of `bytes` (kinds 1-3), or as the range bytes[0] .. bytes[0] +
+)GSRT"
+R"GSRT(   with 1 to 3 of `bytes` (kinds 1-3), or as the range bytes[0] .. bytes[0] +
    bytes[1] (kind 4), both complemented where `invert` is set; kind 0 is the
    empty set, or with `invert` every byte. Every set also has nibble tables,
    bit k of lo[j] standing for the byte k * 16 + j and bit k of hi[j] for the
@@ -2986,8 +3005,7 @@ GS_API int64_t gs_spans_regrow(uint8_t *base, int64_t *n, uint8_t **top, int64_t
    Every x86-64 CPU has SSE2, so the comparisons test blocks of 16 bytes
    without any dispatch. The tables take SSSE3's pshufb, which the CPU is
    asked for as the runtime starts, and a search where either set is of kind
-)GSRT"
-R"GSRT(   5 tests both by their tables. Without SSSE3 such a search, and on other
+   5 tests both by their tables. Without SSSE3 such a search, and on other
    targets, under TinyCC (which has no intrinsics), or over fewer than 16
    positions, every search, tests one byte at a time, a single byte by
    memchr. No load reaches past the range: its last part is tested as the
@@ -3159,7 +3177,8 @@ static GS_SSSE3 int64_t gs_scan_any_tables(const uint8_t *p, int64_t n, const gs
     GS_ANY_LOOP(GS_TABLES_S)
 }
 
-static GS_INLINE int64_t gs_scan_pair_k(const uint8_t *p, int64_t np, const gs_byteset *a,
+)GSRT"
+R"GSRT(static GS_INLINE int64_t gs_scan_pair_k(const uint8_t *p, int64_t np, const gs_byteset *a,
                                         int64_t d, const gs_byteset *b, int ka, int kb) {
     gs_bsm ma, mb;
     gs_bsm_init(&ma, a, 0);
@@ -3175,8 +3194,7 @@ static GS_SSSE3 int64_t gs_scan_pair_tables(const uint8_t *p, int64_t np, const 
     GS_PAIR_LOOP(GS_TABLES_A, GS_TABLES_B)
 }
 
-)GSRT"
-R"GSRT(/* A loop of its own for each kind, and for each pair of kinds, from 1 to 4. */
+/* A loop of its own for each kind, and for each pair of kinds, from 1 to 4. */
 static int64_t gs_scan_any_blocks(const uint8_t *p, int64_t n, const gs_byteset *s) {
     switch (s->kind) {
         case 1: return gs_scan_any_k(p, n, s, 1);
@@ -3257,9 +3275,8 @@ GS_API void gs_rt_start(int argc, char **argv, uint64_t reserve, uint64_t gap,
         spare -= mainregions;
         gs_thread_cap = spare > workerregions ? spare / workerregions : 1;
     }
-    // Unbuffered stdout: output is never lost to an abort or a killed run,
-    // and interleaves correctly with stderr diagnostics. Revisit if print
-    // throughput ever matters.
+    // stdout's FILE unbuffered, which print does not go through but C called from
+    // a program may. Gust: what print does is gs_out_bytes's (runtime_threads.h).
     setvbuf(stdout, NULL, _IONBF, 0);
     #ifdef _WIN32
         // The bytes a program writes are the bytes that come out, '\n' one
@@ -3347,7 +3364,8 @@ typedef struct { int n; uint32_t d[130]; } gs_big;
 static void gs_big_set(gs_big *a, uint64_t v, int sh) {
     int w = sh >> 5, b = sh & 31, i;
     uint64_t lo = v << b, hi = b ? v >> (64 - b) : 0;
-    for (i = 0; i < w; i++) a->d[i] = 0;
+)GSRT"
+R"GSRT(    for (i = 0; i < w; i++) a->d[i] = 0;
     a->d[w] = (uint32_t)lo;
     a->d[w + 1] = (uint32_t)(lo >> 32);
     a->d[w + 2] = (uint32_t)hi;
@@ -3368,8 +3386,7 @@ static void gs_big_mul(gs_big *a, uint32_t m) {
 /* a = a * m + c, where a may be zero (n 0). */
 static void gs_big_mul_small_add(gs_big *a, uint32_t m, uint32_t c0) {
     uint64_t c = c0;
-)GSRT"
-R"GSRT(    for (int i = 0; i < a->n; i++) {
+    for (int i = 0; i < a->n; i++) {
         c += (uint64_t)a->d[i] * m;
         a->d[i] = (uint32_t)c;
         c >>= 32;
@@ -3537,7 +3554,8 @@ static uint64_t gs_mul_round(uint64_t a, uint64_t b) {
    digits so far leave below the upper end, ten_kappa the last digit's weight,
    and unit the uncertainty. False where it is not certain which digit is
    nearest, or that the digits read back. */
-static int gs_grisu_weed(char *dig, int n, uint64_t high_w, uint64_t unsafe_width, uint64_t rest,
+)GSRT"
+R"GSRT(static int gs_grisu_weed(char *dig, int n, uint64_t high_w, uint64_t unsafe_width, uint64_t rest,
                          uint64_t ten_kappa, uint64_t unit) {
     uint64_t small = high_w - unit, big = high_w + unit;
     while (rest < small && unsafe_width - rest >= ten_kappa &&
@@ -3548,8 +3566,7 @@ static int gs_grisu_weed(char *dig, int n, uint64_t high_w, uint64_t unsafe_widt
     if (rest < big && unsafe_width - rest >= ten_kappa &&
         (rest + ten_kappa < big || big - rest > rest + ten_kappa - big))
         return 0;
-)GSRT"
-R"GSRT(    return 2 * unit <= rest && rest <= unsafe_width - 4 * unit;
+    return 2 * unit <= rest && rest <= unsafe_width - 4 * unit;
 }
 
 /* As gs_float_digits, or 0 where the digits are not proved. */
@@ -3733,7 +3750,8 @@ static int gs_dec_scale(uint64_t mant, int64_t exp10, int truncated, double *out
     return 1;
 }
 
-/* a <<= sh, for a > 0. */
+)GSRT"
+R"GSRT(/* a <<= sh, for a > 0. */
 static void gs_big_shl(gs_big *a, int sh) {
     int w = sh >> 5, b = sh & 31, i;
     int n = a->n;
@@ -3752,8 +3770,7 @@ static void gs_big_shl(gs_big *a, int sh) {
 }
 
 /* D * 10^E against (2f + 1) * 2^(e - 1): the point above the double f * 2^e. */
-)GSRT"
-R"GSRT(static int gs_dec_cmp_mid(const gs_big *dec, int64_t exp10, uint64_t f, int e) {
+static int gs_dec_cmp_mid(const gs_big *dec, int64_t exp10, uint64_t f, int e) {
     gs_big a = *dec, b;
     gs_big_set(&b, 2 * f + 1, 0);
     if (exp10 > 0) gs_big_mul_pow10(&a, (int)exp10);
@@ -3915,7 +3932,7 @@ GS_API int64_t gs_fmt_quoted(uint8_t *dst, const uint8_t *s, int64_t n) {
     return (int64_t)(d - dst);
 }
 
-/* stdout is unbuffered (gs_rt_start): each print is this one write. Gust:
+/* A write to stdout or stderr. Gust:
    made directly, where fwrite on an unbuffered stream takes stdio's lock and,
    on Windows, a second write for a text of odd length (the C runtime takes
    the stream for one with a 2-byte buffer). A partial write goes on from where
@@ -3942,8 +3959,6 @@ static void gs_write_stream(FILE *stream, const uint8_t *p, int64_t len) {
         }
     #endif
 }
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
-GS_API void gs_err_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stderr, p, len); }
 )GSRT"
     ) },
     { "runtime_threads.h", string_view(
@@ -4382,6 +4397,7 @@ R"GSRT(        if (handle && !CloseHandle(handle)) gs_panic("cannot close thread
 
 GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                                const char *file, int line) {
+    gs_out_flush();
     gs_mutex_lock(&gs_threads_mutex);
     int err = id < 0 || id >= gs_numthreads ? GS_E_THREADID
             : id == gs_current_thread_id    ? GS_E_THREADSELF : -1;
@@ -4863,6 +4879,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
         }
         gs_pf_relax();
     }
+    gs_out_flush();
     gs_qlock(&s->mutex);
     gs_qnode *n = gs_qtake(s);
     while (!n) {
@@ -4885,6 +4902,7 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
     if (!n && ms > 0) {
         gs_mutex_unlock(&s->mutex);
         gs_qspin(s);
+        gs_out_flush();
         gs_qlock(&s->mutex);
         n = gs_qtake(s);
         int waiting = 1;
@@ -4947,6 +4965,206 @@ GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
 GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
 
 #endif  /* GS_NEED_THREADS */
+
+/* ---------------------------------------------------------------------------
+   Gust: stdout. A print to a terminal is a write, as someone is reading it line by
+   line. Where stdout is a file or a pipe prints wait in a buffer, as in C, Python and
+   Nim: a write for each was nearly all of what 300,000 prints took, 0.21 s against
+   0.009 s, with Rust at 0.25 s and Go at 0.31 s.
+
+   A buffer has its dangers, and these are what is done about each:
+   - prints far apart go out as they come: one more than GS_OUT_QUIET_MS after the last
+     write takes what waits with it, so a log or a progress line is as it was, and only
+     a burst waits, at most that long while it goes on;
+   - a thread about to block lets it go first (sleeping, waiting on a queue, on a thread
+     or on the network, reading stdin), so that an idle program has nothing waiting;
+   - stderr lets it go first, so that the two stay in order on one pipe;
+   - an abort, a fault, the process ending, and SIGINT, SIGTERM and SIGHUP where the
+     program has not said otherwise, all let it go.
+   What is left is a process killed outright (SIGKILL, a power cut) in the middle of a
+   burst, or the end of a burst followed by a long silence with no block in it, for
+   which os.flush_stdout() is there. GUST_UNBUFFERED in the environment turns all of
+   this off. So does foreign C in the program (EmitMain), which may print by itself
+)GSRT"
+R"GSRT(   and would come out ahead of what waits here. A program run inside the compiler, or
+   called from a C host, writes each print as ever. */
+#if defined(__TINYC__) || defined(__MIRC__) || defined(GS_NATIVE_RUNTIME)
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stderr, p, len); }
+GS_API void gs_out_begin(void) {}
+GS_API void gs_out_end(void) {}
+static void gs_out_flush(void) {}
+static void gs_out_final(void) {}
+static void gs_out_flush_dying(void) {}
+#else
+#define GS_OUT_SIZE (1 << 16)
+#define GS_OUT_QUIET_MS 50
+static uint8_t gs_out[GS_OUT_SIZE];
+static int64_t gs_out_len;      /* written under the lock; looked at outside it */
+static int64_t gs_out_on;       /* likewise: buffering */
+static int64_t gs_out_last;     /* when it last went out, in ms; under the lock */
+
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GS_OUT_LOOK(p) (*(volatile int64_t *)(p))
+#define GS_OUT_SET(p, v) (*(volatile int64_t *)(p) = (v))
+#else
+#define GS_OUT_LOOK(p) __atomic_load_n((p), __ATOMIC_RELAXED)
+#define GS_OUT_SET(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
+#endif
+
+#if GS_NEED_THREADS
+static gs_mutex gs_out_mutex = GS_MUTEX_INIT;
+#define GS_OUT_LOCK() gs_mutex_lock(&gs_out_mutex)
+#define GS_OUT_UNLOCK() gs_mutex_unlock(&gs_out_mutex)
+#ifdef _WIN32
+#define GS_OUT_TRYLOCK() TryAcquireSRWLockExclusive(&gs_out_mutex)
+#else
+#define GS_OUT_TRYLOCK() (pthread_mutex_trylock(&gs_out_mutex) == 0)
+#endif
+#else
+#define GS_OUT_LOCK() ((void)0)
+#define GS_OUT_UNLOCK() ((void)0)
+#define GS_OUT_TRYLOCK() 1
+#endif
+
+/* The cheapest clock there is, as it is read on every print: 16 ms is fine here. */
+static int64_t gs_out_clock_ms(void) {
+    #ifdef _WIN32
+        return (int64_t)GetTickCount64();
+    #else
+        struct timespec ts;
+        #if defined(CLOCK_MONOTONIC_COARSE)
+            clock_gettime(CLOCK_MONOTONIC_COARSE, &ts);
+        #elif defined(CLOCK_MONOTONIC_RAW_APPROX)
+            clock_gettime(CLOCK_MONOTONIC_RAW_APPROX, &ts);
+        #else
+            clock_gettime(CLOCK_MONOTONIC, &ts);
+        #endif
+        return (int64_t)ts.tv_sec * 1000 + ts.tv_nsec / 1000000;
+    #endif
+}
+
+/* What waits, out, under the lock. */
+static void gs_out_write_all(void) {
+    if (gs_out_len) gs_write_stream(stdout, gs_out, gs_out_len);
+    GS_OUT_SET(&gs_out_len, 0);
+}
+
+GS_API void gs_out_bytes(const uint8_t *p, int64_t len) {
+    if (GS_OUT_LOOK(&gs_out_on)) {
+        GS_OUT_LOCK();
+        if (gs_out_on) {
+            if (len > GS_OUT_SIZE - gs_out_len) gs_out_write_all();
+            if (len >= GS_OUT_SIZE) {
+                gs_write_stream(stdout, p, len);
+            } else {
+                memcpy(gs_out + gs_out_len, p, (size_t)len);
+                GS_OUT_SET(&gs_out_len, gs_out_len + len);
+                int64_t now = gs_out_clock_ms();
+                if (now - gs_out_last >= GS_OUT_QUIET_MS) {
+                    gs_out_write_all();
+                    gs_out_last = now;
+                }
+            }
+            GS_OUT_UNLOCK();
+            return;
+        }
+        GS_OUT_UNLOCK();
+    }
+    gs_write_stream(stdout, p, len);
+}
+
+static void gs_out_flush(void) {
+    if (!GS_OUT_LOOK(&gs_out_len)) return;
+    GS_OUT_LOCK();
+    gs_out_write_all();
+    gs_out_last = gs_out_clock_ms();
+    GS_OUT_UNLOCK();
+}
+
+GS_API void gs_err_bytes(const uint8_t *p, int64_t len) {
+    gs_out_flush();
+    gs_write_stream(stderr, p, len);
+}
+
+/* From a fault or a signal, on a thread that may hold the lock, with the process on
+   its way out: the bytes as they stand, each print in them whole, as a print counts
+   only once its bytes are all there. */
+static void gs_out_flush_dying(void) {
+    int64_t n = GS_OUT_LOOK(&gs_out_len);
+    if (n <= 0) return;
+    GS_OUT_SET(&gs_out_len, 0);
+    GS_OUT_SET(&gs_out_on, 0);
+    #ifdef _WIN32
+        DWORD written;
+        WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), gs_out, (DWORD)n, &written, NULL);
+    #else
+        const uint8_t *p = gs_out;
+        while (n > 0) {
+            ssize_t w = write(1, p, (size_t)n);
+            if (w <= 0) break;
+            p += w;
+            n -= w;
+        }
+    #endif
+}
+
+/* For good, as the process ends. The lock if it can be had: another thread may be held
+   up in a write, or have been stopped holding it. */
+static void gs_out_final(void) {
+    if (!GS_OUT_LOOK(&gs_out_on)) return;
+    int locked = 0;
+    for (int i = 0; i < 1000 && !(locked = GS_OUT_TRYLOCK()); i++) {
+        #ifdef _WIN32
+            Sleep(0);
+        #else
+            sched_yield();
+        #endif
+    }
+    gs_out_write_all();
+    GS_OUT_SET(&gs_out_on, 0);
+    if (locked) GS_OUT_UNLOCK();
+}
+
+GS_API void gs_out_end(void) { gs_out_final(); }
+
+#ifdef _WIN32
+static BOOL WINAPI gs_out_on_console(DWORD event) {
+    (void)event;
+    gs_out_flush_dying();
+    return FALSE;
+}
+#else
+static void gs_out_on_signal(int sig) {
+    gs_out_flush_dying();
+    /* SA_RESETHAND has put the default back, and it takes the signal as this returns,
+       so that the program ends as killed by it. */
+    raise(sig);
+}
+#endif
+
+GS_API void gs_out_begin(void) {
+    if (getenv("GUST_UNBUFFERED")) return;
+    #ifdef _WIN32
+        if (_isatty(_fileno(stdout))) return;
+        SetConsoleCtrlHandler(gs_out_on_console, TRUE);
+    #else
+        if (isatty(1)) return;
+        static const int sigs[] = { SIGINT, SIGTERM, SIGHUP };
+        for (size_t i = 0; i < sizeof sigs / sizeof sigs[0]; i++) {
+            struct sigaction old;
+            /* What is set to be ignored stays so, as under nohup. */
+            if (sigaction(sigs[i], NULL, &old) || old.sa_handler != SIG_DFL) continue;
+            struct sigaction sa;
+            memset(&sa, 0, sizeof sa);
+            sa.sa_handler = gs_out_on_signal;
+            sa.sa_flags = SA_RESETHAND;
+            sigaction(sigs[i], &sa, NULL);
+        }
+    #endif
+    GS_OUT_SET(&gs_out_on, 1);
+}
+#endif
 )GSRT"
     ) },
     { "runtime_ext.h", string_view(
@@ -5976,7 +6194,10 @@ GS_API void gs_os_write_stderr(sl_u8 s) {
     gs_err_bytes(s.data, s.len);
 }
 
-GS_API void gs_os_flush_stdout(void) { fflush(stdout); }
+GS_API void gs_os_flush_stdout(void) {
+    gs_out_flush();
+    fflush(stdout);
+}
 
 GS_API double gs_parse_f64(sl_u8 s, uint64_t mant, int64_t exp10, uint8_t truncated) {
     return gs_dec_to_f64(s.data, s.len, mant, exp10, truncated);
@@ -6035,9 +6256,9 @@ GS_API void gs_fmt_fixed(gs_rref out, double v, int64_t decimals) {
                 r *= 10;
                 *p++ = (char)('0' + (r >> k));
                 r &= mask;
-            }
 )GSRT"
-R"GSRT(            up = r >= (uint64_t)1 << (k - 1);
+R"GSRT(            }
+            up = r >= (uint64_t)1 << (k - 1);
         } else if (k && f) {
             gs_big r, s, t;
             int64_t i = 0;
@@ -6086,6 +6307,7 @@ R"GSRT(            up = r >= (uint64_t)1 << (k - 1);
 /* One line of stdin, without its newline or a carriage return before it;
    false at end of input. */
 GS_API uint8_t gs_os_read_line(gs_rref out) {
+    gs_out_flush();
     int c = fgetc(stdin);
     if (c == EOF) return 0;
     int64_t start = out.hdr->len;
@@ -6103,6 +6325,7 @@ GS_API uint8_t gs_os_read_line(gs_rref out) {
 
 /* All of stdin. */
 GS_API void gs_os_read_stdin(gs_rref out) {
+    gs_out_flush();
     uint8_t buf[65536];
     for (;;) {
         size_t n = fread(buf, 1, sizeof buf, stdin);
@@ -6259,9 +6482,9 @@ GS_API void gs_dl_bind(const gs_dllib *libs, int64_t nlibs, const gs_dlbind *bin
             /* A path, the resource directory's or an absolute one: the
                libraries it depends on are looked for beside it first, as
                a library shipped with its dependencies under lib/ needs.
-               That search wants backslashes. A bare name keeps the
 )GSRT"
-R"GSRT(               loader's own search. */
+R"GSRT(               That search wants backslashes. A bare name keeps the
+               loader's own search. */
             int path = 0;
             for (wchar_t *c = wide; *c; c++)
                 if (*c == L'/' || *c == L'\\') { *c = L'\\'; path = 1; }
@@ -6380,6 +6603,7 @@ GS_API int64_t gs_os_clock_ns(void) {
 
 GS_API void gs_os_sleep_ms(int64_t ms) {
     if (ms <= 0) return;
+    gs_out_flush();
 #ifdef _WIN32
     /* Sleep takes 32 bits, the largest of them meaning INFINITE: a longer
        sleep goes in parts. */
@@ -7693,6 +7917,7 @@ GS_API int64_t gs_net_connect(int64_t ph, sl_u8 host, int64_t port, int64_t time
         pf.fd = s;
         pf.events = GS_POLL_OUT;
         pf.revents = 0;
+        gs_out_flush();
         int r = gs_net_poll(&pf, 1, timeout_ms < 0 ? 0 : timeout_ms);
         if (r == 0) { gs_net_closesock(s); return GS_NET_TIMEOUT; }
         int err = 0;
@@ -7857,9 +8082,9 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
         }
     }
 #elif defined(_WIN32)
-    /* A completion that reports nothing (a request cancelled for a change of
 )GSRT"
-R"GSRT(       what is waited for) is waited past, until ms are up, so that a wait
+R"GSRT(    /* A completion that reports nothing (a request cancelled for a change of
+       what is waited for) is waited past, until ms are up, so that a wait
        returns 0 only at its timeout, as poll does. */
     DWORD start = GetTickCount();
     int woke = 0;
@@ -7930,6 +8155,7 @@ R"GSRT(       what is waited for) is waited past, until ms are up, so that a wai
    listener that has been closed is reported once with GS_NET_HUP and no
    longer watched. */
 GS_API int64_t gs_net_wait(int64_t ph, int64_t ms, sl_i64 hs, sl_i64 evs) {
+    if (ms) gs_out_flush();
     gs_net_pl *p = gs_net_pl_of(ph);
     if (!p) return GS_NET_BAD_HANDLE;
     int64_t cap = hs.len < evs.len ? hs.len : evs.len;
@@ -8066,10 +8292,10 @@ static void gs_net_thread_end(void) {
 
 /* ---- stopping ----------------------------------------------------------- */
 
-/* Written by a signal handler (POSIX) or the console's handler thread
-   (Windows) and read by every thread: a lock-free atomic, since
 )GSRT"
-R"GSRT(   volatile sig_atomic_t is enough for a signal handler and its own thread
+R"GSRT(/* Written by a signal handler (POSIX) or the console's handler thread
+   (Windows) and read by every thread: a lock-free atomic, since
+   volatile sig_atomic_t is enough for a signal handler and its own thread
    but C11 makes it a data race between threads. */
 #ifdef _WIN32
 static volatile LONG gs_net_stop;

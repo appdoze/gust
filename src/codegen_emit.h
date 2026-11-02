@@ -1043,8 +1043,11 @@ inline string CodeGen::ExportHeader() {
 }
 
 inline void CodeGen::EmitMain() {
+    // Gust: stdout may be buffered (runtime_threads.h), but not with foreign C in the
+    // program, which may print by itself and would come out ahead of what waits.
     Append(code, "int main(int argc, char **argv) {\n    gs_program_init(argc, argv);\n",
-           MainCall(), "    gs_rt_stats();\n    return 0;\n}\n");
+           foreigncode ? "" : "    gs_out_begin();\n", MainCall(),
+           foreigncode ? "" : "    gs_out_end();\n", "    gs_rt_stats();\n    return 0;\n}\n");
 }
 
 }  // namespace goose
