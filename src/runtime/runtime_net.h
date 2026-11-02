@@ -349,7 +349,16 @@ static gs_net_det *gs_net_dets;
 static int64_t gs_net_ndets;
 /* Whether this process has used the network, so that a thread's end can
    skip the shared tables when it has not. */
-static volatile int gs_net_used;
+/* Whether any thread has used the network, set with no lock held and read by a
+   thread as it ends. */
+static int gs_net_used;
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GS_NET_MARK_USED() (*(volatile int *)&gs_net_used = 1)
+#define GS_NET_WAS_USED() (*(volatile int *)&gs_net_used)
+#else
+#define GS_NET_MARK_USED() __atomic_store_n(&gs_net_used, 1, __ATOMIC_RELAXED)
+#define GS_NET_WAS_USED() __atomic_load_n(&gs_net_used, __ATOMIC_RELAXED)
+#endif
 
 /* A free entry of a shared table, growing it; -1 when it is full. Under the lock. */
 #define GS_NET_TAKE(arr, n, type, out) do {                                       \
@@ -906,7 +915,7 @@ GS_API int64_t gs_net_listen(int64_t port, int64_t backlog, uint8_t local_only) 
     if (GS_NET_CALL(getsockname)(s, (struct sockaddr *)&b, &blen) == 0)
         bound = (int64_t)((b.sin_port >> 8 & 0xff) | (b.sin_port << 8 & 0xff00));
     GS_NET_LOCK();
-    gs_net_used = 1;
+    GS_NET_MARK_USED();
 #ifndef _WIN32
     if (gs_net_reserve < 0) gs_net_reserve = open("/dev/null", O_RDONLY | O_CLOEXEC);
 #endif
@@ -961,7 +970,7 @@ GS_API int64_t gs_net_close_listener(int64_t lh) {
 
 GS_API int64_t gs_net_poller(void) {
     if (!gs_net_start()) return GS_NET_UNAVAILABLE;
-    gs_net_used = 1;
+    GS_NET_MARK_USED();
     int64_t i = -1;
     for (int64_t k = 0; k < gs_net_npls; k++)
         if (!gs_net_pls[k].live) { i = k; break; }
@@ -1567,7 +1576,7 @@ static void gs_net_thread_end(void) {
     free(gs_net_pls);
     gs_net_pls = NULL;
     gs_net_npls = 0;
-    if (!gs_net_used) return;
+    if (!GS_NET_WAS_USED()) return;
     int64_t self = gs_net_self();
     GS_NET_LOCK();
     for (int64_t i = 0; i < gs_net_nlsts; i++) {

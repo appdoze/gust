@@ -6799,20 +6799,29 @@ static gs_net_det *gs_net_dets;
 static int64_t gs_net_ndets;
 /* Whether this process has used the network, so that a thread's end can
    skip the shared tables when it has not. */
-static volatile int gs_net_used;
+/* Whether any thread has used the network, set with no lock held and read by a
+   thread as it ends. */
+static int gs_net_used;
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GS_NET_MARK_USED() (*(volatile int *)&gs_net_used = 1)
+#define GS_NET_WAS_USED() (*(volatile int *)&gs_net_used)
+#else
+#define GS_NET_MARK_USED() __atomic_store_n(&gs_net_used, 1, __ATOMIC_RELAXED)
+#define GS_NET_WAS_USED() __atomic_load_n(&gs_net_used, __ATOMIC_RELAXED)
+#endif
 
 /* A free entry of a shared table, growing it; -1 when it is full. Under the lock. */
 #define GS_NET_TAKE(arr, n, type, out) do {                                       \
         out = -1;                                                                 \
         for (int64_t i_ = 0; i_ < n; i_++) if (!arr[i_].live) { out = i_; break; } \
         if (out < 0 && n <= GS_NET_MAX_INDEX) {                                   \
-            int64_t cap_ = n ? n * 2 : 16;                                        \
+)GSRT"
+R"GSRT(            int64_t cap_ = n ? n * 2 : 16;                                        \
             if (cap_ > GS_NET_MAX_INDEX + 1) cap_ = GS_NET_MAX_INDEX + 1;         \
             if (cap_ > n) {                                                       \
                 type *p_ = (type *)realloc(arr, (size_t)cap_ * sizeof(type));     \
                 if (p_) {                                                         \
-)GSRT"
-R"GSRT(                    memset(p_ + n, 0, (size_t)(cap_ - n) * sizeof(type));         \
+                    memset(p_ + n, 0, (size_t)(cap_ - n) * sizeof(type));         \
                     arr = p_; out = n; n = cap_;                                  \
                 }                                                                 \
             }                                                                     \
@@ -6992,13 +7001,13 @@ typedef struct {
     ULONG nhandles;
     ULONG exclusive;
     gs_afd_handle handles[1];
-} gs_afd_poll;
+)GSRT"
+R"GSRT(} gs_afd_poll;
 typedef struct { ULONG_PTR key; LPOVERLAPPED ovl; ULONG_PTR internal; DWORD bytes; } gs_ovl_entry;
 typedef gs_ntstatus (WINAPI *gs_NtCreateFile)(HANDLE *, ULONG, gs_objattr *, gs_iosb *, void *, ULONG, ULONG,
                                               ULONG, ULONG, void *, ULONG);
 typedef gs_ntstatus (WINAPI *gs_NtDeviceIoControlFile)(HANDLE, HANDLE, void *, void *, gs_iosb *, ULONG, void *,
-)GSRT"
-R"GSRT(                                                       ULONG, void *, ULONG);
+                                                       ULONG, void *, ULONG);
 typedef gs_ntstatus (WINAPI *gs_NtCancelIoFileEx)(HANDLE, gs_iosb *, gs_iosb *);
 typedef HANDLE (WINAPI *gs_CreateIoCompletionPort)(HANDLE, HANDLE, ULONG_PTR, DWORD);
 typedef BOOL (WINAPI *gs_GetQueuedCompletionStatusEx)(HANDLE, gs_ovl_entry *, ULONG, ULONG *, DWORD, BOOL);
@@ -7173,7 +7182,8 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
                data);
         n++;
     }
-    if ((old & GS_POLL_OUT) != (now & GS_POLL_OUT)) {
+)GSRT"
+R"GSRT(    if ((old & GS_POLL_OUT) != (now & GS_POLL_OUT)) {
         EV_SET(&ch[n], (uintptr_t)s, EVFILT_WRITE, (now & GS_POLL_OUT) ? EV_ADD | EV_ENABLE : EV_DELETE, 0, 0,
                data);
         n++;
@@ -7183,8 +7193,7 @@ static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
 #elif defined(_WIN32)
 static int gs_net_kreg(gs_net_pl *p, int64_t f, short old, short now) {
     struct gs_net_ks *k = p->kst[f];
-)GSRT"
-R"GSRT(    if (!old) {
+    if (!old) {
         k = (struct gs_net_ks *)calloc(1, sizeof *k);
         if (!k) return 0;
         DWORD got = 0;
@@ -7359,7 +7368,7 @@ GS_API int64_t gs_net_listen(int64_t port, int64_t backlog, uint8_t local_only) 
     if (GS_NET_CALL(getsockname)(s, (struct sockaddr *)&b, &blen) == 0)
         bound = (int64_t)((b.sin_port >> 8 & 0xff) | (b.sin_port << 8 & 0xff00));
     GS_NET_LOCK();
-    gs_net_used = 1;
+    GS_NET_MARK_USED();
 #ifndef _WIN32
     if (gs_net_reserve < 0) gs_net_reserve = open("/dev/null", O_RDONLY | O_CLOEXEC);
 #endif
@@ -7397,7 +7406,8 @@ GS_API int64_t gs_net_listener_port(int64_t lh) {
    goes when the last accept or watch lets it go. */
 GS_API int64_t gs_net_close_listener(int64_t lh) {
     GS_NET_LOCK();
-    gs_net_lst *l = gs_net_lst_of(lh);
+)GSRT"
+R"GSRT(    gs_net_lst *l = gs_net_lst_of(lh);
     int64_t r = 0;
     if (!l || l->owner != gs_net_self()) r = GS_NET_BAD_HANDLE;
     else {
@@ -7413,9 +7423,8 @@ GS_API int64_t gs_net_close_listener(int64_t lh) {
 /* ---- pollers ------------------------------------------------------------ */
 
 GS_API int64_t gs_net_poller(void) {
-)GSRT"
-R"GSRT(    if (!gs_net_start()) return GS_NET_UNAVAILABLE;
-    gs_net_used = 1;
+    if (!gs_net_start()) return GS_NET_UNAVAILABLE;
+    GS_NET_MARK_USED();
     int64_t i = -1;
     for (int64_t k = 0; k < gs_net_npls; k++)
         if (!gs_net_pls[k].live) { i = k; break; }
@@ -7637,7 +7646,8 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
         if (err == WSAECONNRESET) again = 1;
         if (err == WSAEMFILE || err == WSAENOBUFS) return GS_NET_LIMIT;
 #endif
-        return again ? GS_NET_AGAIN : GS_NET_ERROR;
+)GSRT"
+R"GSRT(        return again ? GS_NET_AGAIN : GS_NET_ERROR;
     }
 #ifndef GS_NET_ACCEPT4
     if (!gs_net_nonblock(s)) {
@@ -7651,8 +7661,7 @@ GS_API int64_t gs_net_accept(int64_t ph, int64_t lh) {
     int64_t h = gs_net_addcn(p, s);
     if (h < 0) { gs_net_tally_drop(t); return h; }
     p->cns[gs_net_index_of(h)].tally = t;
-)GSRT"
-R"GSRT(    /* Another thread's connection may close in between: a count. */
+    /* Another thread's connection may close in between: a count. */
     gs_net_accepted_open = gs_net_tally_add(t, 0) - 1;
     return h;
 }
@@ -7843,7 +7852,8 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
     }
 #elif defined(_WIN32)
     /* A completion that reports nothing (a request cancelled for a change of
-       what is waited for) is waited past, until ms are up, so that a wait
+)GSRT"
+R"GSRT(       what is waited for) is waited past, until ms are up, so that a wait
        returns 0 only at its timeout, as poll does. */
     DWORD start = GetTickCount();
     int woke = 0;
@@ -7852,8 +7862,7 @@ static int64_t gs_net_kwait(gs_net_pl *p, int64_t ms, int64_t *handles, int64_t 
     int64_t nq = p->nkq;
     p->nkq = 0;
     for (int64_t q = 0; q < nq; q++) {
-)GSRT"
-R"GSRT(        struct gs_net_ks *s = p->kq[q];
+        struct gs_net_ks *s = p->kq[q];
         s->queued = 0;
         if (s->deleted) {
             gs_afd_free_if_done(s);
@@ -8023,7 +8032,7 @@ static void gs_net_thread_end(void) {
     free(gs_net_pls);
     gs_net_pls = NULL;
     gs_net_npls = 0;
-    if (!gs_net_used) return;
+    if (!GS_NET_WAS_USED()) return;
     int64_t self = gs_net_self();
     GS_NET_LOCK();
     for (int64_t i = 0; i < gs_net_nlsts; i++) {
@@ -8053,7 +8062,8 @@ static void gs_net_thread_end(void) {
 
 /* Written by a signal handler (POSIX) or the console's handler thread
    (Windows) and read by every thread: a lock-free atomic, since
-   volatile sig_atomic_t is enough for a signal handler and its own thread
+)GSRT"
+R"GSRT(   volatile sig_atomic_t is enough for a signal handler and its own thread
    but C11 makes it a data race between threads. */
 #ifdef _WIN32
 static volatile LONG gs_net_stop;
@@ -8061,8 +8071,7 @@ GS_API void gs_net_request_stop(void) {
     InterlockedExchange(&gs_net_stop, 1);
     /* Every AFD poller's wait returns. The console's handler runs on a
        thread of its own, which may take the lock. */
-)GSRT"
-R"GSRT(    GS_NET_LOCK();
+    GS_NET_LOCK();
     for (int64_t i = 0; i < gs_net_nports; i++) gs_afd.PostQueuedCompletionStatus(gs_net_ports[i], 0, 0, NULL);
     GS_NET_UNLOCK();
 }
