@@ -103,6 +103,10 @@ goroutines start a hundred at once faster than threads can, 20x on Linux, and a
 sender with three receivers at one queue on Linux takes about 2x what Go does and
 1.2x to 1.8x what Rust does. [ROADMAP.md](ROADMAP.md) has the rest.
 
+A static build, `gust build --target x86_64-linux-musl`, resides in 88 KB for a hello world,
+against about 2 MB for Rust, Go and Gust's usual build, whose C library's pages are shared between
+processes. It starts in 0.17 ms, against 0.49 ms, and needs nothing installed where it runs.
+
 ## Build and run
 
 You need CMake 3.27 or later and a C++20 compiler; Python 3 runs the tests.
@@ -114,6 +118,13 @@ git clone https://github.com/appdoze/gust
 cd gust
 cmake -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
+```
+
+With [Zig](https://ziglang.org/download) on PATH, Gust builds for other systems from any of
+them, static on Linux, with nothing else installed:
+
+```bash
+gust build --target aarch64-linux-musl app.gust
 ```
 
 The compiler is `build/gust`, or `build/Release/gust.exe` where CMake uses

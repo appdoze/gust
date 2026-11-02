@@ -123,6 +123,49 @@ the receivers pass the one lock on their end among them. So this closes part of 
 not all of it. A thread also remembers the mailboxes it has asked for, which never
 move, rather than taking a lock every thread of that type asks for each message.
 
+## What Zig and Nim had to offer
+
+Read in November 2026 from their sources, for Gust's remaining gaps, and measured where a
+number could decide it: patches to the runtime's C on one 4-CPU Linux runner.
+
+**Taken: Zig's C compiler.** `gust build --target` (MODIFICATIONS.md). Zig carries a C library
+for every target, and Gust compiles to C, so it gets static executables and cross-compilation
+without a backend of its own. 88 test programs pass on each of Linux x86-64 and arm64 with
+musl, Windows and macOS, on machines of that kind.
+
+**Measured, and not taken.**
+
+- Reading a lock before trying it, as Zig's mutex notes that a failed try still takes the line
+  (glibc's lock word read directly): a sender and three receivers 0.94x, within the noise of
+  these runs, for a dependence on glibc's internals.
+- Waking one sleeping thread and leaving it to wake the next, as Go's scheduler does:
+  a hundred workers at once 1.25x, worse.
+
+**Measured, and waiting on a decision: buffering stdout.** C, Nim and Python buffer it when it is
+not a terminal. 300,000 prints to a file went from 0.211 s to 0.009 s, and to a pipe from 0.131 s
+to 0.007 s, against Rust's 0.252 and 0.171 and Go's 0.312 and 0.205. The runtime writes each print
+on purpose, so that output is not lost to an abort or a killed run and stays in order with stderr.
+A buffer can be flushed at an abort, before stderr and before a thread blocks, which leaves one
+loss: a process killed outright while printing loses what is in the buffer.
+
+**Read, and not applicable, for these reasons.** None of these was measured.
+
+- Nim's ARC and ORC: reference counts, and a cycle collector, for what Gust's regions and data
+  stacks do without either.
+- Zig's SmpAllocator, Nim's TLSF allocator and Weave's memory pools: Gust's hot paths do not call
+  an allocator.
+- Malebolgia's running a task inline when the pool is busy: a worker may block on what another
+  has yet to do, and `parallel for` has its caller take chunks already.
+- Weave's batches of messages and work stealing: a receiver holding messages it has not asked for
+  can deadlock when it then waits for something another thread can only do with one of them.
+- Dragonbox and Schubfach, in Nim's float text: no slow path, for a table of about 10 KB, where
+  Gust's already beats Rust and Go by 12 to 17% and falls back on under 1% of values.
+
+**Read, and left open.** Zig's MultiArrayList, a struct array stored field by field, would suit
+what lanes do, as a library type. Its ArrayHashMap, a dictionary in insertion order, would suit
+JSON objects, and costs memory rather than saving it. Its pdqsort's block partition was not
+measured against Gust's branchless one, which is what integer sorting would try next.
+
 ## MSVC's AVX versions, in a translation unit of their own
 
 **Where it falls short.** MSVC builds no simd versions: it has no
