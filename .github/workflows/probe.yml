@@ -5,7 +5,7 @@ on:
     branches: ['probe/win-queue']
 
 jobs:
-  qwake:
+  qpoll:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
@@ -23,9 +23,6 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
-      - name: The protocol, every interleaving
-        if: runner.os == 'Linux'
-        run: python .github/probe/qmodel2.py 6
       - name: Build
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
@@ -38,9 +35,8 @@ jobs:
           cmake --build build --config Release --target goose -j 4
       - name: Measure
         run: |
-          nproc
           if [ "$RUNNER_OS" = Windows ]; then
-            python .github/probe/qwake.py build/Release/gust.exe --old "$RUNNER_TEMP/old/build/Release/gust.exe" --out "$RUNNER_TEMP/qw"
+            python .github/probe/qpoll.py build/Release/gust.exe --old "$RUNNER_TEMP/old/build/Release/gust.exe" --out "$RUNNER_TEMP/qw"
           else
-            python .github/probe/qwake.py build/gust --old "$RUNNER_TEMP/old/build/gust" --out "$RUNNER_TEMP/qw"
+            python .github/probe/qpoll.py build/gust --old "$RUNNER_TEMP/old/build/gust" --out "$RUNNER_TEMP/qw"
           fi
