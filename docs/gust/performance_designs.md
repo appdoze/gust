@@ -131,6 +131,31 @@ against 0.055 s to 0.061 s, and even its slowest is ahead of Rust's fastest, 0.1
 0.77x). A full Bench run reads differently, 1.28x Rust and 0.82x Go, on a runner where Rust's own
 time was 0.070 s, which is why these comparisons are made on one machine.
 
+**What that spread was: receivers looking at the sender's line.** A receiver waiting for a message
+read `tail` on every look, though it had often already seen that more were there, and each read
+takes that line from the sender. So a receiver now looks first at what the last take saw of `tail`,
+which lives on its own end's line, and goes to `tail` only once that has run out. It changes only a
+hint that the lock then decides, so the sleeping protocol is as it was. On one machine in 25 rounds
+(probe run 41539412137), a sender and three receivers on Windows went from a median of 0.071 s, with
+a slowest of 0.097 s, to 0.027 s, with a slowest of 0.028 s, against the one-lock queue's 0.058 s,
+Rust's 0.115 s and Go's 0.118 s. On Linux, where the receivers' lock is what limits it, 0.121 s went
+to 0.112 s, against Rust's 0.063 s and Go's 0.054 s. Messages back and forth moved 1.02x on Linux and
+0.95x on this PC. On that runner they read 1.18x, but so did variants that do not touch them (1.14x
+to 1.19x), so that row was its reference's luck.
+
+Tried on the way, and dropped:
+
+- Not signalling a receiver already signalled and not yet back, which the first counters here
+  pointed at, on a PC where a slow run had thousands of such signals. It passed a check of every
+  interleaving for up to three threads on each end, 1.2 million states, but on the runners it gave
+  under 2%: one run with 172,852 such signals was not slow, and the slow ones were those with
+  receivers really asleep some 3,000 times, which the look at `tail` now avoids.
+- Polling less often the longer a receiver has waited: 0.86x on Windows' spread, but messages back
+  and forth 1.16x to 1.53x on Windows and 1.35x on Linux.
+- Spinning four times as long before sleeping (0.95x) and backing off an eighth as long after a lost
+  race (0.85x on Windows, 1.00x on Linux): neither near what the look gave.
+- Trying Windows's lock before waiting on it, as the POSIX path does: 1.26x, worse.
+
 ## What Zig and Nim had to offer
 
 Read in November 2026 from their sources, for Gust's remaining gaps, and measured where a

@@ -638,7 +638,7 @@ struct gs_qstate {
     gs_mutex mutex;                /* head's lock, which cond goes with */
     gs_cond cond;
     int64_t head;                  /* written under mutex */
-    int64_t seen_tail;             /* under mutex */
+    int64_t seen_tail;             /* written under mutex; gs_qany looks at it outside */
     char pad1[GS_QLINE];
     int64_t limit;
     uint8_t *ring;
@@ -701,7 +701,14 @@ static void gs_qstore(int64_t *p, int64_t v) {
 #define GS_QSEQ_ADD(p, v) ((void)__atomic_add_fetch((p), (v), __ATOMIC_SEQ_CST))
 #endif
 
-#define GS_QANY(s) (GS_QLOOK(&(s)->tail) != GS_QLOOK(&(s)->head))
+/* Whether a message looks to be there, which the lock then decides. What the last take saw
+   of tail comes first, so that receivers with messages known to wait leave tail's line
+   alone: each look at it costs the sender that line, and a sender and three receivers on
+   Windows took 2.6x as long while they looked at it every time. */
+static int gs_qany(struct gs_qstate *s) {
+    int64_t h = GS_QLOOK(&s->head);
+    return GS_QLOOK(&s->seen_tail) != h || GS_QLOOK(&s->tail) != h;
+}
 
 /* A lock of a queue. Windows's spins before it waits, but glibc's goes straight
    to a futex, for a lock held a few nanoseconds. */
@@ -729,7 +736,7 @@ static void gs_qunlock_both(struct gs_qstate *s) {
 }
 
 static void gs_qspin(struct gs_qstate *s) {
-    for (int i = 0; i < GS_QSPIN && !GS_QANY(s); i++) gs_pf_relax();
+    for (int i = 0; i < GS_QSPIN && !gs_qany(s); i++) gs_pf_relax();
 }
 
 /* Room for one more in the ring (cap a power of two), under both locks. A message
@@ -860,7 +867,7 @@ static gs_qnode *gs_qtake(struct gs_qstate *s) {
     if (s->esize > 0) {
         int64_t h = s->head;
         if (h == s->seen_tail) {
-            s->seen_tail = gs_qload(&s->tail);
+            gs_qstore(&s->seen_tail, gs_qload(&s->tail));
             if (h == s->seen_tail) return NULL;
         }
         gs_qnode *n = &gs_qscratch.node;
@@ -885,6 +892,8 @@ static gs_qnode *gs_qtake(struct gs_qstate *s) {
         s->first = n->next;
         if (!s->first) s->last = NULL;
         gs_qstore(&s->head, s->head + 1);
+        /* Nodes keep no sight of tail, and an old one would say there is a message for ever. */
+        gs_qstore(&s->seen_tail, s->head);
     }
     gs_mutex_unlock(&s->tail_lock);
     return n;
@@ -902,7 +911,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
        busy queue lose often, and one asleep makes every send a wakeup, a trip
        through the kernel for a message another receiver takes anyway. */
     for (int spins = GS_QSPIN; spins > 0; spins--) {
-        if (GS_QANY(s)) {
+        if (gs_qany(s)) {
             gs_qlock(&s->mutex);
             gs_qnode *n = gs_qtake(s);
             gs_mutex_unlock(&s->mutex);

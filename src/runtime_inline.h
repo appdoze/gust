@@ -4605,7 +4605,7 @@ struct gs_qstate {
     gs_mutex mutex;                /* head's lock, which cond goes with */
     gs_cond cond;
     int64_t head;                  /* written under mutex */
-    int64_t seen_tail;             /* under mutex */
+    int64_t seen_tail;             /* written under mutex; gs_qany looks at it outside */
     char pad1[GS_QLINE];
     int64_t limit;
     uint8_t *ring;
@@ -4668,7 +4668,14 @@ static void gs_qstore(int64_t *p, int64_t v) {
 #define GS_QSEQ_ADD(p, v) ((void)__atomic_add_fetch((p), (v), __ATOMIC_SEQ_CST))
 #endif
 
-#define GS_QANY(s) (GS_QLOOK(&(s)->tail) != GS_QLOOK(&(s)->head))
+/* Whether a message looks to be there, which the lock then decides. What the last take saw
+   of tail comes first, so that receivers with messages known to wait leave tail's line
+   alone: each look at it costs the sender that line, and a sender and three receivers on
+   Windows took 2.6x as long while they looked at it every time. */
+static int gs_qany(struct gs_qstate *s) {
+    int64_t h = GS_QLOOK(&s->head);
+    return GS_QLOOK(&s->seen_tail) != h || GS_QLOOK(&s->tail) != h;
+}
 
 /* A lock of a queue. Windows's spins before it waits, but glibc's goes straight
    to a futex, for a lock held a few nanoseconds. */
@@ -4696,7 +4703,7 @@ static void gs_qunlock_both(struct gs_qstate *s) {
 }
 
 static void gs_qspin(struct gs_qstate *s) {
-    for (int i = 0; i < GS_QSPIN && !GS_QANY(s); i++) gs_pf_relax();
+    for (int i = 0; i < GS_QSPIN && !gs_qany(s); i++) gs_pf_relax();
 }
 
 /* Room for one more in the ring (cap a power of two), under both locks. A message
@@ -4759,7 +4766,8 @@ static void gs_qwake(struct gs_qstate *s) {
 /* What takes both locks: the first message, a ring out of room, and anything but
    the ring's own size. A node is allocated and copied before it takes them, so they
    are held only to check the limit and link it. */
-static uint8_t gs_qput_slow(struct gs_qstate *s, const void *data, int64_t size) {
+)GSRT"
+R"GSRT(static uint8_t gs_qput_slow(struct gs_qstate *s, const void *data, int64_t size) {
     gs_qlock_both(s);
     if (!s->esize) s->esize = size > 0 && size <= GS_QRING_MAX ? size : -1;
     if (s->esize == size) {
@@ -4769,8 +4777,7 @@ static uint8_t gs_qput_slow(struct gs_qstate *s, const void *data, int64_t size)
         }
         if (s->tail - s->head == s->cap) gs_qring_grow(s);
         memcpy(s->ring + (s->tail & (s->cap - 1)) * size, data, (size_t)size);
-)GSRT"
-R"GSRT(        s->seen_head = s->head;
+        s->seen_head = s->head;
         GS_QSEQ_STORE(&s->tail, s->tail + 1);
         gs_qunlock_both(s);
     } else {
@@ -4828,7 +4835,7 @@ static gs_qnode *gs_qtake(struct gs_qstate *s) {
     if (s->esize > 0) {
         int64_t h = s->head;
         if (h == s->seen_tail) {
-            s->seen_tail = gs_qload(&s->tail);
+            gs_qstore(&s->seen_tail, gs_qload(&s->tail));
             if (h == s->seen_tail) return NULL;
         }
         gs_qnode *n = &gs_qscratch.node;
@@ -4853,6 +4860,8 @@ static gs_qnode *gs_qtake(struct gs_qstate *s) {
         s->first = n->next;
         if (!s->first) s->last = NULL;
         gs_qstore(&s->head, s->head + 1);
+        /* Nodes keep no sight of tail, and an old one would say there is a message for ever. */
+        gs_qstore(&s->seen_tail, s->head);
     }
     gs_mutex_unlock(&s->tail_lock);
     return n;
@@ -4870,7 +4879,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
        busy queue lose often, and one asleep makes every send a wakeup, a trip
        through the kernel for a message another receiver takes anyway. */
     for (int spins = GS_QSPIN; spins > 0; spins--) {
-        if (GS_QANY(s)) {
+        if (gs_qany(s)) {
             gs_qlock(&s->mutex);
             gs_qnode *n = gs_qtake(s);
             gs_mutex_unlock(&s->mutex);
@@ -4977,7 +4986,8 @@ GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
      write takes what waits with it, so a log or a progress line is as it was, and only
      a burst waits, at most that long while it goes on;
    - a thread about to block lets it go first (sleeping, waiting on a queue, on a thread
-     or on the network, reading stdin), so that an idle program has nothing waiting;
+)GSRT"
+R"GSRT(     or on the network, reading stdin), so that an idle program has nothing waiting;
    - stderr lets it go first, so that the two stay in order on one pipe;
    - an abort, a fault, the process ending, and SIGINT, SIGTERM and SIGHUP where the
      program has not said otherwise, all let it go, and a write in progress finishes
@@ -4985,8 +4995,7 @@ GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
    - a reader that has stopped taking bytes (`prog | less`, then Ctrl-C) does not keep a
      signal from ending the process: it gets GS_OUT_STUCK_S to take them.
    What is left is a process killed outright (SIGKILL, a power cut) in the middle of a
-)GSRT"
-R"GSRT(   burst, or the end of a burst followed by a long silence with no block in it, for
+   burst, or the end of a burst followed by a long silence with no block in it, for
    which os.flush_stdout() is there. GUST_UNBUFFERED in the environment turns all of
    this off. So does foreign C in the program (EmitMain), which may print by itself
    and would come out ahead of what waits here. A program run inside the compiler, or
@@ -5173,7 +5182,8 @@ static void gs_out_take(void) {
 
 /* From a fault. */
 static void gs_out_flush_dying(void) {
-    if (!GS_OUT_LOOK(&gs_out_on) || gs_out_here == GS_OUT_DYING) return;
+)GSRT"
+R"GSRT(    if (!GS_OUT_LOOK(&gs_out_on) || gs_out_here == GS_OUT_DYING) return;
     if (gs_out_here == GS_OUT_WRITING && GS_OUT_SEQ_LOOK(&gs_out_state) == GS_OUT_WRITING) {
         /* Its own write: the stack running out on the way in, which is before any of it
            has gone, as a call again in that write goes no deeper. */
@@ -5187,8 +5197,7 @@ static void gs_out_flush_dying(void) {
 
 /* For good, as the process ends. The lock if it can be had: another thread may be held
    up in a write, or have been stopped holding it. */
-)GSRT"
-R"GSRT(static void gs_out_final(void) {
+static void gs_out_final(void) {
     if (!GS_OUT_LOOK(&gs_out_on)) return;
     int locked;
     int64_t since = gs_out_clock_ms();
