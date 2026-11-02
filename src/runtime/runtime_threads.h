@@ -407,6 +407,12 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
         failed = pthread_attr_init(&attr);
         if (!failed) {
             failed = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            /* Gust: musl's threads get 128 KB unless told otherwise, where glibc's get
+               what a thread's recursion is written against, 8 MB of address space that
+               costs nothing until it is used. */
+            #if defined(__linux__) && !defined(__GLIBC__)
+                if (!failed) failed = pthread_attr_setstacksize(&attr, (size_t)8 << 20);
+            #endif
             if (!failed) failed = pthread_create(&handle, &attr, gs_thread_main, t);
             pthread_attr_destroy(&attr);
         }

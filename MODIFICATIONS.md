@@ -488,6 +488,21 @@ costs registers on the way past it: without this, the check the dictionary's
 flood guard adds cost its hashmap benchmark 7%, and with it nothing measurable.
 `test/syntax/cold_fn.goose`.
 
+## `gust build --target`
+
+`gust build --target x86_64-linux-musl` builds through Zig's C compiler, `zig cc`, a
+clang that carries a C library for every target, so that one machine with nothing else
+installed builds for any of them: a static Linux executable with no dependencies, arm64
+Linux, Windows and macOS. Gust compiles to C, so this needed no backend of its own.
+
+Against the usual dynamic glibc build on one runner a static hello world resides in 88 KB
+rather than 1,964 KB (Rust 2,152 KB, Go 1,988 KB), of which the private part is 80 KB against
+144 KB, as glibc's pages are shared between processes. It goes from start to exit in 0.17 ms
+rather than 0.49 ms, and is 37 KB rather than 27 KB. The eight benchmarks ran no slower, and
+each resides in up to 1.8 MB less, zig's clang being a newer one than that runner's. A
+static executable cannot load libraries at run time. Workers get an 8 MB stack under musl as
+under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
+
 ## Safety checks
 
 - `src/runtime/runtime.h`, `src/runtime/runtime_impl.h`,

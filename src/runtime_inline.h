@@ -4358,6 +4358,12 @@ R"GSRT(        if (handle && !CloseHandle(handle)) gs_panic("cannot close thread
         failed = pthread_attr_init(&attr);
         if (!failed) {
             failed = pthread_attr_setdetachstate(&attr, PTHREAD_CREATE_DETACHED);
+            /* Gust: musl's threads get 128 KB unless told otherwise, where glibc's get
+               what a thread's recursion is written against, 8 MB of address space that
+               costs nothing until it is used. */
+            #if defined(__linux__) && !defined(__GLIBC__)
+                if (!failed) failed = pthread_attr_setstacksize(&attr, (size_t)8 << 20);
+            #endif
             if (!failed) failed = pthread_create(&handle, &attr, gs_thread_main, t);
             pthread_attr_destroy(&attr);
         }
@@ -4555,13 +4561,13 @@ GS_API void gs_free_msg(uint8_t *msg) {
 
 /* Gust: the senders' end and the receivers' end each have a lock and a cache line,
    as in Michael and Scott's two-lock queue, so that a message need not take one
-   lock's line from core to core and back (docs/gust/performance_designs.md). tail
+)GSRT"
+R"GSRT(   lock's line from core to core and back (docs/gust/performance_designs.md). tail
    and head count the messages ever put and taken, what waits being the difference,
    and each end keeps what it last saw of the other's count, looking again only when
    that runs out. What says how messages are held (the ring, its size, the message
    size, the limit) changes under both locks, so either is enough to read it. The lock
-)GSRT"
-R"GSRT(   order is head, then tail: a sender holding tail never waits for head, and goes back
+   order is head, then tail: a sender holding tail never waits for head, and goes back
    for both in that order where it has to.
 
    Small messages all of one size, the usual kind, wait in a ring (esize, their size; 0
@@ -4747,7 +4753,8 @@ static uint8_t gs_qput_slow(struct gs_qstate *s, const void *data, int64_t size)
         }
         if (s->tail - s->head == s->cap) gs_qring_grow(s);
         memcpy(s->ring + (s->tail & (s->cap - 1)) * size, data, (size_t)size);
-        s->seen_head = s->head;
+)GSRT"
+R"GSRT(        s->seen_head = s->head;
         GS_QSEQ_STORE(&s->tail, s->tail + 1);
         gs_qunlock_both(s);
     } else {
@@ -4759,8 +4766,7 @@ static uint8_t gs_qput_slow(struct gs_qstate *s, const void *data, int64_t size)
         n->size = size;
         memcpy(n + 1, data, (size_t)size);
         gs_qlock_both(s);
-)GSRT"
-R"GSRT(        if (s->tail - s->head >= s->limit) {
+        if (s->tail - s->head >= s->limit) {
             gs_qunlock_both(s);
             free(n);
             return 0;
