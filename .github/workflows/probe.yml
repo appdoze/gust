@@ -5,14 +5,17 @@ on:
     branches: ['probe/win-queue']
 
 jobs:
-  qover:
+  qrun:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, ubuntu-24.04, ubuntu-22.04, ubuntu-24.04-arm]
+        os: [windows-latest, ubuntu-latest, ubuntu-24.04, ubuntu-22.04, ubuntu-24.04-arm, macos-latest]
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -23,4 +26,9 @@ jobs:
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --target goose -j 4
       - name: Measure
-        run: python .github/probe/qover.py build/gust --out "$RUNNER_TEMP/qw"
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            python .github/probe/qrun.py build/Release/gust.exe --out "$RUNNER_TEMP/qw"
+          else
+            python .github/probe/qrun.py build/gust --out "$RUNNER_TEMP/qw"
+          fi
