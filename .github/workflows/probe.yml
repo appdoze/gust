@@ -12,7 +12,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        os: [windows-latest, ubuntu-latest, ubuntu-24.04, ubuntu-22.04, ubuntu-24.04-arm, macos-latest]
     defaults:
       run:
         shell: bash
@@ -28,7 +28,7 @@ jobs:
       - name: Measure
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
-            python .github/probe/qlock.py build/Release/gust.exe --out "$RUNNER_TEMP/qw"
+            python .github/probe/qlock2.py build/Release/gust.exe --out "$RUNNER_TEMP/qw"
           else
-            python .github/probe/qlock.py build/gust --out "$RUNNER_TEMP/qw"
+            python .github/probe/qlock2.py build/gust --out "$RUNNER_TEMP/qw"
           fi
