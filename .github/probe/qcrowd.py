@@ -69,12 +69,9 @@ def build(name, found, runtime):
 
 old = sources(args.old)
 new = sources(args.new)
-GUARD = "        gs_qyield_rest = GS_QYIELD_REST;\n"
-assert new["rt_c"].count(GUARD) == 1
 builds = {
     "main": build("main", old, old["rt_c"]),
     "crowd": build("crowd", new, new["rt_c"]),
-    "no guard": build("no guard", new, new["rt_c"].replace(GUARD, "        ;\n")),
 }
 progs = {n: b["conc"] for n, b in builds.items()}
 pairs = {n: b["qpair"] for n, b in builds.items()}
@@ -128,15 +125,13 @@ if shutil.which("lscpu"):
     print(run("lscpu | grep -E 'Model name'", shell=True).stdout.strip(), flush=True)
 start = time.time()
 limit("")
-for b in ("fanout", "pingpong", "spawnjoin", "spawnmany", "spawnwork"):
+for b in ("fanout", "pingpong"):
     rounds("all CPUs", progs, b, "", args.rounds)
 for b in ("idlepair", "busypair"):
     rounds("all CPUs", pairs, b, "", args.rounds)
 if WINDOWS or shutil.which("taskset"):
-    few = max(args.rounds // 2, 5)
+    few = args.rounds
     for label, cpus, conc, pair in (
-        ("two CPUs, two cores", "0,2", ("fanout", "pingpong"), ("idlepair", "busypair")),
-        ("two CPUs, one core", "0,1", ("fanout",), ()),
         ("one CPU", "0", ("fanout", "pingpong", "spawnjoin", "spawnwork"), ("idlepair", "busypair")),
     ):
         limit(cpus)
