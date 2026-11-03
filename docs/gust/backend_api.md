@@ -466,6 +466,20 @@ Later the same day (run 41545266589, the same way, with the queue's last change;
 A health check is level with tokio there, 149k each, and with a new connection per request Gust
 is behind at 17.4k against 18.3k for tokio and 18.8k to 18.9k for Go.
 
+On 3 November (run 41557509107, the same way, with a small lock for each end of a queue;
+`examples/api/results/2026-11-03-linux-ci-quick.json`):
+
+| server, mixed, 64 connections | req/s | p50 | p99 | p99.9 | peak RSS | server CPU |
+|---|---:|---:|---:|---:|---:|---:|
+| Gust, worker pool | 156k | 363 µs | 1.07 ms | 1.21 ms | 2.5 MB | 92% |
+| Rust, tokio, same HTTP | 149k | 418 µs | 0.91 ms | 1.23 ms | 3.8 MB | 97% |
+| Go, same HTTP as Gust | 113k | 486 µs | 1.80 ms | 4.44 ms | 9.2 MB | 96% |
+| Go net/http | 56k | 995 µs | 3.28 ms | 4.60 ms | 12.5 MB | 98% |
+
+tokio leads a health check, 159k to 154k, with the lower p99 there (0.95 ms to 1.08 ms), and with a
+new connection per request Gust is behind at 17.6k against 18.8k for tokio and 19.0k for Go. A
+server's executable is 167 KB against tokio's 1.2 MB and Go's 4.0 MB.
+
 ## 6. The networking module
 
 The example's sockets and its event loop moved into the standard library
