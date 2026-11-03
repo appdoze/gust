@@ -636,11 +636,11 @@ GS_API void gs_free_msg(uint8_t *msg) {
    for both in that order where it has to.
 
    The two locks are small ones of their own where a system's is large, on the line of what
-   they guard (gs_qsmall), so that a take moves one contended line and not two, and on four
-   CPUs a sender and three receivers took 0.45x to 0.60x as long on x86 and 0.18x to 0.27x on
-   ARM. glibc's mutex is 40 bytes and its condition variable 48, which put head a line from its
-   lock. On Windows a lock and a condition variable are a word each, so head was beside its lock
-   already, and the lock waits well: this took 1.14x as long there, and is left as it was.
+   they guard (gs_qsmall), so that a take moves one contended line and not two, and with all
+   their CPUs a sender and three receivers took 0.51x to 0.56x as long on x86 and 0.41x to 0.43x
+   on ARM. glibc's mutex is 40 bytes and its condition variable 48, which put head a line from
+   its lock. On Windows a lock and a condition variable are a word each, so head was beside its
+   lock already, and the lock waits well: this took 1.14x as long there, and is left as it was.
 
    Small messages all of one size, the usual kind, wait in a ring (esize, their size; 0
    until the first message, -1 once two sizes have shown it is not that kind), so that

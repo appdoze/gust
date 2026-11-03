@@ -147,16 +147,61 @@ Windows 0.26x Rust and 0.25x Go, and on Linux 1.31x and 1.70x, on another kind o
 
 Tried on the way, and dropped:
 
-- Not signalling a receiver already signalled and not yet back, which the first counters here
-  pointed at, on a PC where a slow run had thousands of such signals. It passed a check of every
-  interleaving for up to three threads on each end, 1.2 million states, but on the runners it gave
-  under 2%: one run with 172,852 such signals was not slow, and the slow ones were those with
-  receivers really asleep some 3,000 times, which the look at `tail` now avoids.
+- Not signalling a receiver already signalled and not yet back, on its own, with all the CPUs. The
+  first counters here pointed at it, on a PC where a slow run had thousands of such signals, but on
+  the runners it gave under 2%: one run with 172,852 such signals was not slow, and the slow ones
+  were those with receivers really asleep some 3,000 times, which the look at `tail` now avoids. It
+  came back below, for fewer CPUs than threads, where it does matter.
 - Polling less often the longer a receiver has waited: 0.86x on Windows' spread, but messages back
   and forth 1.16x to 1.53x on Windows and 1.35x on Linux.
 - Spinning four times as long before sleeping (0.95x) and backing off an eighth as long after a lost
   race (0.85x on Windows, 1.00x on Linux): neither near what the look gave.
 - Trying Windows's lock before waiting on it, as the POSIX path does: 1.26x, worse.
+
+**What limited Linux: head a cache line from its lock.** With the sender's line left alone, Linux
+stayed at about twice Windows's time, as there the receivers are what limit it: the sender runs far
+ahead and they pass the lock among them. glibc's mutex is 40 bytes and its condition variable 48, so
+`head` sat a line from its lock, and each take moved two contended lines, with each failed try of
+the lock taking that line as well. On Windows a lock and a condition variable are a word each, so
+they were all on one line by luck of their size. So off Windows each end now has a small lock of its
+own on the line of what it guards, which looks before it tries, and the mutex and condition variable
+are left for sleeping and for mailboxes. It passed a check of every interleaving for up to three
+threads on each end, 17.8 million states, and the checker caught both broken forms given to it.
+Medians of 25 rounds on one machine each (probe run 41554101613), `main` then and now:
+
+| a sender and three receivers | then | now | Rust | Go |
+|---|---:|---:|---:|---:|
+| AMD EPYC 7763 | 0.095 s | 0.054 s | 0.064 s | 0.055 s |
+| AMD EPYC 9V45 | 0.074 s | 0.038 s | 0.061 s | 0.042 s |
+| ARM Neoverse-N2 | 0.138 s | 0.059 s | 0.118 s | 0.129 s |
+| Apple, 3 CPUs | 0.063 s | 0.026 s | | |
+| Windows, unchanged but for the count below | 0.024 s | 0.025 s | 0.095 s | 0.079 s |
+
+An earlier probe had the same locks at 0.066 s on an Intel Xeon 8573C, against 0.149 s, Rust's 0.113 s
+and Go's 0.087 s. Messages back and forth went to 0.61x to 0.73x on x86 Linux, which puts them ahead of
+Go on both EPYCs, 0.77x and 0.73x of its time. On Windows the same locks took 1.14x as long, so they
+are not used there. A full Bench run on the merged code (41557505833) read 0.89x Rust and 0.92x Go for
+the sender and three receivers on Ubuntu, and 0.83x Go for messages back and forth.
+
+**A spin on ARM that did not spin.** `gs_pf_relax` was `yield`, which takes these CPUs about a cycle,
+so that 2,000 of them were over in about a microsecond and a receiver or a finished worker went to
+sleep almost at once. It is `isb` now, as Rust's spin hint is. Messages back and forth took 0.08x as
+long on Neoverse-N2 (0.81 s to 0.064 s, Rust 1.43 s, Go 0.035 s) and 0.06x on Apple (0.95 s to 0.057 s),
+a spawn and wait 0.09x and 0.15x, and one with work to do 0.21x and 0.46x.
+
+**One CPU.** A spin before sleeping is time the thread it waits for needs, so with one CPU to run on
+there is none now. Messages back and forth went from 11.6 s to 1.1 s on an EPYC 7763 (Rust 0.83 s), from
+11.5 s to 0.34 s on a 9V45 (Rust 0.29 s) and from 4.4 s to 0.54 s on Windows (Rust 1.2 s). A spawn and
+wait went from 0.21 s to 0.02 s. Go is far ahead here, 0.03 s, switching goroutines on one thread.
+
+**Fewer CPUs than threads.** A sender and three receivers on two CPUs took as much as 1.5 s, against
+about 0.05 s for Rust and Go. A receiver signalled but not yet running still counted as asleep, so
+that the sender took a lock and made a system call for each message until it ran. A sender now does
+not signal one already signalled and not yet back. Two logical CPUs of one core went to 0.22x to 0.26x
+of that time on x86 and 0.90x on ARM, and two cores of Windows to 0.12x. This is still the weak spot:
+on two separate cores an EPYC 7763 went to 0.75x, a 9V45 to 0.58x in one run and 1.86x in another,
+and Rust and Go hold 0.03 s to 0.07 s there. Spinning on a queue with more threads than CPUs is not
+yet solved.
 
 ## What Zig and Nim had to offer
 
