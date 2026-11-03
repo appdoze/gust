@@ -180,7 +180,8 @@ Medians of 25 rounds on one machine each (probe run 41554101613), `main` then an
 An earlier probe had the same locks at 0.066 s on an Intel Xeon 8573C, against 0.149 s, Rust's 0.113 s
 and Go's 0.087 s. Messages back and forth went to 0.61x to 0.73x on x86 Linux, which puts them ahead of
 Go on both EPYCs, 0.77x and 0.73x of its time. On Windows the same locks took 1.14x as long, so they
-are not used there.
+are not used there. A full Bench run on the merged code (41557505833) read 0.89x Rust and 0.92x Go for
+the sender and three receivers on Ubuntu, and 0.83x Go for messages back and forth.
 
 **A spin on ARM that did not spin.** `gs_pf_relax` was `yield`, which takes these CPUs about a cycle,
 so that 2,000 of them were over in about a microsecond and a receiver or a finished worker went to
