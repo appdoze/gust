@@ -816,6 +816,7 @@ GS_API int64_t gs_os_clock_ns(void) {
 GS_API void gs_os_sleep_ms(int64_t ms) {
     if (ms <= 0) return;
     gs_out_flush();
+    GS_RUNNING_ADD(-1);
 #ifdef _WIN32
     /* Sleep takes 32 bits, the largest of them meaning INFINITE: a longer
        sleep goes in parts. */
@@ -830,6 +831,7 @@ GS_API void gs_os_sleep_ms(int64_t ms) {
     ts.tv_nsec = (long)((ms % 1000) * 1000000);
     nanosleep(&ts, NULL);
 #endif
+    GS_RUNNING_ADD(1);
 }
 
 /* Entropy for seeding a PRNG (not cryptographic): /dev/urandom where there
