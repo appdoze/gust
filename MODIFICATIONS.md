@@ -708,6 +708,14 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
   command line where it matches `argv`, so that a name the ANSI code page cannot spell
   reaches the program whole, built or under `gust run` (`test/os_args.py`, new). Environment
   variable names and library paths keep their old conversion. `docs/stdlib.md` says so.
+- Off Windows a queue's two ends have small locks of their own, on the line of what they guard, so
+  that a take moves one contended cache line and not two: a sender and three receivers took 0.51x to
+  0.56x as long on x86 Linux, ahead of Rust and level with or ahead of Go, and 0.41x to 0.43x on ARM.
+  A sender no longer signals a receiver already signalled, which on two CPUs had it making a system
+  call per message for a time. `gs_pf_relax` is `isb` on ARM, as `yield` takes about a cycle there, and
+  messages back and forth took 0.06x to 0.08x as long. With one CPU there is no spin before a sleep:
+  0.03x to 0.12x as long on x86, and 0.81x on ARM. Every interleaving of the sleeping protocol was
+  checked for up to three threads on each end.
 - A queue's receivers look at what they last saw of the tail before they look at the tail's
   own cache line, so that with messages known to wait they leave it to the sender. On one
   machine a sender and three receivers went from 0.071 s to 0.027 s on Windows, past the
