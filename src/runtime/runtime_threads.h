@@ -207,15 +207,6 @@ static void gs_set_thread_end_hook(void (*f)(void)) {
 #if defined(_MSC_VER) && !defined(__clang__)
 #include <intrin.h>
 #endif
-static void gs_pf_relax(void) {
-#if defined(_MSC_VER) && !defined(__clang__)
-    _mm_pause();
-#elif defined(__x86_64__) || defined(__i386__)
-    __builtin_ia32_pause();
-#elif defined(__aarch64__)
-    __asm__ __volatile__("yield");
-#endif
-}
 
 /* A word another thread writes under a lock, read outside it, for a spin. */
 #if defined(_MSC_VER) && !defined(__clang__)
@@ -229,6 +220,30 @@ static void gs_pf_relax(void) {
 #define GS_SPIN_LOAD64(p) __atomic_load_n((p), __ATOMIC_RELAXED)
 #define GS_SPIN_STORE64(p, v) __atomic_store_n((p), (v), __ATOMIC_RELAXED)
 #endif
+
+static void gs_pf_relax(void) {
+#if defined(_MSC_VER) && !defined(__clang__)
+    _mm_pause();
+#elif defined(__x86_64__) || defined(__i386__)
+    __builtin_ia32_pause();
+#elif defined(__aarch64__)
+    /* As Rust's spin hint: `yield` takes these CPUs about a cycle, so that a spin counted
+       in them was over in a microsecond and a receiver slept at once. */
+    __asm__ __volatile__("isb sy");
+#endif
+}
+
+/* How many looks to give to something another thread will do before sleeping on it: one, with a
+   single CPU to run on, as that thread cannot do it meanwhile. */
+static int64_t gs_cpus_seen;
+static int gs_spin_for(int looks) {
+    int64_t cpus = GS_SPIN_LOAD64(&gs_cpus_seen);
+    if (!cpus) {
+        cpus = gs_os_threads();
+        GS_SPIN_STORE64(&gs_cpus_seen, cpus);
+    }
+    return cpus > 1 ? looks : 1;
+}
 
 /* A monotonic clock in nanoseconds, for a wait's deadline. */
 static int64_t gs_qclock_ns(void) {
@@ -337,7 +352,8 @@ static void *gs_thread_main(void *p)
                of workers would keep the cores from whoever starts the next. */
             if (spinner) {
                 gs_mutex_unlock(&gs_threads_mutex);
-                for (int s = 0; s < GS_THREAD_SPIN && !GS_SPIN_LOAD(&gs_thread_next); s++) gs_pf_relax();
+                int looks = gs_spin_for(GS_THREAD_SPIN);
+                for (int s = 0; s < looks && !GS_SPIN_LOAD(&gs_thread_next); s++) gs_pf_relax();
                 gs_mutex_lock(&gs_threads_mutex);
             }
             int64_t deadline = gs_qclock_ns() + GS_THREAD_KEEP_MS * 1000000;
@@ -440,7 +456,7 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
         gs_mutex_unlock(&gs_threads_mutex);
         gs_abort(err, file, line);
     }
-    int spins = GS_THREAD_SPIN;
+    int spins = gs_spin_for(GS_THREAD_SPIN);
     for (;;) {
         gs_thread *t = gs_threads;
         while (t && t->id != id) t = t->next;
@@ -619,6 +635,13 @@ GS_API void gs_free_msg(uint8_t *msg) {
    order is head, then tail: a sender holding tail never waits for head, and goes back
    for both in that order where it has to.
 
+   The two locks are small ones of their own where a system's is large, on the line of what
+   they guard (gs_qsmall), so that a take moves one contended line and not two, and on four
+   CPUs a sender and three receivers took 0.45x to 0.60x as long on x86 and 0.18x to 0.27x on
+   ARM. glibc's mutex is 40 bytes and its condition variable 48, which put head a line from its
+   lock. On Windows a lock and a condition variable are a word each, so head was beside its lock
+   already, and the lock waits well: this took 1.14x as long there, and is left as it was.
+
    Small messages all of one size, the usual kind, wait in a ring (esize, their size; 0
    until the first message, -1 once two sizes have shown it is not that kind), so that
    a message costs no allocation here and no free on another thread. Any other kind
@@ -627,11 +650,18 @@ GS_API void gs_free_msg(uint8_t *msg) {
    A receiver that sleeps says so before it looks for the last time, and a sender
    looks for sleepers after it has published its message, both in sequentially
    consistent order, so that one or the other sees the other's. A sender wakes one
-   holding head, which the receiver holds from that look until it is waiting. Every
-   interleaving of this was checked, for up to three threads on each end. */
+   holding mutex, which the receiver holds from that look until it is waiting. It does not
+   wake one for each message while a receiver it has signalled is on its way: with fewer CPUs than
+   threads that receiver may not run for some time, and each of those wakes was a lock and a
+   system call. Every interleaving of this was checked, for up to three threads on each end. */
 #define GS_QLINE 64
+#ifdef _WIN32
+typedef gs_mutex gs_qsmall;
+#define gs_qenter(l) gs_mutex_lock(l)
+#define gs_qleave(l) gs_mutex_unlock(l)
+#define GS_QHEAD_LOCK(s) (&(s)->mutex)
 struct gs_qstate {
-    gs_mutex tail_lock;
+    gs_qsmall tail_lock;
     int64_t tail;                  /* written under tail_lock */
     int64_t seen_head;             /* under tail_lock */
     char pad0[GS_QLINE];
@@ -641,9 +671,39 @@ struct gs_qstate {
     int64_t seen_tail;             /* written under mutex; gs_qany looks at it outside */
     char pad1[GS_QLINE];
     int64_t limit;
+#else
+typedef int32_t gs_qsmall;
+/* Held for a copy of a small message, so a look and a try, and on the rare holder off its CPU
+   a turn for it. A try only once the lock looks free, as a try takes the line. */
+static void gs_qenter(gs_qsmall *l) {
+    int looks = gs_spin_for(64);
+    for (int i = 0; ; i++) {
+        if (!__atomic_load_n(l, __ATOMIC_RELAXED) && !__atomic_exchange_n(l, 1, __ATOMIC_ACQUIRE)) return;
+        if (i < looks) {
+            for (int r = 0; r <= i && r < 16; r++) gs_pf_relax();
+        } else {
+            sched_yield();
+        }
+    }
+}
+#define gs_qleave(l) __atomic_store_n((l), 0, __ATOMIC_RELEASE)
+#define GS_QLINED __attribute__((aligned(GS_QLINE)))
+#define GS_QHEAD_LOCK(s) (&(s)->head_lock)
+struct gs_qstate {
+    gs_qsmall tail_lock GS_QLINED;
+    int64_t tail;                  /* written under tail_lock */
+    int64_t seen_head;             /* under tail_lock */
+    gs_qsmall head_lock GS_QLINED;
+    int64_t head;                  /* written under head_lock */
+    int64_t seen_tail;             /* written under head_lock; gs_qany looks at it outside */
+    gs_mutex mutex GS_QLINED;      /* for sleeping, which cond goes with, and the mailboxes */
+    gs_cond cond;
+    int64_t limit GS_QLINED;
+#endif
     uint8_t *ring;
     int64_t cap, esize;
     int64_t sleeping;              /* receivers waiting on cond, or about to */
+    int64_t signalled;             /* of those, how many a sender has signalled; under mutex */
     gs_qnode *first, *last;        /* the nodes, under both locks */
     struct gs_qbox_entry *boxes;   /* the threads' mailboxes of this type (gs_qbox), under mutex */
     char pad2[GS_QLINE];
@@ -727,16 +787,23 @@ static void gs_qlock(gs_mutex *m) {
 
 static void gs_qlock_both(struct gs_qstate *s) {
     gs_qlock(&s->mutex);
-    gs_qlock(&s->tail_lock);
+    #ifndef _WIN32
+        gs_qenter(&s->head_lock);
+    #endif
+    gs_qenter(&s->tail_lock);
 }
 
 static void gs_qunlock_both(struct gs_qstate *s) {
-    gs_mutex_unlock(&s->tail_lock);
+    gs_qleave(&s->tail_lock);
+    #ifndef _WIN32
+        gs_qleave(&s->head_lock);
+    #endif
     gs_mutex_unlock(&s->mutex);
 }
 
 static void gs_qspin(struct gs_qstate *s) {
-    for (int i = 0; i < GS_QSPIN && !gs_qany(s); i++) gs_pf_relax();
+    int looks = gs_spin_for(GS_QSPIN);
+    for (int i = 0; i < looks && !gs_qany(s); i++) gs_pf_relax();
 }
 
 /* Room for one more in the ring (cap a power of two), under both locks. A message
@@ -779,20 +846,29 @@ struct gs_qbox_entry {
 };
 
 GS_API void gs_qinit(gs_queue *q) {
-    struct gs_qstate *s = (struct gs_qstate *)calloc(1, sizeof(struct gs_qstate));
-    if (!s) gs_panic("out of memory creating a queue");
+    struct gs_qstate *s;
+    #ifdef _WIN32
+        s = (struct gs_qstate *)calloc(1, sizeof(struct gs_qstate));
+        if (!s) gs_panic("out of memory creating a queue");
+        gs_mutex_init(&s->tail_lock);
+    #else
+        if (posix_memalign((void **)&s, GS_QLINE, sizeof(struct gs_qstate))) gs_panic("out of memory creating a queue");
+        memset(s, 0, sizeof(struct gs_qstate));
+    #endif
     s->limit = INT64_MAX;
-    gs_mutex_init(&s->tail_lock);
     gs_mutex_init(&s->mutex);
     gs_cond_init_timed(&s->cond);
     *q = s;
 }
 
-/* A sleeper, if the look for one saw one: under head, so that a receiver between its
-   last look and its wait can't miss this. */
+/* A sleeper, if the look for one saw one not yet signalled: under mutex, so that a receiver
+   between its last look and its wait can't miss this. */
 static void gs_qwake(struct gs_qstate *s) {
     gs_qlock(&s->mutex);
-    gs_cond_signal(&s->cond);
+    if (s->sleeping > s->signalled) {
+        gs_qstore(&s->signalled, s->signalled + 1);
+        gs_cond_signal(&s->cond);
+    }
     gs_mutex_unlock(&s->mutex);
 }
 
@@ -831,16 +907,16 @@ static uint8_t gs_qput_slow(struct gs_qstate *s, const void *data, int64_t size)
         GS_QSEQ_STORE(&s->tail, s->tail + 1);
         gs_qunlock_both(s);
     }
-    if (GS_QSEQ_LOAD(&s->sleeping)) gs_qwake(s);
+    if (GS_QSEQ_LOAD(&s->sleeping) > gs_qload(&s->signalled)) gs_qwake(s);
     return 1;
 }
 
 /* A message for the ring is copied in under the senders' lock, being small. */
 GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size) {
     struct gs_qstate *s = *q;
-    gs_qlock(&s->tail_lock);
+    gs_qenter(&s->tail_lock);
     if (s->esize != size) {
-        gs_mutex_unlock(&s->tail_lock);
+        gs_qleave(&s->tail_lock);
         return gs_qput_slow(s, data, size);
     }
     int64_t t = s->tail;
@@ -849,18 +925,18 @@ GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size) {
         s->seen_head = gs_qload(&s->head);
         if (t - s->seen_head >= room) {
             int full = t - s->seen_head >= s->limit;
-            gs_mutex_unlock(&s->tail_lock);
+            gs_qleave(&s->tail_lock);
             return full ? 0 : gs_qput_slow(s, data, size);
         }
     }
     memcpy(s->ring + (t & (s->cap - 1)) * size, data, (size_t)size);
     GS_QSEQ_STORE(&s->tail, t + 1);
-    gs_mutex_unlock(&s->tail_lock);
-    if (GS_QSEQ_LOAD(&s->sleeping)) gs_qwake(s);
+    gs_qleave(&s->tail_lock);
+    if (GS_QSEQ_LOAD(&s->sleeping) > gs_qload(&s->signalled)) gs_qwake(s);
     return 1;
 }
 
-/* The first message, under head's lock, or NULL if there is none: a node, or from
+/* The first message, holding head's lock, or NULL if there is none: a node, or from
    the ring this thread's copy of it. A large ring gives its memory back once it is
    empty. */
 static gs_qnode *gs_qtake(struct gs_qstate *s) {
@@ -876,17 +952,17 @@ static gs_qnode *gs_qtake(struct gs_qstate *s) {
         memcpy(n + 1, s->ring + (h & (s->cap - 1)) * s->esize, (size_t)s->esize);
         gs_qstore(&s->head, h + 1);
         if (s->cap >= 65536 && h + 1 == s->seen_tail) {
-            gs_qlock(&s->tail_lock);
+            gs_qenter(&s->tail_lock);
             if (s->tail == h + 1) {
                 free(s->ring);
                 s->ring = NULL;
                 s->cap = 0;
             }
-            gs_mutex_unlock(&s->tail_lock);
+            gs_qleave(&s->tail_lock);
         }
         return n;
     }
-    gs_qlock(&s->tail_lock);
+    gs_qenter(&s->tail_lock);
     gs_qnode *n = s->first;
     if (n) {
         s->first = n->next;
@@ -895,8 +971,25 @@ static gs_qnode *gs_qtake(struct gs_qstate *s) {
         /* Nodes keep no sight of tail, and an old one would say there is a message for ever. */
         gs_qstore(&s->seen_tail, s->head);
     }
-    gs_mutex_unlock(&s->tail_lock);
+    gs_qleave(&s->tail_lock);
     return n;
+}
+
+/* A take by a thread holding no lock. */
+static gs_qnode *gs_qtake_now(struct gs_qstate *s) {
+    gs_qenter(GS_QHEAD_LOCK(s));
+    gs_qnode *n = gs_qtake(s);
+    gs_qleave(GS_QHEAD_LOCK(s));
+    return n;
+}
+
+/* A take by a thread holding mutex, which on Windows is head's lock. */
+static gs_qnode *gs_qtake_held(struct gs_qstate *s) {
+    #ifdef _WIN32
+        return gs_qtake(s);
+    #else
+        return gs_qtake_now(s);
+    #endif
 }
 
 GS_API void gs_qfree(gs_qnode *n) {
@@ -910,11 +1003,9 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
        not after losing a few races for a message: several receivers of a
        busy queue lose often, and one asleep makes every send a wakeup, a trip
        through the kernel for a message another receiver takes anyway. */
-    for (int spins = GS_QSPIN; spins > 0; spins--) {
+    for (int spins = gs_spin_for(GS_QSPIN); spins > 0; spins--) {
         if (gs_qany(s)) {
-            gs_qlock(&s->mutex);
-            gs_qnode *n = gs_qtake(s);
-            gs_mutex_unlock(&s->mutex);
+            gs_qnode *n = gs_qtake_now(s);
             if (n) return n;
             for (int r = 0; r < GS_QLOST; r++) gs_pf_relax();
         }
@@ -922,12 +1013,16 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
     }
     gs_out_flush();
     gs_qlock(&s->mutex);
-    gs_qnode *n = gs_qtake(s);
+    gs_qnode *n = gs_qtake_held(s);
     while (!n) {
         GS_QSEQ_ADD(&s->sleeping, 1);
-        if (GS_QSEQ_LOAD(&s->tail) == s->head) gs_cond_wait(&s->cond, &s->mutex);
+        int64_t t = GS_QSEQ_LOAD(&s->tail);
+        if (t == GS_QLOOK(&s->head)) {
+            gs_cond_wait(&s->cond, &s->mutex);
+            if (s->signalled) gs_qstore(&s->signalled, s->signalled - 1);
+        }
         GS_QSEQ_ADD(&s->sleeping, -1);
-        n = gs_qtake(s);
+        n = gs_qtake_held(s);
     }
     gs_mutex_unlock(&s->mutex);
     return n;
@@ -938,24 +1033,25 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
     /* Caps ms so the deadline in nanoseconds can't overflow. */
     if (ms > INT64_MAX / 2000000) ms = INT64_MAX / 2000000;
     int64_t deadline = ms > 0 ? gs_qclock_ns() + ms * 1000000 : 0;
-    gs_qlock(&s->mutex);
-    gs_qnode *n = gs_qtake(s);
+    gs_qnode *n = gs_qtake_now(s);
     if (!n && ms > 0) {
-        gs_mutex_unlock(&s->mutex);
         gs_qspin(s);
         gs_out_flush();
         gs_qlock(&s->mutex);
-        n = gs_qtake(s);
+        n = gs_qtake_held(s);
         int waiting = 1;
         while (!n && waiting) {
             GS_QSEQ_ADD(&s->sleeping, 1);
-            if (GS_QSEQ_LOAD(&s->tail) == s->head)
+            int64_t t = GS_QSEQ_LOAD(&s->tail);
+            if (t == GS_QLOOK(&s->head)) {
                 waiting = gs_cond_wait_until(&s->cond, &s->mutex, deadline);
+                if (s->signalled) gs_qstore(&s->signalled, s->signalled - 1);
+            }
             GS_QSEQ_ADD(&s->sleeping, -1);
-            n = gs_qtake(s);
+            n = gs_qtake_held(s);
         }
+        gs_mutex_unlock(&s->mutex);
     }
-    gs_mutex_unlock(&s->mutex);
     return n;
 }
 
