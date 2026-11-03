@@ -1,0 +1,181 @@
+"""Every interleaving of the queue with head under a small lock of its own, sleepers under the
+mutex, and a count of receivers signalled, under sequentially consistent atomics. A state no
+thread can move from, spurious wakes aside, is a bug unless all that is left is receivers asleep
+with no message there for them. Broken forms show that the checker finds what it looks for.
+
+A sender: lock tail; store tail+1; unlock tail; load sleeping; load signalled; if sleeping is
+more, lock mutex; if sleeping > signalled: signalled += 1, signal; unlock mutex.
+A receiver, spinning: load tail; load head; if they differ, lock head; take if there is one;
+unlock head. Then, or instead, sleeping: lock mutex; loop { lock head; take, if there is one
+unlock both and be done; unlock head; sleeping++; load tail; load head; if equal: { wait
+(mutex unlocked meanwhile); if signalled: signalled -= 1 }; sleeping--; }.
+Each load and store is its own step.
+
+    python qmodel3.py [largest senders+receivers]
+"""
+import sys
+from collections import deque
+
+
+def initial(senders, receivers):
+    threads = tuple([("S", 0, 0)] * senders + [("R", 0, 0)] * receivers)
+    return (threads, 0, 0, 0, 0, None, None, None, frozenset(), frozenset())
+
+
+def moves(st, v):
+    threads, tail, head, sleeping, signalled, tl, hl, ml, waiters, woken = st
+    for i, (kind, pc, loc) in enumerate(threads):
+        def go(pc2, loc2=None, **kw):
+            t = list(threads)
+            t[i] = (kind, pc2, loc if loc2 is None else loc2)
+            d = dict(tail=tail, head=head, sleeping=sleeping, signalled=signalled, tl=tl, hl=hl, ml=ml, waiters=waiters, woken=woken)
+            d.update(kw)
+            return (tuple(t), d["tail"], d["head"], d["sleeping"], d["signalled"], d["tl"], d["hl"], d["ml"], d["waiters"], d["woken"])
+
+        def signal(pc2):
+            if waiters:
+                for w in waiters:
+                    yield go(pc2, waiters=waiters - {w}, woken=woken | {w})
+            else:
+                yield go(pc2)
+
+        if pc == "done":
+            continue
+        if kind == "S":
+            if pc == 0 and tl is None:
+                yield go(1, tl=i)
+            elif pc == 1:
+                yield go(2, tail=tail + 1)
+            elif pc == 2:
+                yield go(3, tl=None)
+            elif pc == 3:
+                yield go(4, loc2=sleeping)
+            elif pc == 4:
+                yield go(5 if loc > signalled else "done")
+            elif pc == 5:
+                # Broken: signals under head's lock, which a sleeper does not hold as it waits.
+                if v == "signal under head's lock":
+                    if hl is None:
+                        yield go(6, hl=i)
+                elif ml is None:
+                    yield go(6, ml=i)
+            elif pc == 6:
+                yield go(7 if sleeping > signalled else 9)
+            elif pc == 7:
+                yield go(8, signalled=signalled + 1)
+            elif pc == 8:
+                yield from signal(9)
+            elif pc == 9:
+                if v == "signal under head's lock":
+                    yield go("done", hl=None)
+                else:
+                    yield go("done", ml=None)
+        else:
+            if pc == 0:
+                # Spin, or have given up on it.
+                yield go(10)
+                yield go(20)
+            elif pc == 10:
+                yield go(11, loc2=tail)
+            elif pc == 11:
+                yield go(12 if loc != head else 20)
+            elif pc == 12 and hl is None:
+                yield go(13, hl=i)
+            elif pc == 13:
+                yield go(14, loc2=tail)
+            elif pc == 14:
+                yield go(15, head=head + 1) if head != loc else go(16)
+            elif pc == 15:
+                yield go("done", hl=None)
+            elif pc == 16:
+                yield go(20, hl=None)
+            elif pc == 20 and ml is None:
+                yield go(21, ml=i)
+            elif pc == 21 and hl is None:
+                yield go(22, hl=i)
+            elif pc == 22:
+                yield go(23, loc2=tail)
+            elif pc == 23:
+                yield go(24, head=head + 1) if head != loc else go(26)
+            elif pc == 24:
+                yield go(25, hl=None)
+            elif pc == 25:
+                yield go("done", ml=None)
+            elif pc == 26:
+                yield go(27, hl=None)
+            elif pc == 27:
+                yield go(28, sleeping=sleeping + 1)
+            elif pc == 28:
+                # Broken: waits on what it saw before it said it sleeps.
+                if v == "no look after saying so":
+                    yield go(30, ml=None, waiters=waiters | {i})
+                else:
+                    yield go(29, loc2=tail)
+            elif pc == 29:
+                if loc == head:
+                    yield go(30, ml=None, waiters=waiters | {i})
+                else:
+                    yield go(33)
+            elif pc == 30:
+                # Asleep until signalled; then takes the mutex again.
+                if i in woken and ml is None:
+                    yield go(32, ml=i, woken=woken - {i})
+            elif pc == 32:
+                yield go(33, signalled=max(signalled - 1, 0))
+            elif pc == 33:
+                yield go(21, sleeping=sleeping - 1)
+
+
+def spurious(st):
+    threads, tail, head, sleeping, signalled, tl, hl, ml, waiters, woken = st
+    for w in waiters:
+        yield (threads, tail, head, sleeping, signalled, tl, hl, ml, waiters - {w}, woken | {w})
+
+
+def stuck(st):
+    threads, tail, head = st[0], st[1], st[2]
+    waiters = st[8]
+    left = [i for i, t in enumerate(threads) if t[1] != "done"]
+    if not left:
+        return False
+    return not (all(threads[i][0] == "R" and i in waiters for i in left) and head == tail)
+
+
+def check(senders, receivers, v):
+    start = initial(senders, receivers)
+    seen = {start}
+    work = deque([start])
+    while work:
+        st = work.popleft()
+        nxt = list(moves(st, v))
+        if not nxt and stuck(st):
+            return len(seen), st
+        if v.endswith("spurious wakes"):
+            nxt += list(spurious(st))
+        for n in nxt:
+            if n not in seen:
+                seen.add(n)
+                work.append(n)
+    return len(seen), None
+
+
+LARGEST = int(sys.argv[1]) if len(sys.argv) > 1 else 5
+SIZES = [(s, r) for s, r in ((1, 1), (2, 1), (1, 2), (2, 2), (3, 2), (2, 3), (3, 3)) if s + r <= LARGEST]
+bad = 0
+for v, should_fail in (("as designed", False), ("as designed, spurious wakes", False),
+                       ("signal under head's lock", True), ("no look after saying so", True)):
+    caught = 0
+    total = 0
+    for senders, receivers in SIZES:
+        states, st = check(senders, receivers, v)
+        total += states
+        if st:
+            caught += 1
+            if not should_fail:
+                print(f"   {senders}x{receivers}: {st}")
+    print(f"{v:<30} {total:>9} states over {len(SIZES)} sizes, stuck in {caught}", flush=True)
+    if should_fail != (caught > 0):
+        print(f"   WRONG: expected {'a bug' if should_fail else 'none'} here", flush=True)
+        bad += 1
+print("problems:", bad)
+sys.exit(1 if bad else 0)
