@@ -310,7 +310,8 @@ program ends, and a `thread_fn` parameter of that type takes it.
 with the result of running them in order, which the checker proves: the body
 writes only its own locals and the enclosing code's owned arrays at its own
 index (`out[i]`), reads such an array only there, writes no global, and
-calls nothing that does. `reduce x += e;` adds into a variable around the
+calls nothing that does. It may read files, but printing and changing files
+are errors: use `thread_fn` workers for those. `reduce x += e;` adds into a variable around the
 loop, bit for bit as the loop run in order would. `gust run` runs the
 iterations in order.
 

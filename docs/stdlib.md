@@ -724,13 +724,17 @@ ever reads the bytes above a stack's top. `false` means at least one OS
 request failed.
 
 Paths are UTF-8 on every platform; on Windows the runtime converts them to
-UTF-16 for the system's wide APIs. Environment values and the program's
-arguments are UTF-8 too. On Windows the arguments pass through the ANSI
-code page first, so they keep only the characters that code page has. A
-path is refused, and the call returns `false`, if it is longer than 4095
-bytes, contains a NUL byte, or (on Windows) is not valid UTF-8, because a
-path that was cut short or decoded another way could name a different
-file.
+UTF-16 for the system's wide APIs, and past Windows' old 260-character limit
+it gives them the path's `\\?\` form itself, so a long path works as a short
+one does. Environment values and the program's arguments are UTF-8 too. On
+Windows a built program's arguments come from the wide command line, so they
+keep characters the ANSI code page lacks; where the program's `argv` is not
+that line's (a library's `goose_init` given its own), they pass through the
+code page and keep only what it has. A path is refused, and the call returns
+`false`, if it is longer than 4095 bytes (on Windows, also if its absolute
+form with that prefix is), contains a NUL byte, or (on Windows) is not valid
+UTF-8, because a path that was cut short or decoded another way could name a
+different file.
 
 `read_file` appends nothing when it fails. `read_stdin` appends the bytes
 unchanged, on Windows too, where the C library's text mode would turn each

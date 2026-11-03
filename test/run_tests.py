@@ -2462,6 +2462,17 @@ def main():
     if cc:
         r.show_task(extern_dylib)
 
+    # Gust: arguments the system's code page cannot spell, built and in process.
+    def os_args():
+        from os_args import check_os_args
+        try:
+            check_os_args(exe, gendir, jit, cc)
+            r.ok("os args: non-ASCII arguments, the C runtime's quoting, a file opened by such a name")
+        except (RuntimeError, OSError, subprocess.TimeoutExpired) as e:
+            r.fail("os args", str(e))
+    if (cc or jit) and not extra:
+        r.show_task(os_args)
+
     # Gust: a C header as a package (gust cimport), called from a program
     # under the JIT and built.
     def cimport():

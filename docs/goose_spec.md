@@ -2466,6 +2466,12 @@ what another writes. The checker proves it of the body:
   spheres to read.
 * What it calls writes no global and no variable of the enclosing code,
   and calls no `extern fn` outside the standard library.
+* Neither it nor what it calls prints, or calls a standard library function
+  that changes what every iteration shares: one that writes, renames or
+  removes a file or directory, reads or writes a standard stream, or uses a
+  socket. Which iteration got there first would show, and two may name the
+  same file. Reading a file or listing a directory is allowed: nothing in the
+  loop can change them. `thread_fn` workers do the rest.
 * It uses no threads or queues. `return` and a `break` out of the body are
   errors; `continue` ends the iteration.
 
