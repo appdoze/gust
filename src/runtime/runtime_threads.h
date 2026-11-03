@@ -830,12 +830,16 @@ static void gs_qunlock_both(struct gs_qstate *s) {
 /* With one CPU, a turn given up before sleeping: what is waited for may be done by the time it
    comes back, with no sleep and no wakeup, and a sender can fill a queue for receivers to take from
    in one go. Messages back and forth took 0.33x as long. But a thread giving up its turn to one busy
-   with something else may not see the CPU for a time slice, where one that sleeps is woken at once,
-   so a turn that took long and brought little is the last for a while. */
+   with something else may not see the CPU for a time slice, where one that sleeps is woken at once:
+   100x to 220x as long, beside such a thread. So a turn that took long and brought little is the last
+   for a while, and for twice as long each time that goes on. One such turn in passing costs little,
+   and on Windows, where they do come by now and then, a fixed long rest lost half of what this gives. */
 #define GS_QYIELD_SLOW_NS 500000
 #define GS_QYIELD_WORTH 64
-#define GS_QYIELD_REST 1024
+#define GS_QYIELD_REST 64
+#define GS_QYIELD_DOUBLINGS 10
 static GS_TLS int gs_qyield_rest;
+static GS_TLS int gs_qyield_doublings;
 static void gs_qgive_way(struct gs_qstate *s) {
     if (!GS_ONE_CPU()) return;
     if (gs_qyield_rest > 0) {
@@ -845,8 +849,12 @@ static void gs_qgive_way(struct gs_qstate *s) {
     int64_t t = GS_QLOOK(&s->tail);
     int64_t since = gs_qclock_ns();
     GS_YIELD();
-    if (gs_qclock_ns() - since > GS_QYIELD_SLOW_NS && GS_QLOOK(&s->tail) - t < GS_QYIELD_WORTH)
-        gs_qyield_rest = GS_QYIELD_REST;
+    if (gs_qclock_ns() - since > GS_QYIELD_SLOW_NS && GS_QLOOK(&s->tail) - t < GS_QYIELD_WORTH) {
+        gs_qyield_rest = GS_QYIELD_REST << gs_qyield_doublings;
+        if (gs_qyield_doublings < GS_QYIELD_DOUBLINGS) gs_qyield_doublings++;
+    } else {
+        gs_qyield_doublings = 0;
+    }
 }
 
 static void gs_qspin(struct gs_qstate *s) {
