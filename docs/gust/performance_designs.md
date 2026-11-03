@@ -198,10 +198,59 @@ wait went from 0.21 s to 0.02 s. Go is far ahead here, 0.03 s, switching gorouti
 about 0.05 s for Rust and Go. A receiver signalled but not yet running still counted as asleep, so
 that the sender took a lock and made a system call for each message until it ran. A sender now does
 not signal one already signalled and not yet back. Two logical CPUs of one core went to 0.22x to 0.26x
-of that time on x86 and 0.90x on ARM, and two cores of Windows to 0.12x. This is still the weak spot:
-on two separate cores an EPYC 7763 went to 0.75x, a 9V45 to 0.58x in one run and 1.86x in another,
-and Rust and Go hold 0.03 s to 0.07 s there. Spinning on a queue with more threads than CPUs is not
-yet solved.
+of that time on x86 and 0.90x on ARM, and two cores of Windows to 0.12x. On two separate cores an EPYC
+7763 went to 0.75x and a 9V45 to 0.58x in one run and 1.86x in another, with Rust and Go at 0.03 s to
+0.07 s there, which the next part goes on with.
+
+**Fewer CPUs still: looks that keep a thread from its CPU.** With CPU time and switches counted for
+each run, a sender and three receivers on two cores of an Intel Xeon showed 89,073 switches asked for
+in 0.49 s. Receivers kept looking while the sender waited for a CPU, the queue ran dry, and they all
+slept and woke by turns. So a count of threads at work now cuts the looks to a thirty-second when it
+is over the CPUs. It leaves out those asleep on a queue, on another thread or in a sleep, as a worker
+with nothing to do is not a crowd: counting all of them made messages between two others 3.5x to 19x
+slower beside sixteen idle workers. Threads asleep in the network or on stdin still count, which can
+only cut a program's looks short. Medians on one machine each, `main` then and now (probe run
+41737439317):
+
+| a sender and three receivers on two cores | then | now | Rust | Go |
+|---|---:|---:|---:|---:|
+| AMD EPYC 7763 | 0.036 s | 0.017 s | 0.079 s | 0.044 s |
+| AMD EPYC 9V74 | 0.023 s | 0.012 s | 0.058 s | 0.031 s |
+| ARM Neoverse-N2 | 0.150 s | 0.134 s | 0.154 s | 0.100 s |
+| Windows | 0.017 s | 0.018 s | 0.023 s | 0.064 s |
+
+Still behind Go on ARM. And an Intel Xeon went from 0.49 s to 0.21 s in an earlier probe (41734664661,
+with the count of all threads), against Rust's 0.13 s and Go's 0.07 s. Both CPUs stay busy there with few
+switches, so `tail`'s line going back and forth for each message may be what is left, though that was
+not measured.
+
+Beside a thread busy on every CPU, messages back and forth went to 0.21x to 0.42x on x86 Linux and 0.19x
+on ARM, and stayed level on Windows and Apple. The one that got worse is two CPUs of x86 Linux beside two
+busy threads: 1.9x to 4.1x, from 0.012 s to 0.030 s for 2,000 rounds up to about 0.050 s, as the pair had
+done well spinning there.
+
+**One CPU: a turn given up before sleeping.** With no looks at all, a thread now gives up its turn once
+before it sleeps, which often saves the sleep and the wakeup. Messages back and forth took 0.33x as long
+on x86 Linux, 0.41x on ARM and 0.28x on Windows, ahead of Rust on all of them (Go, on one thread, stays
+far ahead), and a sender and three receivers 0.31x to 0.81x on x86 Linux and 0.35x to 0.41x on ARM, level
+with Go or ahead. A spawn with work to do took 0.60x to 0.82x on Linux and 0.28x on Windows.
+
+That needs a guard, as the first probe of it with several CPUs showed: as much as 143x as long on Apple
+beside busy threads, as a thread that gives up its turn may not see the CPU for a time slice, where one
+asleep is woken at once. So it is for one CPU only, and even there a pair beside one busy thread took 92x
+to 220x as long, 0.04 s to 3.9 s. So a turn that took long and brought little is the last for a while. A
+fixed rest of 1,024 waits lost half of the gain on Windows, where something else takes the CPU now and
+then, so the rest starts at 64 and doubles only while such turns go on, up to 65,536 (probe run
+41739615991). That leaves a short cost while it learns: 2,000 rounds beside a busy thread take 1.98x on
+x86 Linux, 3.28x on ARM and 18.7x on Windows (0.016 s to 0.30 s).
+
+Tried and dropped here:
+
+- A small lock whose waiter sleeps on a futex, which was the first suspect: 1.18x to 1.83x with all the CPUs.
+- A small lock whose waiter naps: 0.79x to 1.00x with all the CPUs, but 1.44x to 2.23x on one.
+- Spin length that follows whether it has been paying off: 0.84x to 1.10x on two cores, less than the count.
+- No wake while a receiver is spinning, as Go does for its Ps: 0.48x to 1.06x on two cores, but messages back
+  and forth 1.55x on the Xeon.
 
 ## What Zig and Nim had to offer
 

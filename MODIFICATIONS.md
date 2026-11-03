@@ -693,6 +693,11 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
 
 ## Runtime
 
+- With more threads at work than CPUs a thread looks a thirty-second as long before it sleeps, the count
+  leaving out those asleep: a sender and three receivers on two cores took 0.47x to 0.89x as long on x86
+  Linux and ARM. With one CPU it gives up its turn once before sleeping, which took messages back and forth
+  to 0.28x to 0.41x and ahead of Rust, with a guard for a neighbour busy with something else, beside which
+  that alone took 92x to 220x as long. `docs/gust/performance_designs.md` has the costs.
 - Off Windows a queue's two ends have small locks of their own, on the line of what they guard, so
   that a take moves one contended cache line and not two: a sender and three receivers took 0.51x to
   0.56x as long on x86 Linux, ahead of Rust and level with or ahead of Go, and 0.41x to 0.43x on ARM.
