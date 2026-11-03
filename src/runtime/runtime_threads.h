@@ -233,8 +233,21 @@ static void gs_pf_relax(void) {
 #endif
 }
 
-/* How many looks to give to something another thread will do before sleeping on it: one, with a
-   single CPU to run on, as that thread cannot do it meanwhile. */
+/* How many threads are at work: main and each worker's job, less those asleep on a queue, on
+   another thread or in a sleep. A worker with nothing to do is not a crowd: counting all of them
+   made messages between two others 3.5x to 19x slower. */
+static int64_t gs_running = 1;
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GS_RUNNING_ADD(n) ((void)_InterlockedExchangeAdd64((volatile __int64 *)&gs_running, (n)))
+#else
+#define GS_RUNNING_ADD(n) ((void)__atomic_add_fetch(&gs_running, (n), __ATOMIC_RELAXED))
+#endif
+
+/* How many looks to give to something another thread will do before sleeping on it. One with a
+   single CPU to run on, as that thread cannot do it meanwhile. Few with more threads at work than
+   CPUs, as a look may be keeping that thread from a CPU: then the queue runs dry and they all sleep
+   and wake by turns, which is what a sender and three receivers on two CPUs were doing, thousands
+   of times a run. */
 static int64_t gs_cpus_seen;
 static int gs_spin_for(int looks) {
     int64_t cpus = GS_SPIN_LOAD64(&gs_cpus_seen);
@@ -242,8 +255,16 @@ static int gs_spin_for(int looks) {
         cpus = gs_os_threads();
         GS_SPIN_STORE64(&gs_cpus_seen, cpus);
     }
-    return cpus > 1 ? looks : 1;
+    if (cpus <= 1) return 1;
+    return GS_SPIN_LOAD64(&gs_running) > cpus ? (looks >> 5) + 1 : looks;
 }
+
+#define GS_ONE_CPU() (GS_SPIN_LOAD64(&gs_cpus_seen) == 1)
+#ifdef _WIN32
+#define GS_YIELD() ((void)SwitchToThread())
+#else
+#define GS_YIELD() ((void)sched_yield())
+#endif
 
 /* A monotonic clock in nanoseconds, for a wait's deadline. */
 static int64_t gs_qclock_ns(void) {
@@ -314,6 +335,7 @@ static void *gs_thread_main(void *p)
     gs_thread *t = (gs_thread *)p;
     gs_native_stack_init();
     while (t) {
+        GS_RUNNING_ADD(1);
         gs_regions_begin(gs_workerregions);
         gs_current_thread_id = t->id;
         int aborted = 0;
@@ -334,6 +356,7 @@ static void *gs_thread_main(void *p)
            but for those few regions, and those go before this thread does.
            No waiter retains a pointer to this record. The detached native thread
            releases its own final OS stack/TLS state on returning below. */
+        GS_RUNNING_ADD(-1);
         gs_mutex_lock(&gs_threads_mutex);
         gs_thread **slot = &gs_threads;
         while (*slot != t) slot = &(*slot)->next;
@@ -469,10 +492,13 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                 gs_pf_relax();
                 spins--;
             }
+            if (GS_ONE_CPU()) GS_YIELD();
             gs_mutex_lock(&gs_threads_mutex);
             continue;
         }
+        GS_RUNNING_ADD(-1);
         gs_cond_wait(&gs_threads_done, &gs_threads_mutex);
+        GS_RUNNING_ADD(1);
     }
     uint8_t returned = 1;
     if (msg) {
@@ -801,6 +827,28 @@ static void gs_qunlock_both(struct gs_qstate *s) {
     gs_mutex_unlock(&s->mutex);
 }
 
+/* With one CPU, a turn given up before sleeping: what is waited for may be done by the time it
+   comes back, with no sleep and no wakeup, and a sender can fill a queue for receivers to take from
+   in one go. Messages back and forth took 0.33x as long. But a thread giving up its turn to one busy
+   with something else may not see the CPU for a time slice, where one that sleeps is woken at once,
+   so a turn that took long and brought little is the last for a while. */
+#define GS_QYIELD_SLOW_NS 500000
+#define GS_QYIELD_WORTH 64
+#define GS_QYIELD_REST 1024
+static GS_TLS int gs_qyield_rest;
+static void gs_qgive_way(struct gs_qstate *s) {
+    if (!GS_ONE_CPU()) return;
+    if (gs_qyield_rest > 0) {
+        gs_qyield_rest--;
+        return;
+    }
+    int64_t t = GS_QLOOK(&s->tail);
+    int64_t since = gs_qclock_ns();
+    GS_YIELD();
+    if (gs_qclock_ns() - since > GS_QYIELD_SLOW_NS && GS_QLOOK(&s->tail) - t < GS_QYIELD_WORTH)
+        gs_qyield_rest = GS_QYIELD_REST;
+}
+
 static void gs_qspin(struct gs_qstate *s) {
     int looks = gs_spin_for(GS_QSPIN);
     for (int i = 0; i < looks && !gs_qany(s); i++) gs_pf_relax();
@@ -1011,6 +1059,7 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
         }
         gs_pf_relax();
     }
+    gs_qgive_way(s);
     gs_out_flush();
     gs_qlock(&s->mutex);
     gs_qnode *n = gs_qtake_held(s);
@@ -1018,7 +1067,9 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
         GS_QSEQ_ADD(&s->sleeping, 1);
         int64_t t = GS_QSEQ_LOAD(&s->tail);
         if (t == GS_QLOOK(&s->head)) {
+            GS_RUNNING_ADD(-1);
             gs_cond_wait(&s->cond, &s->mutex);
+            GS_RUNNING_ADD(1);
             if (s->signalled) gs_qstore(&s->signalled, s->signalled - 1);
         }
         GS_QSEQ_ADD(&s->sleeping, -1);
@@ -1036,6 +1087,7 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
     gs_qnode *n = gs_qtake_now(s);
     if (!n && ms > 0) {
         gs_qspin(s);
+        gs_qgive_way(s);
         gs_out_flush();
         gs_qlock(&s->mutex);
         n = gs_qtake_held(s);
@@ -1044,7 +1096,9 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
             GS_QSEQ_ADD(&s->sleeping, 1);
             int64_t t = GS_QSEQ_LOAD(&s->tail);
             if (t == GS_QLOOK(&s->head)) {
+                GS_RUNNING_ADD(-1);
                 waiting = gs_cond_wait_until(&s->cond, &s->mutex, deadline);
+                GS_RUNNING_ADD(1);
                 if (s->signalled) gs_qstore(&s->signalled, s->signalled - 1);
             }
             GS_QSEQ_ADD(&s->sleeping, -1);
@@ -1101,6 +1155,8 @@ GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
 /* Gust: this thread's id, which thread_spawn returned for it; main's is -1. */
 GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
 
+#else
+#define GS_RUNNING_ADD(n) ((void)0)
 #endif  /* GS_NEED_THREADS */
 
 /* ---------------------------------------------------------------------------
