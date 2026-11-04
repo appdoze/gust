@@ -49,60 +49,6 @@ fn sort_presort<T, F>(v: T[:]) {
     }
 }
 
-// The two sorted halves of v merged into d, from both ends at once with no branch on what they
-// hold. Whether the two ends met as they should: a comparator that is no strict weak ordering may
-// have taken an element twice, and then d is not to be used.
-fn sort_merge_ends<T, F>(v: T[:], d: T[:]) -> bool {
-    let n = v.len;
-    let h = n / 2;
-    var l = 0;
-    var r = h;
-    var k = 0;
-    var le = h - 1;
-    var re = n - 1;
-    var ke = n - 1;
-    for s in h {
-        let x: T = v[l];
-        let y: T = v[r];
-        let right = F(y, x);
-        d[k] .= if right { y } else { x };
-        k += 1;
-        r += if right { 1 } else { 0 };
-        l += if right { 0 } else { 1 };
-        let p: T = v[le];
-        let q: T = v[re];
-        let left = F(q, p);
-        d[ke] .= if left { p } else { q };
-        ke -= 1;
-        le -= if left { 1 } else { 0 };
-        re -= if left { 0 } else { 1 };
-    }
-    if n % 2 != 0 {
-        let more = l <= le;
-        d[k] .= if more { v[l] } else { v[r] };
-        l += if more { 1 } else { 0 };
-        r += if more { 0 } else { 1 };
-    }
-    return l == le + 1 && r == re + 1;
-}
-
-// v, of at most LIMIT elements: halves presorted and merged through d, or one presort under 18.
-fn sort_small<T, F>(v: T[:], d: T[:]) {
-    if v.len < 18 {
-        sort_presort(v) { a, b => F(a, b) };
-        return;
-    }
-    let h = v.len / 2;
-    sort_presort(v[..h]) { a, b => F(a, b) };
-    sort_presort(v[h..]) { a, b => F(a, b) };
-    let met = sort_merge_ends(v, d) { a, b => F(a, b) };
-    if met {
-        copy_into(v, d[..v.len]);
-    } else {
-        sort_insertion(v) { a, b => F(a, b) };
-    }
-}
-
 """
 
 SORT_OLD_HEAD = """fn sort<T>(xs: T[:]) { sort(xs) { a, b => a < b } }
@@ -116,15 +62,13 @@ fn sort<T, F>(xs: T[:]) {
     if r == n { return; }
 """
 SORT_NEW_HEAD = """fn sort<T>(xs: T[:]) {
-    var d: T[..32] = [];
-    for i in (if xs.len < 32 { xs.len } else { 32 }) { d.push(xs[i]); }
     fn less(a: T, b: T) -> bool { a < b }
-    fn small(v: T[:]) { sort_small(v, d, less); }
+    fn small(v: T[:]) { sort_presort(v, less); }
     sort_quick(xs, LIMIT, less, small);
 }
 fn sort<T, F>(xs: T[:]) {
-    fn small(v: T[:]) { sort_insertion(v, F); }
-    sort_quick(xs, 10, F, small);
+    fn small(v: T[:]) { BLOCK_SMALL }
+    sort_quick(xs, BLOCK_LIMIT, F, small);
 }
 fn sort_quick<T, F, S>(xs: T[:], small: i64) {
     let n = xs.len;
@@ -189,8 +133,15 @@ def patch(text, old, new):
     return text.replace(old, new)
 
 
-def small_sort(text, limit):
-    text = patch(text, SORT_OLD_HEAD, SORT_NEW_HEAD.replace("LIMIT", str(limit)))
+def small_sort(text, limit, blocks=False):
+    head = SORT_NEW_HEAD.replace("LIMIT", str(limit))
+    if blocks:
+        head = head.replace("BLOCK_SMALL", "sort_presort(v, F);").replace("BLOCK_" + str(limit), str(limit))
+        head = head.replace("BLOCK_" + "LIMIT", str(limit)).replace("BLOCK_" + str(limit), str(limit))
+    else:
+        head = head.replace("BLOCK_SMALL", "sort_insertion(v, F);")
+    head = head.replace("sort_quick(xs, BLOCK_" + str(limit) + ", F, small)", "sort_quick(xs, " + (str(limit) if blocks else "10") + ", F, small)")
+    text = patch(text, SORT_OLD_HEAD, head)
     text = patch(text, LOOP_OLD, LOOP_NEW)
     text = patch(text, TAIL_OLD, TAIL_NEW)
     anchor = "// Unstable, in place, no allocation: a pattern-defeating quicksort after\n".replace("\n", NL)
@@ -204,10 +155,11 @@ NL = "\r\n" if "\r\n" in base else "\n"
 VARIANTS = {
     "main": lambda t: t,
     "pivot": lambda t: patch(t, PIVOT_OLD, PIVOT_NEW),
+    "net13": lambda t: small_sort(t, 13),
     "net17": lambda t: small_sort(t, 17),
-    "net32": lambda t: small_sort(t, 32),
+    "both13": lambda t: small_sort(patch(t, PIVOT_OLD, PIVOT_NEW), 13),
     "both17": lambda t: small_sort(patch(t, PIVOT_OLD, PIVOT_NEW), 17),
-    "both32": lambda t: small_sort(patch(t, PIVOT_OLD, PIVOT_NEW), 32),
+    "all17": lambda t: small_sort(patch(t, PIVOT_OLD, PIVOT_NEW), 17, True),
 }
 for name, fn in VARIANTS.items():
     d = os.path.join(OUT, name)

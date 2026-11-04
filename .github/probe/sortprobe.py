@@ -27,6 +27,7 @@ def run(cmd, **kw):
 
 
 progs = {}
+libs = {}
 for n in names:
     env = {**os.environ, "GOOSE_STDLIB": os.path.join(OUT, n)}
     exe = os.path.join(OUT, f"shapes_{n}{EXE}")
@@ -34,6 +35,11 @@ for n in names:
     if r.returncode:
         sys.exit(f"{n}: {(r.stdout + r.stderr)[-1500:]}")
     progs[n] = exe
+    lib = os.path.join(OUT, f"lib_{n}{EXE}")
+    r = run([gust, "build", "-q", "--cc", "clang", "compare/library/library.goose", "-o", lib], env=env)
+    if r.returncode:
+        sys.exit(f"{n}: {(r.stdout + r.stderr)[-1500:]}")
+    libs[n] = lib
     chk = os.path.join(OUT, f"check_{n}{EXE}")
     r = run([gust, "build", "-q", "--cc", "clang", os.path.join(HERE, "sort_edges.goose"), "-o", chk], env=env)
     if r.returncode:
@@ -80,6 +86,16 @@ for b in ("random", "small32", "reals", "tiny", "few", "nearly", "saw", "pipe", 
         mid = statistics.median(v)
         vs = f" {mid / rust_t:5.2f}x of Rust" if rust_t else ""
         print(f"  {n:<8} {mid:.4f} ({v[0]:.4f}-{v[-1]:.4f}) {mid / ref:5.2f}x{vs}", flush=True)
+
+times = {n: [] for n in libs}
+for _ in range(ROUNDS):
+    for n, exe in libs.items():
+        times[n].append(float(run([exe, "1", "sortstr"], timeout=300).stdout.split("\t")[2]))
+print("\nsortstr", flush=True)
+ref = statistics.median(times["main"])
+for n, v in times.items():
+    v.sort()
+    print(f"  {n:<8} {statistics.median(v):.4f} ({v[0]:.4f}-{v[-1]:.4f}) {statistics.median(v) / ref:5.2f}x", flush=True)
 
 if shutil.which("valgrind"):
     print("\nrandom, cachegrind: instructions, branches mispredicted, millions", flush=True)
