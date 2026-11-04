@@ -57,6 +57,17 @@ for n in names:
         if got != want:
             print(f"  {n}: {test} output differs", flush=True)
 
+# The other compilers' code for the best of these, which may treat a step differently.
+for cc in (("msvc", "gcc") if os.name == "nt" else ("gcc",) if platform.system() == "Linux" else ()):
+    for n in ("main", "both"):
+        env = {**os.environ, "GOOSE_STDLIB": os.path.join(OUT, n)}
+        exe = os.path.join(OUT, f"shapes_{n}_{cc}{EXE}")
+        r = run([gust, "build", "-q", "--cc", cc, os.path.join(HERE, "sortshapes.goose"), "-o", exe], env=env)
+        if r.returncode:
+            print(f"{n}/{cc} build failed: {(r.stdout + r.stderr)[-400:]}", flush=True)
+            continue
+        progs[f"{n}/{cc}"] = exe
+
 if shutil.which("rustc"):
     rust = os.path.join(OUT, f"shapes_rust{EXE}")
     r = run(["rustc", "-C", "debuginfo=0", "-C", "opt-level=3", "-C", "lto=fat", "-C", "codegen-units=1", "-o", rust, os.path.join(HERE, "sortshapes.rs")])
@@ -85,7 +96,7 @@ for b in ("random", "small32", "reals", "tiny", "few", "nearly", "saw", "pipe", 
         v.sort()
         mid = statistics.median(v)
         vs = f" {mid / rust_t:5.2f}x of Rust" if rust_t else ""
-        print(f"  {n:<8} {mid:.4f} ({v[0]:.4f}-{v[-1]:.4f}) {mid / ref:5.2f}x{vs}", flush=True)
+        print(f"  {n:<10} {mid:.4f} ({v[0]:.4f}-{v[-1]:.4f}) {mid / ref:5.2f}x{vs}", flush=True)
 
 times = {n: [] for n in libs}
 for _ in range(ROUNDS):
@@ -104,6 +115,6 @@ if shutil.which("valgrind"):
         ir = re.search(r"I\s+refs:\s+([\d,]+)", r.stderr)
         mp = re.search(r"Mispredicts:\s+([\d,]+)", r.stderr)
         if ir and mp:
-            print(f"  {n:<8} {int(ir.group(1).replace(',', '')) / 1e6:9.1f} {int(mp.group(1).replace(',', '')) / 1e6:8.2f}", flush=True)
+            print(f"  {n:<10} {int(ir.group(1).replace(',', '')) / 1e6:9.1f} {int(mp.group(1).replace(',', '')) / 1e6:8.2f}", flush=True)
         else:
             print(f"  {n:<8} {r.stderr[-300:]}", flush=True)
