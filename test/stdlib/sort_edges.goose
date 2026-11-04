@@ -23,15 +23,16 @@ fn weigh(xs: i64[:]) -> u64 {
 fn fill_shape(xs: i64[:], shape: i64, r: Rnd&) {
     let n = xs.len;
     for i in n {
-        xs[i] = if shape == 0 { r.next() as i64 }
-            else if shape == 1 { i as i64 }
-            else if shape == 2 { (n - i) as i64 }
+        let u: i64 = r.next();
+        xs[i] = if shape == 0 { u }
+            else if shape == 1 { i }
+            else if shape == 2 { n - i }
             else if shape == 3 { 7 }
-            else if shape == 4 { (r.next() % 4) as i64 }
-            else if shape == 5 { (i % 16) as i64 }
-            else if shape == 6 { if i % 2 == 0 { i as i64 } else { (n - i) as i64 } }
-            else if shape == 7 { if i < n / 2 { i as i64 } else { (i - n / 2) as i64 } }
-            else { 0 - (r.next() as i64) };
+            else if shape == 4 { u % 4 }
+            else if shape == 5 { i % 16 }
+            else if shape == 6 { if i % 2 == 0 { i } else { n - i } }
+            else if shape == 7 { if i < n / 2 { i } else { i - n / 2 } }
+            else { 0 - u };
     }
 }
 
@@ -68,7 +69,7 @@ fn check_nans(n: i64, r: Rnd&) -> i64 {
                 xs[i] = nan;
                 nans += 1;
             } else {
-                xs[i] = (u % 1000) as f64;
+                xs[i] = u % 1000;
                 sum += xs[i];
             }
         }
@@ -91,7 +92,7 @@ fn check_narrow(n: i64, r: Rnd&) -> i64 {
     for i in n {
         bytes.push((r.next() % 256) as u8);
         words.push((r.next() % 1000) as i32 - 500);
-        reals.push((r.next() % 1000) as f64 / 8.0);
+        reals.push((r.next() % 1000) / 8.0);
     }
     sort(bytes);
     sort(words);
