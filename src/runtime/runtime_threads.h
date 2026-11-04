@@ -831,7 +831,7 @@ static void gs_qunlock_both(struct gs_qstate *s) {
    comes back, with no sleep and no wakeup, and a sender can fill a queue for receivers to take from
    in one go. Messages back and forth took 0.33x as long. But a thread giving up its turn to one busy
    with something else may not see the CPU for a time slice, where one that sleeps is woken at once:
-   100x to 220x as long, beside such a thread. So a turn that took long and brought little is the last
+   90x to 220x as long, beside such a thread. So a turn that took long and brought little is the last
    for a while, and for twice as long each time that goes on. One such turn in passing costs little,
    and on Windows, where they do come by now and then, a fixed long rest lost half of what this gives. */
 #define GS_QYIELD_SLOW_NS 500000
