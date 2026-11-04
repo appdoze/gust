@@ -525,6 +525,11 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
 
 ## Standard library
 
+- `sort(xs)` by `<` takes ranges of 17 or fewer through sorting networks, with a pivot sampled as Rust's
+  ipnsort does and no branch on which side of a split to defer: 3,000,000 random integers took 0.79x to 0.87x
+  as long, level with Rust's `sort_unstable` on Linux and ahead on Windows, with mispredicted branches 1.79 M
+  against 4.16 M, and small sorts 0.55x to 0.64x. `sort` with a block gets the pivot and the deferring, and keeps
+  insertion for small ranges. `test/stdlib/sort_edges.goose`.
 - `stdlib/http.goose` (new): an HTTP/1.1 client over `net`, `get`, `post`
   and `request`, one request per connection: a body by Content-Length, in
   chunks (decoded) or to the server's close, the status as the result, and
@@ -690,14 +695,6 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
   `hash_combine` take the key too, through `hash_flood_key`, a global, so a user
   key type built from them is covered as written.
   `test/stdlib/dictionary_flood.goose`.
-
-## Standard library
-
-- `sort(xs)` by `<` takes ranges of 17 or fewer through sorting networks, with a pivot sampled as Rust's
-  ipnsort does and no branch on which side of a split to defer: 3,000,000 random integers took 0.79x to 0.87x
-  as long, level with Rust's `sort_unstable` on Linux and ahead on Windows, with mispredicted branches 1.79 M
-  against 4.16 M, and small sorts 0.55x to 0.64x. `sort` with a block gets the pivot and the deferring, and keeps
-  insertion for small ranges. `test/stdlib/sort_edges.goose`.
 
 ## Runtime
 

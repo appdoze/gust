@@ -282,10 +282,11 @@ Medians of 11 rounds on one machine each, compiled the same way (probe run 41765
 | Windows | 0.082 s | 0.065 s | 0.077 s |
 | Apple, 3 CPUs | 0.101 s | 0.088 s | 0.088 s |
 
-Sorting 300,000 small arrays of 2 to 61 took 0.55x to 0.64x as long, which leaves it 1.01x to 1.07x Rust;
+Sorting 300,000 small arrays of 2 to 61 took 0.55x to 0.64x as long, which leaves it 1.01x to 1.08x Rust;
 floats 0.75x to 0.83x, ahead of Rust; nearly sorted input 0.48x to 0.94x. Nothing got slower but by the
-noise. With gcc and MSVC random integers took 0.81x to 0.83x as long, though floats gained little from gcc
-(0.95x to 1.00x) and MSVC (0.96x). They stay behind clang: 1.12x Rust with gcc on Ubuntu, 0.91x with MSVC.
+noise. With gcc and MSVC random integers took 0.80x to 0.84x as long, though floats gained little from gcc
+on Linux (0.95x to 1.00x) and from MSVC (0.95x). They stay behind clang: 1.12x Rust with gcc on Ubuntu, 0.91x
+with MSVC.
 
 Tried and left out:
 
