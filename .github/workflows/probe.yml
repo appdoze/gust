@@ -5,21 +5,19 @@ on:
     branches: ['probe/win-queue']
 
 jobs:
-  qcrowd:
+  sortp:
     name: ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 120
+    timeout-minutes: 90
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest, ubuntu-24.04-arm]
+        os: [windows-latest, ubuntu-latest, ubuntu-24.04, ubuntu-22.04, ubuntu-24.04-arm, macos-latest]
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
       - uses: actions/setup-python@v7
         with:
           python-version: '3.x'
@@ -27,16 +25,13 @@ jobs:
         run: |
           cmake -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release --target goose -j 4
-      - name: Build main's compiler
-        run: |
-          git worktree add "$RUNNER_TEMP/old" d9c016d8
-          cd "$RUNNER_TEMP/old"
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
-          cmake --build build --config Release --target goose -j 4
+      - name: Valgrind
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get install -y --no-install-recommends valgrind
       - name: Measure
         run: |
           if [ "$RUNNER_OS" = Windows ]; then
-            python .github/probe/qcrowd.py build/Release/gust.exe "$RUNNER_TEMP/old/build/Release/gust.exe" --out "$RUNNER_TEMP/qw"
+            python .github/probe/sortprobe.py build/Release/gust.exe 11
           else
-            python .github/probe/qcrowd.py build/gust "$RUNNER_TEMP/old/build/gust" --out "$RUNNER_TEMP/qw"
+            python .github/probe/sortprobe.py build/gust 11
           fi
