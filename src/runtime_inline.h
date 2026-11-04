@@ -4198,8 +4198,21 @@ static void gs_pf_relax(void) {
 #endif
 }
 
-/* How many looks to give to something another thread will do before sleeping on it: one, with a
-   single CPU to run on, as that thread cannot do it meanwhile. */
+/* How many threads are at work: main and each worker's job, less those asleep on a queue, on
+   another thread or in a sleep. A worker with nothing to do is not a crowd: counting all of them
+   made messages between two others 3.5x to 19x slower. */
+static int64_t gs_running = 1;
+#if defined(_MSC_VER) && !defined(__clang__)
+#define GS_RUNNING_ADD(n) ((void)_InterlockedExchangeAdd64((volatile __int64 *)&gs_running, (n)))
+#else
+#define GS_RUNNING_ADD(n) ((void)__atomic_add_fetch(&gs_running, (n), __ATOMIC_RELAXED))
+#endif
+
+/* How many looks to give to something another thread will do before sleeping on it. One with a
+   single CPU to run on, as that thread cannot do it meanwhile. Few with more threads at work than
+   CPUs, as a look may be keeping that thread from a CPU: then the queue runs dry and they all sleep
+   and wake by turns, which is what a sender and three receivers on two CPUs were doing, thousands
+   of times a run. */
 static int64_t gs_cpus_seen;
 static int gs_spin_for(int looks) {
     int64_t cpus = GS_SPIN_LOAD64(&gs_cpus_seen);
@@ -4207,8 +4220,16 @@ static int gs_spin_for(int looks) {
         cpus = gs_os_threads();
         GS_SPIN_STORE64(&gs_cpus_seen, cpus);
     }
-    return cpus > 1 ? looks : 1;
+    if (cpus <= 1) return 1;
+    return GS_SPIN_LOAD64(&gs_running) > cpus ? (looks >> 5) + 1 : looks;
 }
+
+#define GS_ONE_CPU() (GS_SPIN_LOAD64(&gs_cpus_seen) == 1)
+#ifdef _WIN32
+#define GS_YIELD() ((void)SwitchToThread())
+#else
+#define GS_YIELD() ((void)sched_yield())
+#endif
 
 /* A monotonic clock in nanoseconds, for a wait's deadline. */
 static int64_t gs_qclock_ns(void) {
@@ -4279,6 +4300,7 @@ static void *gs_thread_main(void *p)
     gs_thread *t = (gs_thread *)p;
     gs_native_stack_init();
     while (t) {
+        GS_RUNNING_ADD(1);
         gs_regions_begin(gs_workerregions);
         gs_current_thread_id = t->id;
         int aborted = 0;
@@ -4299,6 +4321,7 @@ static void *gs_thread_main(void *p)
            but for those few regions, and those go before this thread does.
            No waiter retains a pointer to this record. The detached native thread
            releases its own final OS stack/TLS state on returning below. */
+        GS_RUNNING_ADD(-1);
         gs_mutex_lock(&gs_threads_mutex);
         gs_thread **slot = &gs_threads;
         while (*slot != t) slot = &(*slot)->next;
@@ -4336,7 +4359,8 @@ static void *gs_thread_main(void *p)
         gs_mutex_unlock(&gs_threads_mutex);
     }
     gs_release_kept();
-    #ifdef _WIN32
+)GSRT"
+R"GSRT(    #ifdef _WIN32
         return 0;
     #else
         return NULL;
@@ -4365,8 +4389,7 @@ GS_API int64_t gs_thread_start(void (*run)(void (*)(uint8_t *), uint8_t *),
     int64_t id = gs_numthreads++;
     if (!id) gs_cond_init_timed(&gs_threads_more);
     t->id = id;
-)GSRT"
-R"GSRT(    t->next = gs_threads;
+    t->next = gs_threads;
     gs_threads = t;
     if (gs_threads_idle > 0) {
         gs_threads_idle--;
@@ -4435,10 +4458,13 @@ GS_API uint8_t gs_thread_wait(int64_t id, uint8_t **msg, int64_t *len,
                 gs_pf_relax();
                 spins--;
             }
+            if (GS_ONE_CPU()) GS_YIELD();
             gs_mutex_lock(&gs_threads_mutex);
             continue;
         }
+        GS_RUNNING_ADD(-1);
         gs_cond_wait(&gs_threads_done, &gs_threads_mutex);
+        GS_RUNNING_ADD(1);
     }
     uint8_t returned = 1;
     if (msg) {
@@ -4540,7 +4566,8 @@ static void gs_pfor_worker(uint8_t *p) {
 GS_API void gs_pfor_post(gs_pfor_job *j, void (*run)(void (*)(uint8_t *), uint8_t *),
                          void (*release)(void)) {
     j->nworkers = 0;
-    int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
+)GSRT"
+R"GSRT(    int64_t chunks = j->hi > j->lo ? (j->hi - j->lo + j->chunk - 1) / j->chunk : 0;
     int64_t want = gs_hardware_threads() - 1;
     if (want > chunks - 1) want = chunks - 1;
     if (want > GS_PFOR_MAXW) want = GS_PFOR_MAXW;
@@ -4575,8 +4602,7 @@ GS_API void gs_pfor_wait(gs_pfor_job *j) {
     if (r > 0) {
         /* The last worker takes the mutex to see this, so it cannot be
            missed: it counts down first and looks after this is set. */
-)GSRT"
-R"GSRT(        gs_pf_waiting = 1;
+        gs_pf_waiting = 1;
         while (gs_pf_load(&gs_pf_running) > 0) gs_cond_wait(&gs_pf_idle, &gs_pf_mutex);
         gs_pf_waiting = 0;
     }
@@ -4719,7 +4745,8 @@ static void gs_qstore(int64_t *p, int64_t v) {
 #define GS_QSEQ_STORE(p, v) ((void)_InterlockedExchange64((volatile __int64 *)(p), (v)))
 #define GS_QSEQ_LOAD(p) gs_qload(p)
 #define GS_QSEQ_ADD(p, v) ((void)_InterlockedExchangeAdd64((volatile __int64 *)(p), (v)))
-#else
+)GSRT"
+R"GSRT(#else
 #define GS_QLOOK(p) __atomic_load_n((p), __ATOMIC_RELAXED)
 #define gs_qload(p) __atomic_load_n((p), __ATOMIC_ACQUIRE)
 #define gs_qstore(p, v) __atomic_store_n((p), (v), __ATOMIC_RELEASE)
@@ -4744,8 +4771,7 @@ static void gs_qlock(gs_mutex *m) {
     #ifndef _WIN32
         for (int i = 0; i < GS_QLOCK_SPIN; i++) {
             if (!pthread_mutex_trylock(m)) return;
-)GSRT"
-R"GSRT(            /* Longer each time, as each try takes the lock's line from the
+            /* Longer each time, as each try takes the lock's line from the
                others, the holder among them. */
             for (int r = 0; r <= i && r < 16; r++) gs_pf_relax();
         }
@@ -4767,6 +4793,36 @@ static void gs_qunlock_both(struct gs_qstate *s) {
         gs_qleave(&s->head_lock);
     #endif
     gs_mutex_unlock(&s->mutex);
+}
+
+/* With one CPU, a turn given up before sleeping: what is waited for may be done by the time it
+   comes back, with no sleep and no wakeup, and a sender can fill a queue for receivers to take from
+   in one go. Messages back and forth took 0.33x as long. But a thread giving up its turn to one busy
+   with something else may not see the CPU for a time slice, where one that sleeps is woken at once:
+   90x to 220x as long, beside such a thread. So a turn that took long and brought little is the last
+   for a while, and for twice as long each time that goes on. One such turn in passing costs little,
+   and on Windows, where they do come by now and then, a fixed long rest lost half of what this gives. */
+#define GS_QYIELD_SLOW_NS 500000
+#define GS_QYIELD_WORTH 64
+#define GS_QYIELD_REST 64
+#define GS_QYIELD_DOUBLINGS 10
+static GS_TLS int gs_qyield_rest;
+static GS_TLS int gs_qyield_doublings;
+static void gs_qgive_way(struct gs_qstate *s) {
+    if (!GS_ONE_CPU()) return;
+    if (gs_qyield_rest > 0) {
+        gs_qyield_rest--;
+        return;
+    }
+    int64_t t = GS_QLOOK(&s->tail);
+    int64_t since = gs_qclock_ns();
+    GS_YIELD();
+    if (gs_qclock_ns() - since > GS_QYIELD_SLOW_NS && GS_QLOOK(&s->tail) - t < GS_QYIELD_WORTH) {
+        gs_qyield_rest = GS_QYIELD_REST << gs_qyield_doublings;
+        if (gs_qyield_doublings < GS_QYIELD_DOUBLINGS) gs_qyield_doublings++;
+    } else {
+        gs_qyield_doublings = 0;
+    }
 }
 
 static void gs_qspin(struct gs_qstate *s) {
@@ -4895,7 +4951,8 @@ GS_API uint8_t gs_qput(gs_queue *q, const void *data, int64_t size) {
             int full = t - s->seen_head >= s->limit;
             gs_qleave(&s->tail_lock);
             return full ? 0 : gs_qput_slow(s, data, size);
-        }
+)GSRT"
+R"GSRT(        }
     }
     memcpy(s->ring + (t & (s->cap - 1)) * size, data, (size_t)size);
     GS_QSEQ_STORE(&s->tail, t + 1);
@@ -4973,13 +5030,13 @@ GS_API gs_qnode *gs_qget(gs_queue *q) {
        through the kernel for a message another receiver takes anyway. */
     for (int spins = gs_spin_for(GS_QSPIN); spins > 0; spins--) {
         if (gs_qany(s)) {
-)GSRT"
-R"GSRT(            gs_qnode *n = gs_qtake_now(s);
+            gs_qnode *n = gs_qtake_now(s);
             if (n) return n;
             for (int r = 0; r < GS_QLOST; r++) gs_pf_relax();
         }
         gs_pf_relax();
     }
+    gs_qgive_way(s);
     gs_out_flush();
     gs_qlock(&s->mutex);
     gs_qnode *n = gs_qtake_held(s);
@@ -4987,7 +5044,9 @@ R"GSRT(            gs_qnode *n = gs_qtake_now(s);
         GS_QSEQ_ADD(&s->sleeping, 1);
         int64_t t = GS_QSEQ_LOAD(&s->tail);
         if (t == GS_QLOOK(&s->head)) {
+            GS_RUNNING_ADD(-1);
             gs_cond_wait(&s->cond, &s->mutex);
+            GS_RUNNING_ADD(1);
             if (s->signalled) gs_qstore(&s->signalled, s->signalled - 1);
         }
         GS_QSEQ_ADD(&s->sleeping, -1);
@@ -5005,6 +5064,7 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
     gs_qnode *n = gs_qtake_now(s);
     if (!n && ms > 0) {
         gs_qspin(s);
+        gs_qgive_way(s);
         gs_out_flush();
         gs_qlock(&s->mutex);
         n = gs_qtake_held(s);
@@ -5013,7 +5073,9 @@ GS_API gs_qnode *gs_qwait(gs_queue *q, int64_t ms) {
             GS_QSEQ_ADD(&s->sleeping, 1);
             int64_t t = GS_QSEQ_LOAD(&s->tail);
             if (t == GS_QLOOK(&s->head)) {
+                GS_RUNNING_ADD(-1);
                 waiting = gs_cond_wait_until(&s->cond, &s->mutex, deadline);
+                GS_RUNNING_ADD(1);
                 if (s->signalled) gs_qstore(&s->signalled, s->signalled - 1);
             }
             GS_QSEQ_ADD(&s->sleeping, -1);
@@ -5070,6 +5132,8 @@ GS_API gs_queue *gs_qbox(gs_queue *q, int64_t id) {
 /* Gust: this thread's id, which thread_spawn returned for it; main's is -1. */
 GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
 
+#else
+#define GS_RUNNING_ADD(n) ((void)0)
 #endif  /* GS_NEED_THREADS */
 
 /* ---------------------------------------------------------------------------
@@ -5097,7 +5161,8 @@ GS_API int64_t gs_thread_self(void) { return gs_current_thread_id; }
    and would come out ahead of what waits here. A program run inside the compiler, or
    called from a C host, writes each print as ever. */
 #if defined(__TINYC__) || defined(__MIRC__) || defined(GS_NATIVE_RUNTIME)
-GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
+)GSRT"
+R"GSRT(GS_API void gs_out_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stdout, p, len); }
 GS_API void gs_err_bytes(const uint8_t *p, int64_t len) { gs_write_stream(stderr, p, len); }
 GS_API void gs_out_begin(void) {}
 GS_API void gs_out_end(void) {}
@@ -5158,8 +5223,7 @@ static gs_mutex gs_out_mutex = GS_MUTEX_INIT;
 #define GS_OUT_TRYLOCK() 1
 #endif
 
-)GSRT"
-R"GSRT(/* The cheapest clock there is, as it is read on every print: 16 ms is fine here. */
+/* The cheapest clock there is, as it is read on every print: 16 ms is fine here. */
 static int64_t gs_out_clock_ms(void) {
     #ifdef _WIN32
         return (int64_t)GetTickCount64();
@@ -5312,7 +5376,8 @@ static void gs_out_final(void) {
 GS_API void gs_out_end(void) { gs_out_final(); }
 
 #ifdef _WIN32
-static DWORD WINAPI gs_out_console_flush(LPVOID unused) {
+)GSRT"
+R"GSRT(static DWORD WINAPI gs_out_console_flush(LPVOID unused) {
     (void)unused;
     gs_out_flush_dying();
     return 0;
@@ -6919,6 +6984,7 @@ GS_API int64_t gs_os_clock_ns(void) {
 GS_API void gs_os_sleep_ms(int64_t ms) {
     if (ms <= 0) return;
     gs_out_flush();
+    GS_RUNNING_ADD(-1);
 #ifdef _WIN32
     /* Sleep takes 32 bits, the largest of them meaning INFINITE: a longer
        sleep goes in parts. */
@@ -6933,6 +6999,7 @@ GS_API void gs_os_sleep_ms(int64_t ms) {
     ts.tv_nsec = (long)((ms % 1000) * 1000000);
     nanosleep(&ts, NULL);
 #endif
+    GS_RUNNING_ADD(1);
 }
 
 /* Entropy for seeding a PRNG (not cryptographic): /dev/urandom where there
