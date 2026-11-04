@@ -252,6 +252,49 @@ Tried and dropped here:
 - No wake while a receiver is spinning, as Go does for its Ps: 0.48x to 1.06x on two cores, but messages back
   and forth 1.55x on the Xeon.
 
+## Sorting numbers
+
+`sort(xs)` of integers took 1.06x to 1.35x Rust's `sort_unstable`, the one library operation clearly
+behind it. The partition loop was not why: with its bounds checks gone and its additions plain, it was
+already tight. Counting 3,000,000 random integers under cachegrind showed where it went:
+
+| | instructions | branches mispredicted |
+|---|---:|---:|
+| as it was | 757 M | 4.16 M |
+| now | 704 M | 1.79 M |
+| Rust | 657 M | 1.60 M |
+
+Three changes, largest first. Ranges of 17 or fewer now go to sorting networks of 13, 9 and 5 elements,
+each checked against all its 2^n inputs of zeros and ones, with insertion only for what is left over. A
+network has to be really free of branches, which the first form was not: storing each value straight from
+the two arms of an `if` let clang drop the arm that wrote back what was already there, which left a
+conditional store, and 3.8 M mispredictions rather than 2.2 M. So the values go through variables, as
+`sort_step` says. Then a pivot sampled as Rust's is, as far down as there are eighths to choose from, for
+fewer rounds on a long range. And which side of a split to defer no longer takes a branch.
+
+Medians of 11 rounds on one machine each, compiled the same way (probe run 41765780534):
+
+| 3,000,000 random integers | then | now | Rust |
+|---|---:|---:|---:|
+| AMD EPYC 7763 | 0.089 s | 0.070 s | 0.070 s |
+| AMD EPYC 9V74 | 0.072 s | 0.058 s | 0.057 s |
+| ARM Neoverse-N2 | 0.069 s | 0.059 s | 0.057 s |
+| Windows | 0.082 s | 0.065 s | 0.077 s |
+| Apple, 3 CPUs | 0.101 s | 0.088 s | 0.088 s |
+
+Sorting 300,000 small arrays of 2 to 61 took 0.55x to 0.64x as long, which leaves it 1.01x to 1.07x Rust;
+floats 0.75x to 0.83x, ahead of Rust; nearly sorted input 0.48x to 0.94x. Nothing got slower but by the
+noise. With gcc and MSVC random integers took 0.81x to 0.83x as long, though floats gained little from gcc
+(0.95x to 1.00x) and MSVC (0.96x). They stay behind clang: 1.12x Rust with gcc on Ubuntu, 0.91x with MSVC.
+
+Tried and left out:
+
+- Networks with a block too, not only by `<`: cheap keys 0.79x to 0.90x, but strings 1.03x to 1.06x, more
+  code at every call of `sort` with its own block, and every value copied at every step when values are large.
+- Ranges up to 32, two halves merged through a buffer as Rust does: it cannot sort references by what they
+  point at, which `sort(refs)` must, and on a Windows PC 17 with no buffer was the faster anyway (0.89x to 0.96x).
+- A shorter stack of deferred ranges, as clearing its 144 entries costs each sort: 1.5% to 4%, on small sorts only.
+
 ## What Zig and Nim had to offer
 
 Read in November 2026 from their sources, for Gust's remaining gaps, and measured where a

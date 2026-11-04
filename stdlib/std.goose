@@ -674,21 +674,25 @@ fn sort_median3<T, F>(v: T[:], a: i64, b: i64, c: i64) -> i64 {
     return b;
 }
 
-// A pivot for v, at least 8 long: the median of elements at 0, 4/8 and 7/8
-// of the way, and from 128 elements on the median of three such medians,
-// each over its own eighth of v.
-fn sort_pivot<T, F>(v: T[:]) -> i64 {
-    let n8 = v.len / 8;
-    let a = 0;
-    let b = n8 * 4;
-    let c = n8 * 7;
-    if v.len < 128 { return sort_median3(v, a, b, c) { x, y => F(x, y) }; }
-    let m8 = n8 / 8;
-    let ma = sort_median3(v, a, a + m8 * 4, a + m8 * 7) { x, y => F(x, y) };
-    let mb = sort_median3(v, b, b + m8 * 4, b + m8 * 7) { x, y => F(x, y) };
-    let mc = sort_median3(v, c, c + m8 * 4, c + m8 * 7) { x, y => F(x, y) };
-    return sort_median3(v, ma, mb, mc) { x, y => F(x, y) };
+// The median of the elements at a, a + 4m and a + 7m, and from an m of 8 on the
+// median of three such medians, one over each of those eighths.
+recursive fn sort_medians<T, F>(v: T[:], a: i64, m: i64) -> i64 {
+    var x = a;
+    var y = a + m * 4;
+    var z = a + m * 7;
+    if m >= 8 {
+        let n = m / 8;
+        x = sort_medians(v, x, n, F);
+        y = sort_medians(v, y, n, F);
+        z = sort_medians(v, z, n, F);
+    }
+    return sort_median3(v, x, y, z) { p, q => F(p, q) };
 }
+
+// A pivot for v, at least 8 long: as far down as there are eighths to choose
+// from, as in Rust's ipnsort, so that a long range splits near its middle and
+// takes fewer rounds.
+fn sort_pivot<T, F>(v: T[:]) -> i64 { sort_medians(v, 0, v.len / 8, F) }
 
 // Moves the elements x of v[1..] with F(x, v[0]) to the front of v[1..] and
 // returns how many there are; v[0] is the pivot and stays. Every step swaps
@@ -722,6 +726,136 @@ fn sort_heap<T, F>(v: T[:]) {
     }
 }
 
+// One step of a sorting network: v[a] and v[b] in order, with no branch on what
+// they hold. Both values go through a variable: stored straight from the two arms of
+// an `if`, the arm that writes back what is already there is dropped, which leaves a
+// conditional store, and so a branch that goes wrong half the time.
+inline fn sort_step<T, F>(v: T[:], a: i64, b: i64) {
+    let x: T = v[a];
+    let y: T = v[b];
+    let swap = F(y, x);
+    let lo: T = if swap { y } else { x };
+    let hi: T = if swap { x } else { y };
+    v[a] .= lo;
+    v[b] .= hi;
+}
+
+// Sorting networks, each checked against all its 2^n inputs of zeros and ones.
+fn sort_net5<T, F>(v: T[:]) {
+    sort_step(v, 0, 3) { a, b => F(a, b) };
+    sort_step(v, 1, 4) { a, b => F(a, b) };
+    sort_step(v, 0, 2) { a, b => F(a, b) };
+    sort_step(v, 1, 3) { a, b => F(a, b) };
+    sort_step(v, 0, 1) { a, b => F(a, b) };
+    sort_step(v, 2, 4) { a, b => F(a, b) };
+    sort_step(v, 1, 2) { a, b => F(a, b) };
+    sort_step(v, 3, 4) { a, b => F(a, b) };
+    sort_step(v, 2, 3) { a, b => F(a, b) };
+}
+
+fn sort_net9<T, F>(v: T[:]) {
+    sort_step(v, 0, 3) { a, b => F(a, b) };
+    sort_step(v, 1, 7) { a, b => F(a, b) };
+    sort_step(v, 2, 5) { a, b => F(a, b) };
+    sort_step(v, 4, 8) { a, b => F(a, b) };
+    sort_step(v, 0, 7) { a, b => F(a, b) };
+    sort_step(v, 2, 4) { a, b => F(a, b) };
+    sort_step(v, 3, 8) { a, b => F(a, b) };
+    sort_step(v, 5, 6) { a, b => F(a, b) };
+    sort_step(v, 0, 2) { a, b => F(a, b) };
+    sort_step(v, 1, 3) { a, b => F(a, b) };
+    sort_step(v, 4, 5) { a, b => F(a, b) };
+    sort_step(v, 7, 8) { a, b => F(a, b) };
+    sort_step(v, 1, 4) { a, b => F(a, b) };
+    sort_step(v, 3, 6) { a, b => F(a, b) };
+    sort_step(v, 5, 7) { a, b => F(a, b) };
+    sort_step(v, 0, 1) { a, b => F(a, b) };
+    sort_step(v, 2, 4) { a, b => F(a, b) };
+    sort_step(v, 3, 5) { a, b => F(a, b) };
+    sort_step(v, 6, 8) { a, b => F(a, b) };
+    sort_step(v, 2, 3) { a, b => F(a, b) };
+    sort_step(v, 4, 5) { a, b => F(a, b) };
+    sort_step(v, 6, 7) { a, b => F(a, b) };
+    sort_step(v, 1, 2) { a, b => F(a, b) };
+    sort_step(v, 3, 4) { a, b => F(a, b) };
+    sort_step(v, 5, 6) { a, b => F(a, b) };
+}
+
+fn sort_net13<T, F>(v: T[:]) {
+    sort_step(v, 0, 12) { a, b => F(a, b) };
+    sort_step(v, 1, 10) { a, b => F(a, b) };
+    sort_step(v, 2, 9) { a, b => F(a, b) };
+    sort_step(v, 3, 7) { a, b => F(a, b) };
+    sort_step(v, 5, 11) { a, b => F(a, b) };
+    sort_step(v, 6, 8) { a, b => F(a, b) };
+    sort_step(v, 1, 6) { a, b => F(a, b) };
+    sort_step(v, 2, 3) { a, b => F(a, b) };
+    sort_step(v, 4, 11) { a, b => F(a, b) };
+    sort_step(v, 7, 9) { a, b => F(a, b) };
+    sort_step(v, 8, 10) { a, b => F(a, b) };
+    sort_step(v, 0, 4) { a, b => F(a, b) };
+    sort_step(v, 1, 2) { a, b => F(a, b) };
+    sort_step(v, 3, 6) { a, b => F(a, b) };
+    sort_step(v, 7, 8) { a, b => F(a, b) };
+    sort_step(v, 9, 10) { a, b => F(a, b) };
+    sort_step(v, 11, 12) { a, b => F(a, b) };
+    sort_step(v, 4, 6) { a, b => F(a, b) };
+    sort_step(v, 5, 9) { a, b => F(a, b) };
+    sort_step(v, 8, 11) { a, b => F(a, b) };
+    sort_step(v, 10, 12) { a, b => F(a, b) };
+    sort_step(v, 0, 5) { a, b => F(a, b) };
+    sort_step(v, 3, 8) { a, b => F(a, b) };
+    sort_step(v, 4, 7) { a, b => F(a, b) };
+    sort_step(v, 6, 11) { a, b => F(a, b) };
+    sort_step(v, 9, 10) { a, b => F(a, b) };
+    sort_step(v, 0, 1) { a, b => F(a, b) };
+    sort_step(v, 2, 5) { a, b => F(a, b) };
+    sort_step(v, 6, 9) { a, b => F(a, b) };
+    sort_step(v, 7, 8) { a, b => F(a, b) };
+    sort_step(v, 10, 11) { a, b => F(a, b) };
+    sort_step(v, 1, 3) { a, b => F(a, b) };
+    sort_step(v, 2, 4) { a, b => F(a, b) };
+    sort_step(v, 5, 6) { a, b => F(a, b) };
+    sort_step(v, 9, 10) { a, b => F(a, b) };
+    sort_step(v, 1, 2) { a, b => F(a, b) };
+    sort_step(v, 3, 4) { a, b => F(a, b) };
+    sort_step(v, 5, 7) { a, b => F(a, b) };
+    sort_step(v, 6, 8) { a, b => F(a, b) };
+    sort_step(v, 2, 3) { a, b => F(a, b) };
+    sort_step(v, 4, 5) { a, b => F(a, b) };
+    sort_step(v, 6, 7) { a, b => F(a, b) };
+    sort_step(v, 8, 9) { a, b => F(a, b) };
+    sort_step(v, 3, 4) { a, b => F(a, b) };
+    sort_step(v, 5, 6) { a, b => F(a, b) };
+}
+
+// v, of at most 17, in order: by a network as far as one goes, and by insertion for
+// the few left over. Insertion's loop exits are what go wrong in a small range.
+fn sort_small<T, F>(v: T[:]) {
+    var from = 1;
+    if v.len >= 13 {
+        sort_net13(v) { a, b => F(a, b) };
+        from = 13;
+    } else if v.len >= 9 {
+        sort_net9(v) { a, b => F(a, b) };
+        from = 9;
+    } else if v.len >= 5 {
+        sort_net5(v) { a, b => F(a, b) };
+        from = 5;
+    }
+    for i in from..v.len {
+        let x: T = v[i];
+        var j = i;
+        while j > 0 {
+            let y: T = v[j - 1];
+            if !F(x, y) { break; }
+            v[j] .= y;
+            j -= 1;
+        }
+        v[j] .= x;
+    }
+}
+
 // Unstable, in place, no allocation: a pattern-defeating quicksort after
 // pdqsort and Rust's ipnsort. Input already in order, or in strictly
 // descending order, takes one pass. Otherwise each round partitions a range
@@ -733,14 +867,23 @@ fn sort_heap<T, F>(v: T[:]) {
 // partition moves the elements equal to the pivot to the front, where they
 // are done, and many equal keys cost linear passes rather than n log n. A
 // range still being partitioned 2 log2(n) rounds deep is heapsorted, which
-// bounds the worst case at O(n log n). Ranges of 10 or fewer are insertion
-// sorted: its mispredicted loop exits make it slower than partitioning
-// above that.
-fn sort<T>(xs: T[:]) { sort(xs) { a, b => a < b } }
+// bounds the worst case at O(n log n). Sorted by `<`, ranges of 17 or fewer go
+// to sorting networks. With a block they go to insertion from 10 down, as a block
+// may be costly and a network compares more, and at every call of sort with its own
+// block a network would be that much more code.
+fn sort<T>(xs: T[:]) {
+    fn less(a: T, b: T) -> bool { a < b }
+    fn small(v: T[:]) { sort_small(v, less); }
+    sort_quick(xs, 17, less, small);
+}
 fn sort<T, F>(xs: T[:]) {
+    fn small(v: T[:]) { sort_insertion(v, F); }
+    sort_quick(xs, 10, F, small);
+}
+fn sort_quick<T, F, S>(xs: T[:], small: i64) {
     let n = xs.len;
-    if n <= 10 {
-        sort_insertion(xs) { a, b => F(a, b) };
+    if n <= small {
+        S(xs);
         return;
     }
     let r = sort_run(xs) { a, b => F(a, b) };
@@ -751,7 +894,7 @@ fn sort<T, F>(xs: T[:]) {
     var hi = n;
     loop {
         let v = xs[lo..hi];
-        if v.len > 10 && limit > 0 {
+        if v.len > small && limit > 0 {
             limit -= 1;
             swap_at(v, 0, sort_pivot(v) { a, b => F(a, b) });
             if lo > 0 && !F(xs[lo - 1], v[0]) {
@@ -762,23 +905,22 @@ fn sort<T, F>(xs: T[:]) {
             }
             let m = sort_partition(v) { a, b => F(a, b) };
             swap_at(v, 0, m);
-            if m < v.len - 1 - m {
-                st.push(lo + m + 1);
-                st.push(hi);
-                st.push(limit);
-                hi = lo + m;
-            } else {
-                st.push(lo);
-                st.push(lo + m);
-                st.push(limit);
-                lo += m + 1;
-            }
+            // Which side is the smaller goes either way, so no branch on it.
+            let left = m < v.len - 1 - m;
+            let cut = lo + m;
+            st.push(if left { cut + 1 } else { lo });
+            st.push(if left { hi } else { cut });
+            st.push(limit);
+            let next_lo = if left { lo } else { cut + 1 };
+            let next_hi = if left { cut } else { hi };
+            lo = next_lo;
+            hi = next_hi;
             continue;
         }
-        if v.len > 10 {
+        if v.len > small {
             sort_heap(v) { a, b => F(a, b) };
         } else {
-            sort_insertion(v) { a, b => F(a, b) };
+            S(v);
         }
         if st.len == 0 { return; }
         limit = st.pop();
