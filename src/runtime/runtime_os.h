@@ -54,6 +54,40 @@ static int gs_os_native(sl_u8 s, gs_os_char *buf) {
 }
 
 #ifdef _WIN32
+/* Gust: where a full path comes near MAX_PATH (260, or 248 for a directory) the
+   wide APIs take it only in its verbatim form: absolute, in backslashes and
+   behind \\?\, or \\?\UNC\ for a share. GetFullPathNameW makes that form what
+   the API would have read, resolving . and .. and the current directory. The
+   line is low enough that write_file_atomic's longer temporary name is over it
+   too. A shorter path stays as it was written. */
+#define GS_OS_LONG_PATH 200
+#endif
+
+/* The native form of a path, in buf (GS_OS_PATH_MAX characters): its length,
+   or -1 where it is refused. */
+static int gs_os_path(sl_u8 s, gs_os_char *buf) {
+    int n = gs_os_native(s, buf);
+#ifdef _WIN32
+    /* One already verbatim, or a device's, is the caller's to spell. */
+    if (n <= 0 || (buf[0] == '\\' && buf[1] == '\\' && (buf[2] == '?' || buf[2] == '.'))) return n;
+    wchar_t full[GS_OS_PATH_MAX];
+    DWORD k = GetFullPathNameW(buf, GS_OS_PATH_MAX, full, NULL);
+    if (k >= GS_OS_PATH_MAX) return -1;
+    /* Windows maps a reserved name to its device, whatever the directory. */
+    if (k < GS_OS_LONG_PATH || (full[0] == '\\' && full[1] == '\\' && full[2] == '.')) return n;
+    int unc = full[0] == '\\' && full[1] == '\\';
+    const wchar_t *prefix = unc ? L"\\\\?\\UNC\\" : L"\\\\?\\";
+    const wchar_t *rest = unc ? full + 2 : full;
+    int plen = unc ? 8 : 4, rlen = (int)k - (unc ? 2 : 0);
+    if (plen + rlen >= GS_OS_PATH_MAX) return -1;
+    memcpy(buf, prefix, (size_t)plen * sizeof *buf);
+    memcpy(buf + plen, rest, ((size_t)rlen + 1) * sizeof *buf);
+    n = plen + rlen;
+#endif
+    return n;
+}
+
+#ifdef _WIN32
 /* Appends n UTF-16 units as UTF-8; where they are not valid UTF-16, appends
    nothing and returns 0. */
 static int gs_os_append_wide(gs_rref out, const wchar_t *w, int n) {
@@ -128,7 +162,7 @@ static int gs_os_kind(const gs_os_char *p) {
 /* Appends the whole file; on a failure, nothing. */
 GS_API uint8_t gs_os_read_file(sl_u8 path, gs_rref out) {
     gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+    if (gs_os_path(path, p) < 0) return 0;
     FILE *f = gs_os_fopen(p, "rb");
     if (!f) return 0;
     int64_t len = out.hdr->len;
@@ -152,7 +186,7 @@ GS_API uint8_t gs_os_read_file(sl_u8 path, gs_rref out) {
 /* write_file and append_file. */
 static uint8_t gs_os_put_file(sl_u8 path, sl_u8 data, int append) {
     gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+    if (gs_os_path(path, p) < 0) return 0;
     FILE *f = append ? gs_os_fopen(p, "ab") : gs_os_fopen(p, "wb");
     if (!f) return 0;
     size_t n = (size_t)(data.len < 0 ? 0 : data.len);
@@ -167,12 +201,12 @@ GS_API uint8_t gs_os_append_file(sl_u8 path, sl_u8 data) { return gs_os_put_file
 
 GS_API uint8_t gs_os_file_exists(sl_u8 path) {
     gs_os_char p[GS_OS_PATH_MAX];
-    return gs_os_native(path, p) >= 0 && gs_os_kind(p) == 1;
+    return gs_os_path(path, p) >= 0 && gs_os_kind(p) == 1;
 }
 
 GS_API uint8_t gs_os_remove_file(sl_u8 path) {
     gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+    if (gs_os_path(path, p) < 0) return 0;
 #ifdef _WIN32
     return DeleteFileW(p) != 0;
 #else
@@ -185,7 +219,7 @@ GS_API uint8_t gs_os_remove_file(sl_u8 path) {
    moved one, never neither. */
 GS_API uint8_t gs_os_rename_file(sl_u8 from, sl_u8 to) {
     gs_os_char f[GS_OS_PATH_MAX], t[GS_OS_PATH_MAX];
-    if (gs_os_native(from, f) < 0 || gs_os_native(to, t) < 0) return 0;
+    if (gs_os_path(from, f) < 0 || gs_os_path(to, t) < 0) return 0;
 #ifdef _WIN32
     return gs_os_replace(f, t);
 #else
@@ -203,7 +237,7 @@ GS_API uint8_t gs_os_rename_file(sl_u8 from, sl_u8 to) {
    another tag is drawn. */
 GS_API uint8_t gs_os_write_file_atomic(sl_u8 path, sl_u8 data) {
     gs_os_char p[GS_OS_PATH_MAX], t[GS_OS_PATH_MAX + 21];
-    int n = gs_os_native(path, p);
+    int n = gs_os_path(path, p);
     if (n <= 0) return 0;
     const uint8_t *d = data.data;
     int64_t left = data.len;
@@ -269,7 +303,7 @@ GS_API uint8_t gs_os_write_file_atomic(sl_u8 path, sl_u8 data) {
    included. */
 GS_API uint8_t gs_os_make_dir(sl_u8 path) {
     gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+    if (gs_os_path(path, p) < 0) return 0;
 #ifdef _WIN32
     if (CreateDirectoryW(p, NULL)) return 1;
 #else
@@ -280,13 +314,13 @@ GS_API uint8_t gs_os_make_dir(sl_u8 path) {
 
 GS_API uint8_t gs_os_is_dir(sl_u8 path) {
     gs_os_char p[GS_OS_PATH_MAX];
-    return gs_os_native(path, p) >= 0 && gs_os_kind(p) == 2;
+    return gs_os_path(path, p) >= 0 && gs_os_kind(p) == 2;
 }
 
 /* An empty directory. */
 GS_API uint8_t gs_os_remove_dir(sl_u8 path) {
     gs_os_char p[GS_OS_PATH_MAX];
-    if (gs_os_native(path, p) < 0) return 0;
+    if (gs_os_path(path, p) < 0) return 0;
 #ifdef _WIN32
     return RemoveDirectoryW(p) != 0;
 #else
@@ -345,7 +379,7 @@ static int gs_os_names_put(gs_os_names *ns, gs_rref out) {
    appends nothing. */
 GS_API uint8_t gs_os_list_dir(sl_u8 path, gs_rref out) {
     gs_os_char p[GS_OS_PATH_MAX + 2];
-    int n = gs_os_native(path, p);
+    int n = gs_os_path(path, p);
     if (n <= 0) return 0;
     gs_os_names ns = { 0 };
     int ok = 1;
@@ -733,10 +767,83 @@ GS_API void gs_dl_bind(const gs_dllib *libs, int64_t nlibs, const gs_dlbind *bin
     }
 }
 
+#ifdef _WIN32
+/* Gust: the process's command line split as the C runtime splits it for main:
+   the arguments one after another in the returned block, each ended by a NUL,
+   their number in *count. The caller frees it. */
+static wchar_t *gs_os_split_command_line(int *count) {
+    const wchar_t *c = GetCommandLineW();
+    wchar_t *block = c ? (wchar_t *)malloc((wcslen(c) + 2) * sizeof *block) : NULL;
+    if (!block) return NULL;
+    wchar_t *w = block;
+    int n = 0;
+    /* The program's name: to a closing quote if it opens with one, with no
+       escapes, and otherwise to the first space. */
+    if (*c == L'"') {
+        for (c++; *c && *c != L'"'; c++) *w++ = *c;
+        if (*c) c++;
+    } else {
+        for (; *c && *c != L' ' && *c != L'\t'; c++) *w++ = *c;
+    }
+    *w++ = 0;
+    n++;
+    for (;;) {
+        while (*c == L' ' || *c == L'\t') c++;
+        if (!*c) break;
+        int quoted = 0;
+        while (*c && (quoted || (*c != L' ' && *c != L'\t'))) {
+            /* Backslashes count only before a quote: each pair is one
+               backslash, and one left over makes the quote a plain one. */
+            size_t slashes = 0;
+            while (*c == L'\\') { slashes++; c++; }
+            if (*c == L'"') {
+                for (size_t k = 0; k < slashes / 2; k++) *w++ = L'\\';
+                if (slashes % 2) *w++ = L'"';
+                else if (quoted && c[1] == L'"') { *w++ = L'"'; c++; }
+                else quoted = !quoted;
+                c++;
+            } else {
+                for (size_t k = 0; k < slashes; k++) *w++ = L'\\';
+                if (*c && (quoted || (*c != L' ' && *c != L'\t'))) *w++ = *c++;
+            }
+        }
+        *w++ = 0;
+        n++;
+    }
+    *count = n;
+    return block;
+}
+
+/* Gust: appends argument i from the wide command line, which holds what the
+   code page does not. main's argv need not be that line's: a program run in
+   process gets the compiler's arguments after `--`, and a library the ones
+   goose_init was handed. So they are matched from the last one back, and the
+   wide one is taken only where it reads in the code page as argv's does. */
+static int gs_os_arg_wide(int64_t i, const char *a, gs_rref out) {
+    int count = 0, ok = 0;
+    wchar_t *block = gs_os_split_command_line(&count);
+    if (!block) return 0;
+    int64_t at = count - (gs_argc - i);
+    if (at >= 0) {
+        const wchar_t *w = block;
+        for (int64_t k = 0; k < at; k++) w += wcslen(w) + 1;
+        int n = WideCharToMultiByte(CP_ACP, 0, w, -1, NULL, 0, NULL, NULL);
+        char *narrow = n > 0 ? (char *)malloc((size_t)n) : NULL;
+        if (narrow && WideCharToMultiByte(CP_ACP, 0, w, -1, narrow, n, NULL, NULL) == n &&
+            strcmp(narrow, a) == 0)
+            ok = gs_os_append_wide(out, w, (int)wcslen(w));
+        free(narrow);
+    }
+    free(block);
+    return ok;
+}
+#endif
+
 GS_API void gs_os_arg(int64_t i, gs_rref out) {
     if (i < 0 || i >= gs_argc) return;
     const char *a = gs_argv[i];
 #ifdef _WIN32
+    if (gs_os_arg_wide(i, a, out)) return;
     /* main's argv is in the ANSI code page. The program gets it in UTF-8,
        the encoding of its paths, by way of UTF-16, which holds every
        character of the code page. */

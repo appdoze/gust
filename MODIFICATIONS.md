@@ -505,6 +505,14 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
 
 ## Safety checks
 
+- `src/typecheck_parallel.h`: a `parallel for` body, or anything it calls, may not print or
+  call a standard library function that changes files or uses a standard stream or socket.
+  Such a body type-checked, as if the standard library's effects all stayed in their
+  arguments, and did not do what the loop run in order does: 2,000 `append_file`s to one
+  file left 5,701 to 7,639 of the 8,890 bytes, differently each run. Reading files stays
+  allowed. `test/errors_tc/parallel_file_output.goose`, `parallel_file_output_callee.goose`,
+  `parallel_print.goose`, `parallel_print_callee.goose`, `parallel_socket.goose` and
+  `test/stdlib/parallel_read_files.goose` (new); `docs/goose_spec.md` §6.5 says so.
 - `src/runtime/runtime.h`, `src/runtime/runtime_impl.h`,
   `src/runtime/runtime_threads.h`, `src/codegen.h`, `src/codegen_values.h`,
   `src/codegen_nodes.h`, `src/codegen_stmts.h`, `src/codegen_builtins.h`
@@ -693,6 +701,13 @@ under glibc, musl's default being 128 KB. `scripts/target_tests.py`.
 
 ## Runtime
 
+- `src/runtime/runtime_os.h` (and `src/runtime_inline.h`, regenerated): on Windows, paths
+  whose full form reaches 200 characters go to the wide APIs in their `\\?\` or `\\?\UNC\`
+  form, so that `make_dir`, `read_file` and the rest work past the old 260-character limit
+  (`test/stdlib/stdlib_os_longpath.goose`, new). A program's arguments come from the wide
+  command line where it matches `argv`, so that a name the ANSI code page cannot spell
+  reaches the program whole, built or under `gust run` (`test/os_args.py`, new). Environment
+  variable names and library paths keep their old conversion. `docs/stdlib.md` says so.
 - With more threads at work than CPUs a thread looks a thirty-second as long before it sleeps, the count
   leaving out those asleep: a sender and three receivers on two cores took 0.47x to 0.89x as long on x86
   Linux and ARM. With one CPU it gives up its turn once before sleeping, which took messages back and forth

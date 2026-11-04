@@ -17,6 +17,9 @@
 //    enclosing code's variables, takes the enclosing code's storage for
 //    writing only as `out[i]`, and calls no extern fn but the standard
 //    library's, whose effects stay in their arguments;
+//  * neither it nor what it calls changes what lies outside the program
+//    and every iteration shares (files, the standard streams, sockets), or
+//    prints: which iteration got there first would show;
 //  * it spawns, waits for and messages no thread.
 //
 // Reads of anything else are free: nothing writes it while the loop runs.
@@ -24,6 +27,19 @@
 #pragma once
 
 namespace goose {
+
+// Gust: the standard library's externs whose effects do not stay in their
+// arguments. Reading a file, listing a directory and the clocks are not here:
+// nothing in the loop can change what they read.
+inline bool ExternChangesOutside(string_view cname) {
+    static const string_view names[] = {
+        "gs_os_write_file", "gs_os_write_file_atomic", "gs_os_append_file", "gs_os_remove_file",
+        "gs_os_rename_file", "gs_os_make_dir", "gs_os_remove_dir", "gs_os_read_line",
+        "gs_os_read_stdin", "gs_os_write_stdout", "gs_os_write_stderr", "gs_os_flush_stdout",
+    };
+    for (auto n : names) if (cname == n) return true;
+    return cname.substr(0, 7) == "gs_net_";
+}
 
 inline void TypeCheck::CheckParallelFor(ForLoop *f) {
     if (f->iterkind != IK_COUNT && f->iterkind != IK_RANGE)
@@ -204,6 +220,10 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
             if (!stdlib) {
                 fail(at, cat("calls the extern fn ", k->sf->name, ", whose effects Gust cannot see"));
                 st = 2;
+            } else if (ExternChangesOutside(k->sf->cname)) {
+                fail(at, cat("calls ", k->sf->name, ", which changes files, a stream or a socket that "
+                             "every iteration shares; use thread_fn workers"));
+                st = 2;
             }
             return st == 2;
         }
@@ -224,6 +244,9 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
                 if (cl->builtin == B_THREAD_SPAWN || cl->builtin == B_THREAD_SPAWN_CONTAINED ||
                     cl->builtin == B_THREAD_WAIT || cl->builtin == B_QPUT || cl->builtin == B_QSEND)
                     bad = true;
+                if (cl->builtin == B_PRINT)
+                    fail(at, cat("calls ", k->sf ? k->sf->name : string_view("a function"),
+                                 ", which prints, in whichever order the iterations run"));
                 if (cl->spec && cl->spec != k && callee(cl->spec, at)) bad = true;
                 for (auto d : cl->dispatch) if (d != k && callee(d, at)) bad = true;
             }
@@ -258,6 +281,8 @@ inline void TypeCheck::CheckParallelFor(ForLoop *f) {
                     cl->builtin == B_QPOLL || cl->builtin == B_QSEND || cl->builtin == B_QRECV ||
                     cl->builtin == B_THREAD_SELF)
                     fail(n, "uses threads or queues, which the loop's own threads would share");
+                if (cl->builtin == B_PRINT)
+                    fail(n, "prints, in whichever order the iterations run; print after the loop");
             } else if (cl->spec) {
                 // What it is handed for writing: the enclosing code's storage
                 // only as the iteration's own element.
