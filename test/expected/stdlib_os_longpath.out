@@ -1,0 +1,11 @@
+true true true
+true true true
+true abcdef
+true true
+true false true
+list true:
+f.txt
+moved.txt
+true abcdef
+true true false
+false

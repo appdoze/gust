@@ -2690,7 +2690,9 @@ thread, with the effect of running them in order, which the checker proves:
 the body writes its own locals and the enclosing code's arrays only at its
 own index (`out[i]`, or a field of it), reads such an array only there,
 writes no global or other variable around the loop, and calls nothing that
-does. Everything else it reads in place, without copying. `continue` ends
+does. It also prints nothing and calls nothing that changes files or uses a
+standard stream or socket, which `thread_fn` workers do instead; reading files
+is allowed. Everything else it reads in place, without copying. `continue` ends
 an iteration; `return` and `break` out of the body are errors. In
 `gust run` the iterations run in order on one thread, with the same result.
 
